@@ -1,3 +1,5 @@
+use alloc::{vec, vec::Vec};
+
 use serde::ser::{self, SerializeMap as _, SerializeSeq as _, SerializeTupleVariant as _};
 
 use super::{Error, Integer, Value};

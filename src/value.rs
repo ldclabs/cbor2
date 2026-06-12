@@ -1,6 +1,13 @@
 //! A dynamic CBOR value.
 
-use std::collections::{BTreeMap, HashMap};
+use alloc::borrow::Cow;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+#[cfg(feature = "std")]
+use std::collections::HashMap;
 
 mod canonical;
 mod de;
@@ -25,7 +32,9 @@ impl core::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+// `serde::ser::StdError` is `std::error::Error` whenever it is available,
+// and an identical substitute otherwise.
+impl serde::ser::StdError for Error {}
 
 impl serde::de::Error for Error {
     #[inline]
@@ -443,9 +452,9 @@ impl From<char> for Value {
     }
 }
 
-impl From<std::borrow::Cow<'_, str>> for Value {
+impl From<Cow<'_, str>> for Value {
     #[inline]
-    fn from(value: std::borrow::Cow<'_, str>) -> Self {
+    fn from(value: Cow<'_, str>) -> Self {
         Value::Text(value.into_owned())
     }
 }
@@ -503,6 +512,7 @@ impl<T: Into<Value>> From<Option<T>> for Value {
 /// let map: HashMap<&str, u64> = [("a", 1)].into();
 /// assert_eq!(Value::from(map), cbor2::cbor!({ "a": 1 }).unwrap());
 /// ```
+#[cfg(feature = "std")]
 impl<K: Into<Value>, V: Into<Value>> From<HashMap<K, V>> for Value {
     fn from(value: HashMap<K, V>) -> Self {
         Value::Map(
@@ -686,9 +696,10 @@ where
 /// let map: HashMap<String, u64> = value.try_into().unwrap();
 /// assert_eq!(map["a"], 1);
 /// ```
+#[cfg(feature = "std")]
 impl<K, V> TryFrom<Value> for HashMap<K, V>
 where
-    K: TryFrom<Value> + Eq + std::hash::Hash,
+    K: TryFrom<Value> + Eq + core::hash::Hash,
     K::Error: core::fmt::Display,
     V: TryFrom<Value>,
     V::Error: core::fmt::Display,

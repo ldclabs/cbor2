@@ -302,4 +302,10 @@ fn std_scalar_conversions() {
     assert!(msg.contains("invalid type"), "{msg}");
     let msg = char::try_from(Value::from("ab")).unwrap_err().to_string();
     assert!(msg.contains("single-character"), "{msg}");
+    let msg = char::try_from(Value::from(1)).unwrap_err().to_string();
+    assert!(msg.contains("invalid type"), "{msg}");
+    let msg = std::collections::BTreeMap::<String, u64>::try_from(Value::from(1))
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("invalid type"), "{msg}");
 }

@@ -335,3 +335,200 @@ fn marker_write_failures_propagate() {
         Err(cbor2::ser::Error::Io(..))
     ));
 }
+
+#[test]
+fn marked_containers_carry_tags_in_every_shape() {
+    // Unit, newtype and tuple structs with a marker tag, on both the
+    // stream and the Value paths.
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[serde(rename = "@@CBOR@@71@@@@U")]
+    struct U;
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[serde(rename = "@@CBOR@@72@@@@N")]
+    struct N(u8);
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[serde(rename = "@@CBOR@@73@@@@T")]
+    struct T(u8, u8);
+
+    let bytes = cbor2::to_vec(&U).unwrap();
+    assert_eq!(hex::encode(&bytes), "d847f6"); // 71(null)
+    assert_eq!(cbor2::from_slice::<U>(&bytes).unwrap(), U);
+
+    let bytes = cbor2::to_vec(&N(7)).unwrap();
+    assert_eq!(hex::encode(&bytes), "d84807"); // 72(7)
+    assert_eq!(cbor2::from_slice::<N>(&bytes).unwrap(), N(7));
+
+    let bytes = cbor2::to_vec(&T(1, 2)).unwrap();
+    assert_eq!(hex::encode(&bytes), "d849820102"); // 73([1, 2])
+    assert_eq!(cbor2::from_slice::<T>(&bytes).unwrap(), T(1, 2));
+
+    // The Value paths agree.
+    let value = Value::serialized(&U).unwrap();
+    assert_eq!(value, Value::Tag(71, Box::new(Value::Null)));
+    assert_eq!(value.deserialized::<U>().unwrap(), U);
+
+    let value = Value::serialized(&N(7)).unwrap();
+    assert_eq!(value, Value::Tag(72, Box::new(Value::from(7))));
+    assert_eq!(value.deserialized::<N>().unwrap(), N(7));
+
+    let value = Value::serialized(&T(1, 2)).unwrap();
+    assert_eq!(
+        value,
+        Value::Tag(73, Box::new(Value::Array(vec![1.into(), 2.into()])))
+    );
+    assert_eq!(value.deserialized::<T>().unwrap(), T(1, 2));
+
+    // The declared tag is required on the Value path too.
+    let msg = Value::Null.deserialized::<U>().unwrap_err().to_string();
+    assert!(msg.contains("expected tag(71)"), "{msg}");
+    let msg = Value::from(7).deserialized::<N>().unwrap_err().to_string();
+    assert!(msg.contains("expected tag(72)"), "{msg}");
+}
+
+#[test]
+fn unmarked_tags_stay_transparent_around_marked_structs() {
+    // Marker without a tag: foreign container tags are skipped on both
+    // paths, and a non-map payload is rejected.
+    #[derive(Debug, PartialEq, Deserialize)]
+    #[serde(rename = "@@CBOR@@@@a=1@@K")]
+    struct K {
+        a: u8,
+    }
+
+    let bytes = hex::decode("c9a10107").unwrap(); // 9({1: 7})
+    assert_eq!(cbor2::from_slice::<K>(&bytes).unwrap(), K { a: 7 });
+
+    let value = Value::Tag(9, Box::new(cbor2::cbor!({ 1 => 7 }).unwrap()));
+    assert_eq!(value.deserialized::<K>().unwrap(), K { a: 7 });
+
+    let msg = cbor2::from_slice::<K>(&hex::decode("07").unwrap())
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("map"), "{msg}");
+    let msg = Value::from(7).deserialized::<K>().unwrap_err().to_string();
+    assert!(msg.contains("map"), "{msg}");
+}
+
+#[test]
+fn marked_structs_decode_from_indefinite_maps() {
+    #[derive(Debug, PartialEq, Deserialize)]
+    #[serde(rename = "@@CBOR@@@@a=1@@K")]
+    struct K {
+        a: u8,
+    }
+
+    let bytes = hex::decode("bf0107ff").unwrap(); // {_ 1: 7}
+    assert_eq!(cbor2::from_slice::<K>(&bytes).unwrap(), K { a: 7 });
+}
+
+#[test]
+fn unknown_keys_on_plain_structs_are_ignored() {
+    #[derive(Debug, PartialEq, Deserialize)]
+    struct F {
+        a: u8,
+    }
+
+    // {-1: 2, "a": 7}: without a key table, a negative integer key takes
+    // the placeholder identifier form and is simply an unknown field.
+    let bytes = hex::decode("a22002616107").unwrap();
+    assert_eq!(cbor2::from_slice::<F>(&bytes).unwrap(), F { a: 7 });
+
+    // A tag around a text key is transparent on the Value path as well.
+    let value = Value::Map(vec![(
+        Value::Tag(9, Box::new(Value::from("a"))),
+        Value::from(7),
+    )]);
+    assert_eq!(value.deserialized::<F>().unwrap(), F { a: 7 });
+}
+
+// A hand-rolled visitor is the only way to observe `MapAccess::size_hint`
+// through the marker protocol: derived struct visitors never ask for it.
+#[test]
+fn marked_struct_access_reports_size_hints() {
+    #[derive(Debug, PartialEq)]
+    struct Hint(Option<usize>);
+
+    impl<'de> serde::Deserialize<'de> for Hint {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct V;
+
+            impl<'de> serde::de::Visitor<'de> for V {
+                type Value = Hint;
+
+                fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    write!(f, "a map")
+                }
+
+                fn visit_map<A: serde::de::MapAccess<'de>>(
+                    self,
+                    mut acc: A,
+                ) -> Result<Self::Value, A::Error> {
+                    let hint = acc.size_hint();
+                    while acc
+                        .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                        .is_some()
+                    {}
+                    Ok(Hint(hint))
+                }
+            }
+
+            deserializer.deserialize_struct("@@CBOR@@@@a=1@@H", &["a"], V)
+        }
+    }
+
+    // Definite-length input knows its size; the Value path always does.
+    let bytes = hex::decode("a10107").unwrap(); // {1: 7}
+    assert_eq!(cbor2::from_slice::<Hint>(&bytes).unwrap(), Hint(Some(1)));
+
+    let value = cbor2::cbor!({ 1 => 7 }).unwrap();
+    assert_eq!(value.deserialized::<Hint>().unwrap(), Hint(Some(1)));
+
+    // Indefinite-length input does not.
+    let bytes = hex::decode("bf0107ff").unwrap(); // {_ 1: 7}
+    assert_eq!(cbor2::from_slice::<Hint>(&bytes).unwrap(), Hint(None));
+}
+
+#[test]
+fn enum_variant_shapes_across_both_paths() {
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    enum E {
+        A,
+        B(u8),
+        C(u8, u8),
+        S { x: u8 },
+    }
+
+    // Map-form variants; a unit variant requires a unit payload.
+    let value = cbor2::cbor!({ "A": null }).unwrap();
+    assert_eq!(value.deserialized::<E>().unwrap(), E::A);
+    assert!(cbor2::cbor!({ "A": 1 })
+        .unwrap()
+        .deserialized::<E>()
+        .is_err());
+    let value = cbor2::cbor!({ "B": 7 }).unwrap();
+    assert_eq!(value.deserialized::<E>().unwrap(), E::B(7));
+    let value = cbor2::cbor!({ "C": [1, 2] }).unwrap();
+    assert_eq!(value.deserialized::<E>().unwrap(), E::C(1, 2));
+
+    // The bare text form only carries unit variants.
+    assert_eq!(Value::from("A").deserialized::<E>().unwrap(), E::A);
+    assert!(Value::from("B").deserialized::<E>().is_err());
+    assert!(Value::from("C").deserialized::<E>().is_err());
+    assert!(Value::from("S").deserialized::<E>().is_err());
+
+    // A tag around a struct variant's payload is transparent, and a
+    // non-map payload is rejected — on both paths.
+    let tagged = Value::Map(vec![(
+        Value::from("S"),
+        Value::Tag(9, Box::new(cbor2::cbor!({ "x": 7 }).unwrap())),
+    )]);
+    assert_eq!(tagged.deserialized::<E>().unwrap(), E::S { x: 7 });
+    let bytes = cbor2::to_vec(&tagged).unwrap();
+    assert_eq!(cbor2::from_slice::<E>(&bytes).unwrap(), E::S { x: 7 });
+
+    let bad = Value::Map(vec![(Value::from("S"), Value::from(7))]);
+    let bytes = cbor2::to_vec(&bad).unwrap();
+    assert!(cbor2::from_slice::<E>(&bytes).is_err());
+}

@@ -17,8 +17,10 @@ const MARKER: &str = "@@CBOR@@";
 
 /// Derives `serde::Serialize` and `serde::Deserialize` with CBOR protocol
 /// details: integer map keys (`#[cbor(key = <integer>)]` on fields) and a
-/// CBOR tag (`#[cbor(tag = <integer>)]` on the container). See
-/// `cbor2::Cbor`.
+/// CBOR tag (`#[cbor(tag = <integer>)]` on the container). The declared
+/// details are also exposed through an implementation of the
+/// `cbor2::Cbor` trait, so the generated code requires the `cbor2` crate
+/// under that name.
 ///
 /// Do not also derive serde's `Serialize`/`Deserialize`: this macro
 /// generates both impls (the implementations would conflict).
@@ -148,7 +150,7 @@ fn generate(input: &syn::DeriveInput, tag: Option<u64>, entries: &[Entry]) -> To
         syn::Data::Union(..) => unreachable!("rejected above"),
     }
 
-    let (_, ty_generics, where_clause) = input.generics.split_for_impl();
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     // The remote path: the real type, as seen from inside the const
     // block. serde applies the shadow's own generics to it, so the path
@@ -188,6 +190,17 @@ fn generate(input: &syn::DeriveInput, tag: Option<u64>, entries: &[Entry]) -> To
         .insert(0, syn::GenericParam::Lifetime(de_lifetime));
     let (de_impl_generics, ..) = de_generics.split_for_impl();
 
+    // The `cbor2::Cbor` trait exposes the declared protocol details.
+    let key_pairs = entries.iter().map(|entry| {
+        let name = &entry.name;
+        let key = entry.key;
+        quote!((#name, #key))
+    });
+    let tag_const = match tag {
+        Some(tag) => quote!(::core::option::Option::Some(#tag)),
+        None => quote!(::core::option::Option::None),
+    };
+
     quote! {
         #[doc(hidden)]
         const _: () = {
@@ -211,6 +224,12 @@ fn generate(input: &syn::DeriveInput, tag: Option<u64>, entries: &[Entry]) -> To
                 {
                     #shadow_ident::deserialize(deserializer)
                 }
+            }
+
+            #[automatically_derived]
+            impl #impl_generics ::cbor2::Cbor for #ident #ty_generics #where_clause {
+                const KEYS: &'static [(&'static str, i128)] = &[#(#key_pairs),*];
+                const TAG: ::core::option::Option<u64> = #tag_const;
             }
         };
     }
@@ -547,6 +566,20 @@ mod tests {
         );
         // The #[cbor(...)] attributes stay off the shadow.
         assert!(!out.contains("# [cbor"), "{out}");
+
+        // The declared details surface through the cbor2::Cbor trait.
+        assert!(
+            out.contains("impl :: cbor2 :: Cbor for ProtectedHeader"),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"const KEYS : & 'static [(& 'static str , i128)] = & [("alg" , 1i128) , ("kid" , 4i128)] ;"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(":: core :: option :: Option :: Some (123u64)"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -563,6 +596,13 @@ mod tests {
             out.contains("impl :: serde :: Serialize for Plain"),
             "{out}"
         );
+
+        // The trait impl is still generated, with an empty table.
+        assert!(
+            out.contains(r#"const KEYS : & 'static [(& 'static str , i128)] = & [] ;"#),
+            "{out}"
+        );
+        assert!(out.contains(":: core :: option :: Option :: None"), "{out}");
     }
 
     #[test]
@@ -635,6 +675,11 @@ mod tests {
         );
         assert!(
             out.contains("impl < 'de , T : Clone + :: serde :: Deserialize < 'de > >"),
+            "{out}"
+        );
+        // The trait impl carries the original generics, without serde bounds.
+        assert!(
+            out.contains("impl < T : Clone > :: cbor2 :: Cbor for Wrap < T >"),
             "{out}"
         );
     }

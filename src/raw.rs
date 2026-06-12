@@ -1,6 +1,8 @@
 //! The [`RawValue`] type: a valid, already-encoded CBOR item kept as raw
 //! bytes.
 
+use alloc::vec::Vec;
+
 use serde::{de, ser};
 
 // The marker name through which this crate's serializers splice raw
@@ -108,6 +110,56 @@ impl From<RawValue> for Vec<u8> {
     #[inline]
     fn from(value: RawValue) -> Self {
         value.0
+    }
+}
+
+/// Decodes the raw item into a dynamic [`Value`](crate::Value), like
+/// [`deserialized`](RawValue::deserialized).
+///
+/// This *decodes*: byte-level spellings the dynamic form cannot represent
+/// (indefinite lengths, non-preferred widths) are not preserved.
+impl TryFrom<&RawValue> for crate::Value {
+    type Error = crate::de::Error;
+
+    #[inline]
+    fn try_from(raw: &RawValue) -> Result<Self, Self::Error> {
+        raw.deserialized()
+    }
+}
+
+/// Decodes the raw item into a dynamic [`Value`](crate::Value), like
+/// [`deserialized`](RawValue::deserialized).
+///
+/// This *decodes*: byte-level spellings the dynamic form cannot represent
+/// (indefinite lengths, non-preferred widths) are not preserved.
+impl TryFrom<RawValue> for crate::Value {
+    type Error = crate::de::Error;
+
+    #[inline]
+    fn try_from(raw: RawValue) -> Result<Self, Self::Error> {
+        raw.deserialized()
+    }
+}
+
+/// Encodes the value into a raw item, like
+/// [`serialized`](RawValue::serialized).
+impl TryFrom<&crate::Value> for RawValue {
+    type Error = crate::ser::Error;
+
+    #[inline]
+    fn try_from(value: &crate::Value) -> Result<Self, Self::Error> {
+        Self::serialized(value)
+    }
+}
+
+/// Encodes the value into a raw item, like
+/// [`serialized`](RawValue::serialized).
+impl TryFrom<crate::Value> for RawValue {
+    type Error = crate::ser::Error;
+
+    #[inline]
+    fn try_from(value: crate::Value) -> Result<Self, Self::Error> {
+        Self::serialized(&value)
     }
 }
 
@@ -337,5 +389,130 @@ impl ser::Serializer for RawBytesSerializer {
 
     fn is_human_readable(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{
+        format,
+        string::{String, ToString},
+        vec,
+    };
+
+    use serde::de::value::{BytesDeserializer, Error as DeError, SeqDeserializer, U32Deserializer};
+    use serde::de::{Deserialize as _, IntoDeserializer as _};
+    use serde::ser::{Error as _, Serializer as _};
+
+    use super::*;
+
+    #[test]
+    fn accessors_expose_the_bytes() {
+        let raw = RawValue::new(vec![0x01]).unwrap();
+        assert_eq!(raw.as_ref(), [0x01]);
+        assert_eq!(raw.clone().into_bytes(), vec![0x01]);
+        assert_eq!(Vec::from(raw), vec![0x01]);
+    }
+
+    // The CBOR deserializer always hands the visitor an owned buffer;
+    // borrowed bytes and integer sequences arrive from other formats.
+    #[test]
+    fn visitor_accepts_bytes_and_sequences() {
+        let de = BytesDeserializer::<DeError>::new(&[0x01]);
+        assert_eq!(RawValue::deserialize(de).unwrap().as_bytes(), [0x01]);
+
+        let de = SeqDeserializer::<_, DeError>::new(vec![0x01u8].into_iter());
+        assert_eq!(RawValue::deserialize(de).unwrap().as_bytes(), [0x01]);
+
+        // A type the visitor cannot absorb reports what it expected.
+        let err = RawValue::deserialize(7u32.into_deserializer() as U32Deserializer<DeError>)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("a valid CBOR item"), "{err}");
+    }
+
+    #[test]
+    fn not_raw_bytes_error() {
+        assert_eq!(NotRawBytes.to_string(), "expected raw bytes");
+        assert_eq!(
+            NotRawBytes::custom("ignored").to_string(),
+            "expected raw bytes"
+        );
+        assert!(format!("{NotRawBytes:?}").contains("NotRawBytes"));
+    }
+
+    #[test]
+    fn raw_bytes_serializer_accepts_only_bytes() {
+        assert_eq!(
+            RawBytesSerializer.serialize_bytes(b"\x01").unwrap(),
+            vec![0x01]
+        );
+        assert!(!RawBytesSerializer.is_human_readable());
+
+        assert!(RawBytesSerializer.serialize_bool(true).is_err());
+        assert!(RawBytesSerializer.serialize_i8(1).is_err());
+        assert!(RawBytesSerializer.serialize_i16(1).is_err());
+        assert!(RawBytesSerializer.serialize_i32(1).is_err());
+        assert!(RawBytesSerializer.serialize_i64(1).is_err());
+        assert!(RawBytesSerializer.serialize_i128(1).is_err());
+        assert!(RawBytesSerializer.serialize_u8(1).is_err());
+        assert!(RawBytesSerializer.serialize_u16(1).is_err());
+        assert!(RawBytesSerializer.serialize_u32(1).is_err());
+        assert!(RawBytesSerializer.serialize_u64(1).is_err());
+        assert!(RawBytesSerializer.serialize_u128(1).is_err());
+        assert!(RawBytesSerializer.serialize_f32(1.0).is_err());
+        assert!(RawBytesSerializer.serialize_f64(1.0).is_err());
+        assert!(RawBytesSerializer.serialize_char('a').is_err());
+        assert!(RawBytesSerializer.serialize_str("a").is_err());
+        assert!(RawBytesSerializer.serialize_none().is_err());
+        assert!(RawBytesSerializer.serialize_some(&1u8).is_err());
+        assert!(RawBytesSerializer.serialize_unit().is_err());
+        assert!(RawBytesSerializer.serialize_unit_struct("x").is_err());
+        assert!(RawBytesSerializer
+            .serialize_unit_variant("x", 0, "y")
+            .is_err());
+        assert!(RawBytesSerializer
+            .serialize_newtype_struct("x", &1u8)
+            .is_err());
+        assert!(RawBytesSerializer
+            .serialize_newtype_variant("x", 0, "y", &1u8)
+            .is_err());
+        assert!(RawBytesSerializer.serialize_seq(None).is_err());
+        assert!(RawBytesSerializer.serialize_tuple(0).is_err());
+        assert!(RawBytesSerializer.serialize_tuple_struct("x", 0).is_err());
+        assert!(RawBytesSerializer
+            .serialize_tuple_variant("x", 0, "y", 0)
+            .is_err());
+        assert!(RawBytesSerializer.serialize_map(None).is_err());
+        assert!(RawBytesSerializer.serialize_struct("x", 0).is_err());
+        assert!(RawBytesSerializer
+            .serialize_struct_variant("x", 0, "y", 0)
+            .is_err());
+    }
+
+    // Something that is not a `RawValue` hiding behind the raw marker
+    // name is rejected by both the streaming and the `Value` serializer.
+    #[test]
+    fn forged_raw_marker_is_rejected() {
+        struct Forged;
+
+        impl ser::Serialize for Forged {
+            fn serialize<S: ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_newtype_struct(NAME, &7u8)
+            }
+        }
+
+        let err = crate::to_vec(&Forged).unwrap_err().to_string();
+        assert!(err.contains("expected raw bytes"), "{err}");
+
+        let err = crate::Value::serialized(&Forged).unwrap_err().to_string();
+        assert!(err.contains("expected raw bytes"), "{err}");
+    }
+
+    // String-keyed test: the unused import lint keeps `String` honest.
+    #[test]
+    fn display_uses_diagnostic_notation() {
+        let raw = RawValue::new(vec![0x01]).unwrap();
+        assert_eq!(raw.to_string(), String::from("1"));
     }
 }

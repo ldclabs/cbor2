@@ -7,11 +7,12 @@
 //! marker for indefinite-length items and `(_ ...)` for segmented
 //! strings.
 
-use std::fmt::Write as _;
-use std::io::Read;
+use alloc::{format, string::String, vec::Vec};
+use core::fmt::Write as _;
 
 use crate::core::{simple, tag, Decoder, Header};
 use crate::de::{expect_eof, Error, DEFAULT_RECURSION_LIMIT};
+use crate::io::Read;
 use crate::value::Value;
 
 /// Renders one CBOR item from a reader in diagnostic notation

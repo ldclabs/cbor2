@@ -149,6 +149,9 @@ let (text, n): (String, u8) = signed.payload.deserialized().unwrap();
 assert_eq!((text.as_str(), n), ("untouched", 42));
 ```
 
+`TryFrom` converts in both directions between `RawValue` and [`Value`]:
+decoding one way, encoding the other.
+
 # CBOR sequences
 
 CBOR sequences (RFC 8742) are streams of adjacent complete CBOR items.
@@ -189,7 +192,7 @@ assert_eq!(bytes[0], 0xd8); // tag(32)
 
 Protocols like COSE (RFC 9052) key their maps with integers and wrap
 their messages in tags, which serde's data model cannot express. With the
-`derive` feature, [`#[derive(Cbor)]`](Cbor) declares both — a textual
+`derive` feature, [`#[derive(Cbor)]`](derive@Cbor) declares both — a textual
 `#[serde(rename = "1")]` stays a *text* key, so there is no ambiguity
 between the two. The derive generates the `Serialize` and `Deserialize`
 impls itself, so serde's derives must not be repeated alongside it:
@@ -216,7 +219,9 @@ assert_eq!(cbor2::from_slice::<CoseSign>(&bytes).unwrap(), key);
 
 The tag is optional, and the serde attributes (`alias`, `default`,
 `skip`, `with`, ...) work as usual; map types like `HashMap<String, _>`
-are unaffected.
+are unaffected. The declared keys and tag stay inspectable at runtime
+through the [`Cbor`](trait@Cbor) trait, which the derive implements
+alongside the serde traits.
 
 The derive touches neither the field names nor the type name — the
 protocol details ride along on a hidden shadow type (see
@@ -244,10 +249,10 @@ assert_eq!(serde_json::from_str::<CoseSign>(&json).unwrap(), key);
 
 # Allocation-free helpers
 
-Two helpers inspect data without building it: [`validate`] checks that an
+Three helpers work without touching the heap: [`validate`] checks that an
 input is exactly one well-formed CBOR item (including text UTF-8 validity),
-and [`serialized_size`] computes the exact encoded size of any
-serializable value. Neither allocates heap memory.
+[`serialized_size`] computes the exact encoded size of any serializable
+value, and [`to_slice`] encodes into a caller-provided buffer.
 
 ```rust
 let value = ("hello", vec![1u8, 2, 3]);
@@ -256,7 +261,26 @@ let bytes = cbor2::to_vec(&value).unwrap();
 assert_eq!(cbor2::serialized_size(&value).unwrap(), bytes.len() as u64);
 assert!(cbor2::validate(&bytes[..]).is_ok());
 assert!(cbor2::validate(&bytes[..bytes.len() - 1]).is_err()); // truncated
+
+let mut buffer = [0u8; 16];
+assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
 ```
+
+# Crate features
+
+* **`std`** *(default)* — implements the [`io`] traits for every
+  `std::io::Read`/`std::io::Write` and adds the `HashMap` conversions.
+  Implies `alloc`.
+* **`alloc`** — everything that needs a heap, without `std`: [`Value`],
+  [`to_vec`]/[`from_slice`]/[`from_reader`], [`RawValue`], [`diagnostic`],
+  the deterministic encoders and the [`cbor!`] macro. Readers and writers
+  are byte slices, `Vec<u8>`, or custom [`io`] trait implementations.
+* **neither** — a `#![no_std]` core for constrained targets: streaming
+  serialization with [`to_writer`]/[`to_slice`]/[`serialized_size`],
+  [`validate`], the [`tag`] wrappers and the [`core`] header codec.
+  Deserializing through serde requires `alloc`.
+* **`derive`** — the [`Cbor`](derive@Cbor) derive macro; works in all three modes
+  (deserialization again requiring `alloc`).
 
 # Diagnostic notation
 
@@ -371,33 +395,57 @@ This implementation is wire-compatible with
 
 This crate descends from `cbor` by Andrew Gallant, whose 0.4 and earlier
 releases were built on the long-deprecated `rustc-serialize` framework and
-predate both serde 1.0 and RFC 8949. Version 0.5 is a from-scratch rewrite
+predate both serde 1.0 and RFC 8949. Version 0.5 was a from-scratch rewrite
 published under the `cbor2` name — the original crates.io name stays with
-the legacy release — and none of the old API survives.
+the legacy release — and 1.0 stabilizes it; none of the old API survives.
 */
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 pub mod core;
 pub mod de;
+#[cfg(feature = "alloc")]
 mod diag;
+pub mod io;
+#[cfg(feature = "alloc")]
 mod raw;
 pub mod ser;
 pub mod tag;
+#[cfg(feature = "alloc")]
 pub mod value;
 
 #[doc(inline)]
-pub use crate::de::{from_reader, from_slice, validate};
+pub use crate::de::validate;
+#[cfg(feature = "alloc")]
+#[doc(inline)]
+pub use crate::de::{from_reader, from_slice};
+#[cfg(feature = "alloc")]
 pub use crate::diag::diagnostic;
+#[cfg(feature = "alloc")]
 pub use crate::raw::RawValue;
 #[doc(inline)]
+pub use crate::ser::{serialized_size, to_slice, to_writer};
+#[cfg(feature = "alloc")]
+#[doc(inline)]
 pub use crate::ser::{
-    serialized_size, to_canonical_vec, to_canonical_vec_with, to_canonical_writer,
-    to_canonical_writer_with, to_vec, to_writer,
+    to_canonical_vec, to_canonical_vec_with, to_canonical_writer, to_canonical_writer_with, to_vec,
 };
+#[cfg(feature = "alloc")]
 #[doc(inline)]
 pub use crate::value::{KeyOrder, Value};
+
+// Internal items that the `cbor!` macro expansion needs to reach through
+// `$crate`. Not public API.
+#[cfg(feature = "alloc")]
+#[doc(hidden)]
+pub mod __private {
+    pub use alloc::vec;
+}
 /// Derives [`serde::Serialize`] and [`serde::Deserialize`] with CBOR
 /// protocol details: integer map keys and a CBOR tag (COSE, RFC 9052).
 ///
@@ -407,8 +455,63 @@ pub use crate::value::{KeyOrder, Value};
 /// names and the type name stay untouched, so the same type still
 /// serializes naturally to JSON and other formats. See the [crate-level
 /// documentation](crate#integer-map-keys-and-tags-cose) for examples.
+///
+/// The declared protocol details are also exposed for runtime inspection
+/// through the [`Cbor`](trait@Cbor) trait, which this macro implements.
 #[cfg(feature = "derive")]
 pub use cbor2_derive::Cbor;
+
+/// The CBOR protocol details a [`#[derive(Cbor)]`](derive@Cbor) type
+/// declares: its integer map keys and its tag.
+///
+/// The derive implements this trait alongside `Serialize` and
+/// `Deserialize`, so the `#[cbor(...)]` attributes stay inspectable at
+/// runtime — for building protocol documentation, validating foreign
+/// input against the declared keys, or driving generic code off the tag.
+///
+/// ```rust
+/// # #[cfg(feature = "derive")] {
+/// use cbor2::Cbor; // one import: the derive macro and this trait
+///
+/// #[derive(Cbor)]
+/// #[cbor(tag = 98)]
+/// struct CoseSign {
+///     #[cbor(key = 1)]
+///     kty: u8,
+///     #[cbor(key = 3)]
+///     alg: i8,
+///     comment: String, // no key: stays a text key on the wire
+/// }
+///
+/// assert_eq!(CoseSign::KEYS, &[("kty", 1), ("alg", 3)]);
+/// assert_eq!(CoseSign::TAG, Some(98));
+///
+/// let key = CoseSign { kty: 2, alg: -7, comment: "".into() };
+/// assert_eq!(key.keys()["kty"], 1);
+/// # }
+/// ```
+pub trait Cbor {
+    /// The `serde field name → integer map key` pairs declared with
+    /// `#[cbor(key = <integer>)]`, in declaration order.
+    ///
+    /// Names are the *serde* names, so a `#[serde(rename = ...)]` carries
+    /// over. Fields without a key attribute are not listed — they keep
+    /// their textual keys on the wire. For an enum, the table merges the
+    /// keyed fields of every variant.
+    const KEYS: &'static [(&'static str, i128)];
+
+    /// The CBOR tag declared with `#[cbor(tag = <integer>)]`, if any.
+    const TAG: Option<u64>;
+
+    /// The [`KEYS`](Self::KEYS) table collected into a map.
+    #[cfg(feature = "alloc")]
+    fn keys(&self) -> alloc::collections::BTreeMap<alloc::string::String, i128> {
+        Self::KEYS
+            .iter()
+            .map(|&(name, key)| (alloc::string::String::from(name), key))
+            .collect()
+    }
+}
 
 /// Builds a [`Value`] from JSON-like syntax.
 ///
@@ -441,16 +544,17 @@ pub use cbor2_derive::Cbor;
 ///
 /// let value = cbor!({ ALG => -7, (i8::MAX) : 0 }).unwrap();
 /// ```
+#[cfg(feature = "alloc")]
 #[macro_export]
 macro_rules! cbor {
     //////////// arrays ////////////
 
     // Done, with or without a trailing comma.
     (@array [$($elems:expr,)*]) => {
-        $crate::value::Value::Array(vec![$($elems,)*])
+        $crate::value::Value::Array($crate::__private::vec![$($elems,)*])
     };
     (@array [$($elems:expr),*]) => {
-        $crate::value::Value::Array(vec![$($elems),*])
+        $crate::value::Value::Array($crate::__private::vec![$($elems),*])
     };
 
     // Next element is an array.
@@ -492,7 +596,7 @@ macro_rules! cbor {
 
     // Done.
     (@map [$($pairs:expr,)*] () () ()) => {
-        $crate::value::Value::Map(vec![$($pairs,)*])
+        $crate::value::Value::Map($crate::__private::vec![$($pairs,)*])
     };
 
     // Insert the current entry followed by a trailing comma.
@@ -507,7 +611,7 @@ macro_rules! cbor {
 
     // Insert the last entry without a trailing comma.
     (@map [$($pairs:expr,)*] [$($key:tt)+] ($value:expr)) => {
-        $crate::value::Value::Map(vec![$($pairs,)* ($crate::cbor!(@key $($key)+), $value)])
+        $crate::value::Value::Map($crate::__private::vec![$($pairs,)* ($crate::cbor!(@key $($key)+), $value)])
     };
 
     // Next value is an array.

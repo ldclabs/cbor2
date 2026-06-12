@@ -38,7 +38,10 @@
 //! assert_eq!(body, [0xde, 0xad, 0xbe, 0xef]);
 //! ```
 
-use std::io::{Read, Write};
+#[cfg(feature = "alloc")]
+use alloc::{string::String, vec::Vec};
+
+use crate::io::{Read, Write};
 
 /// Simple value constants (RFC 8949 §3.3).
 pub mod simple {
@@ -64,7 +67,7 @@ pub mod tag {
 #[derive(Debug)]
 pub enum Error {
     /// An error from the underlying reader or writer.
-    Io(std::io::Error),
+    Io(crate::io::Error),
 
     /// The input is not well-formed CBOR.
     ///
@@ -72,9 +75,9 @@ pub enum Error {
     Syntax(usize),
 }
 
-impl From<std::io::Error> for Error {
+impl From<crate::io::Error> for Error {
     #[inline]
-    fn from(value: std::io::Error) -> Self {
+    fn from(value: crate::io::Error) -> Self {
         Self::Io(value)
     }
 }
@@ -88,8 +91,10 @@ impl core::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+// `serde::ser::StdError` is `std::error::Error` whenever it is available,
+// and an identical substitute otherwise.
+impl serde::ser::StdError for Error {
+    fn source(&self) -> Option<&(dyn serde::ser::StdError + 'static)> {
         match self {
             Error::Io(err) => Some(err),
             Error::Syntax(..) => None,
@@ -232,7 +237,7 @@ impl<W: Write> Encoder<W> {
     /// Floating-point values are encoded as `f16`, `f32` or `f64`, using the
     /// shortest lossless width; NaN is emitted as the canonical half-width
     /// quiet NaN when it round-trips exactly.
-    pub fn push(&mut self, header: Header) -> std::io::Result<()> {
+    pub fn push(&mut self, header: Header) -> Result<(), crate::io::Error> {
         let (major, arg) = header.into_parts();
 
         let mut buffer = [0u8; 9];
@@ -276,7 +281,7 @@ impl<W: Write> Encoder<W> {
     /// [`push`](Self::push) with [`Header::Bytes`]`(None)`, then call this
     /// method for each definite-length segment, and finally push
     /// [`Header::Break`].
-    pub fn bytes(&mut self, value: &[u8]) -> std::io::Result<()> {
+    pub fn bytes(&mut self, value: &[u8]) -> Result<(), crate::io::Error> {
         self.push(Header::Bytes(Some(value.len())))?;
         self.0.write_all(value)
     }
@@ -285,7 +290,7 @@ impl<W: Write> Encoder<W> {
     ///
     /// When used as a segment inside [`Header::Text`]`(None)`, this writes one
     /// well-formed UTF-8 text segment.
-    pub fn text(&mut self, value: &str) -> std::io::Result<()> {
+    pub fn text(&mut self, value: &str) -> Result<(), crate::io::Error> {
         self.push(Header::Text(Some(value.len())))?;
         self.0.write_all(value.as_bytes())
     }
@@ -295,19 +300,20 @@ impl<W: Write> Encoder<W> {
     /// This is used to write item bodies after pushing the corresponding
     /// header.
     #[inline]
-    pub fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
+    pub fn write_all(&mut self, data: &[u8]) -> Result<(), crate::io::Error> {
         self.0.write_all(data)
     }
 
     /// Flushes the underlying writer.
     #[inline]
-    pub fn flush(&mut self) -> std::io::Result<()> {
+    pub fn flush(&mut self) -> Result<(), crate::io::Error> {
         self.0.flush()
     }
 }
 
 // Reading the body of a string item never trusts the declared length for
 // allocation: memory grows as data actually arrives, in chunks of this size.
+#[cfg(feature = "alloc")]
 const CHUNK: usize = 16 * 1024;
 
 /// A decoder for parsing CBOR items.
@@ -323,8 +329,10 @@ pub struct Decoder<R> {
     mark: usize,
     // The wire bytes of the most recently parsed header, so a recording
     // can be seeded when it starts behind a pushed-back header.
+    #[cfg(feature = "alloc")]
     last_header: ([u8; 9], u8),
     // When active, a byte-exact copy of everything read from the wire.
+    #[cfg(feature = "alloc")]
     record: Option<Vec<u8>>,
 }
 
@@ -336,7 +344,9 @@ impl<R: Read> From<R> for Decoder<R> {
             offset: 0,
             pushback: None,
             mark: 0,
+            #[cfg(feature = "alloc")]
             last_header: ([0; 9], 0),
+            #[cfg(feature = "alloc")]
             record: None,
         }
     }
@@ -394,6 +404,7 @@ impl<R: Read> Decoder<R> {
         // Remember the exact wire spelling of this header: the argument
         // width is given by the minor value, so the bytes reconstruct
         // losslessly even for non-preferred encodings.
+        #[cfg(feature = "alloc")]
         {
             let (raw, raw_len) = &mut self.last_header;
             raw[0] = prefix[0];
@@ -491,10 +502,11 @@ impl<R: Read> Decoder<R> {
     /// [`Header::Text`] when you want to own body validation. The higher
     /// level [`bytes_body`](Self::bytes_body) and
     /// [`text_body`](Self::text_body) helpers also handle segmented strings.
-    pub fn read_exact(&mut self, data: &mut [u8]) -> std::io::Result<()> {
+    pub fn read_exact(&mut self, data: &mut [u8]) -> Result<(), crate::io::Error> {
         debug_assert!(self.pushback.is_none());
         self.reader.read_exact(data)?;
         self.offset += data.len();
+        #[cfg(feature = "alloc")]
         if let Some(record) = &mut self.record {
             record.extend_from_slice(data);
         }
@@ -505,6 +517,7 @@ impl<R: Read> Decoder<R> {
     // A pushed-back header was consumed before the recording began, so
     // its wire bytes seed the buffer; re-pulling it reads nothing and
     // records nothing, keeping the copy aligned with the stream.
+    #[cfg(feature = "alloc")]
     pub(crate) fn start_recording(&mut self) {
         let mut record = Vec::new();
         if self.pushback.is_some() {
@@ -515,12 +528,14 @@ impl<R: Read> Decoder<R> {
     }
 
     // Stops recording and returns the bytes read since it started.
+    #[cfg(feature = "alloc")]
     pub(crate) fn take_recording(&mut self) -> Vec<u8> {
         self.record.take().unwrap_or_default()
     }
 
     // Appends `len` body bytes to `out`, growing the buffer as data arrives
     // so that a forged length cannot trigger a huge allocation up front.
+    #[cfg(feature = "alloc")]
     fn read_body(&mut self, len: usize, out: &mut Vec<u8>) -> Result<(), Error> {
         let mut remaining = len;
         while remaining > 0 {
@@ -538,6 +553,7 @@ impl<R: Read> Decoder<R> {
     /// Call this immediately after pulling a `Header::Bytes(len)`, passing
     /// the pulled `len`. Indefinite-length (segmented) byte strings are
     /// handled transparently.
+    #[cfg(feature = "alloc")]
     pub fn bytes_body(&mut self, len: Option<usize>, out: &mut Vec<u8>) -> Result<(), Error> {
         match len {
             Some(len) => self.read_body(len, out),
@@ -559,6 +575,7 @@ impl<R: Read> Decoder<R> {
     /// Call this immediately after pulling a `Header::Text(len)`, passing
     /// the pulled `len`. Indefinite-length (segmented) text strings are
     /// handled transparently; every segment must itself be valid UTF-8.
+    #[cfg(feature = "alloc")]
     pub fn text_body(&mut self, len: Option<usize>, out: &mut String) -> Result<(), Error> {
         let read_segment = |me: &mut Self, len: usize, out: &mut String| {
             let offset = me.offset;
@@ -587,6 +604,13 @@ impl<R: Read> Decoder<R> {
     }
 }
 
+// 2^n for a small exponent range, built directly from the IEEE 754 bit
+// layout because `f64::powi` is not available in core. Exact for any
+// normal exponent (-1022..=1023).
+fn exp2(n: i32) -> f64 {
+    f64::from_bits(((n + 1023) as u64) << 52)
+}
+
 /// Converts IEEE 754 half-precision bits to an `f64`.
 ///
 /// This follows the decoding algorithm given in RFC 8949 Appendix D.
@@ -595,10 +619,10 @@ pub fn f16_to_f64(bits: u16) -> f64 {
     let frac = (bits & 0x3ff) as f64;
 
     let value = match exp {
-        0 => frac * 2f64.powi(-24),
+        0 => frac * exp2(-24),
         31 if frac == 0.0 => f64::INFINITY,
         31 => f64::NAN,
-        _ => (1024.0 + frac) * 2f64.powi(exp as i32 - 25),
+        _ => (1024.0 + frac) * exp2(exp as i32 - 25),
     };
 
     if bits & 0x8000 == 0 {
@@ -696,6 +720,7 @@ mod tests {
     }
 
     // Headers round-trip through encode and decode.
+    #[cfg(feature = "alloc")]
     #[test]
     fn header_roundtrip() {
         let headers = [

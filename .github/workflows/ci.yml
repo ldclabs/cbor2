@@ -25,6 +25,25 @@ jobs:
       - run: cargo build --workspace --all-features
       - run: cargo test --workspace --all-features
 
+  no-std:
+    name: no_std (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["", "alloc", "alloc,derive"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: thumbv7em-none-eabihf
+      # A bare-metal target proves no std dependency leaks in; the host
+      # build runs the feature-gated unit tests.
+      - run: cargo build --no-default-features --features=${{ matrix.features }} --target thumbv7em-none-eabihf
+      - run: cargo test --lib --no-default-features --features=${{ matrix.features }}
+      - run: cargo clippy --no-default-features --features=${{ matrix.features }} -- -Dwarnings
+
   lint:
     name: rustfmt and clippy
     runs-on: ubuntu-latest

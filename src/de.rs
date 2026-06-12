@@ -1,17 +1,28 @@
 //! Serde deserialization support for CBOR.
 
-use std::io::Read;
+#[cfg(feature = "alloc")]
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 
-use serde::de::{self, value::BytesDeserializer, Deserializer as _};
+use serde::de;
+#[cfg(feature = "alloc")]
+use serde::de::{value::BytesDeserializer, Deserializer as _};
 
-use crate::core::{simple, tag, Decoder, Header};
+#[cfg(feature = "alloc")]
+use crate::core::{simple, tag};
+use crate::core::{Decoder, Header};
+use crate::io::Read;
+#[cfg(feature = "alloc")]
 use crate::tag::TagAccess;
 
 /// An error that occurred during deserialization.
 #[derive(Debug)]
 pub enum Error {
     /// An error from the underlying reader.
-    Io(std::io::Error),
+    Io(crate::io::Error),
 
     /// The input is not well-formed CBOR.
     ///
@@ -21,8 +32,20 @@ pub enum Error {
     /// The input is well-formed CBOR but invalid for the target type.
     ///
     /// Contains a description of the error and (optionally) the byte offset
-    /// of the item being processed when the error occurred.
+    /// of the item being processed when the error occurred. Without the
+    /// `alloc` feature only a static description can be carried, so the
+    /// messages that serde composes at runtime are reduced to a generic one.
+    #[cfg(feature = "alloc")]
     Semantic(Option<usize>, String),
+
+    /// The input is well-formed CBOR but invalid for the target type.
+    ///
+    /// Contains a description of the error and (optionally) the byte offset
+    /// of the item being processed when the error occurred. Without the
+    /// `alloc` feature only a static description can be carried, so the
+    /// messages that serde composes at runtime are reduced to a generic one.
+    #[cfg(not(feature = "alloc"))]
+    Semantic(Option<usize>, &'static str),
 
     /// The input is nested deeper than the configured recursion limit.
     ///
@@ -32,15 +55,23 @@ pub enum Error {
 
 impl Error {
     /// A helper for composing a semantic error.
+    #[cfg(feature = "alloc")]
     #[inline]
     pub fn semantic(offset: impl Into<Option<usize>>, msg: impl Into<String>) -> Self {
         Self::Semantic(offset.into(), msg.into())
     }
+
+    /// A helper for composing a semantic error.
+    #[cfg(not(feature = "alloc"))]
+    #[inline]
+    pub fn semantic(offset: impl Into<Option<usize>>, msg: &'static str) -> Self {
+        Self::Semantic(offset.into(), msg)
+    }
 }
 
-impl From<std::io::Error> for Error {
+impl From<crate::io::Error> for Error {
     #[inline]
-    fn from(value: std::io::Error) -> Self {
+    fn from(value: crate::io::Error) -> Self {
         Self::Io(value)
     }
 }
@@ -69,8 +100,10 @@ impl core::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+// `serde::ser::StdError` is `std::error::Error` whenever it is available,
+// and an identical substitute otherwise.
+impl serde::ser::StdError for Error {
+    fn source(&self) -> Option<&(dyn serde::ser::StdError + 'static)> {
         match self {
             Error::Io(err) => Some(err),
             _ => None,
@@ -79,16 +112,25 @@ impl std::error::Error for Error {
 }
 
 impl de::Error for Error {
+    #[cfg(feature = "alloc")]
     #[inline]
     fn custom<U: core::fmt::Display>(msg: U) -> Self {
         Self::Semantic(None, msg.to_string())
     }
+
+    #[cfg(not(feature = "alloc"))]
+    #[inline]
+    fn custom<U: core::fmt::Display>(_msg: U) -> Self {
+        Self::Semantic(None, "deserialization error (message lost without alloc)")
+    }
 }
 
+#[cfg(feature = "alloc")]
 trait Expected {
     fn expected(self, kind: &'static str) -> Error;
 }
 
+#[cfg(feature = "alloc")]
 impl Expected for Header {
     #[inline]
     fn expected(self, kind: &'static str) -> Error {
@@ -121,6 +163,7 @@ impl Expected for Header {
 // A parsed integer item: either a (possibly negative) integer that was
 // encoded with major type 0 or 1, or a bignum (tag 2 or 3) whose payload is
 // given with leading zeros stripped.
+#[cfg(feature = "alloc")]
 enum Num {
     Pos(u64),
     Neg(u64),
@@ -129,6 +172,7 @@ enum Num {
 }
 
 // Interprets a stripped bignum payload as a `u128`, if it fits.
+#[cfg(feature = "alloc")]
 fn big_to_u128(bytes: &[u8]) -> Option<u128> {
     if bytes.len() > 16 {
         return None;
@@ -141,9 +185,24 @@ fn big_to_u128(bytes: &[u8]) -> Option<u128> {
 
 // The identifier form of an integer map key that no field maps to. It can
 // match no ordinary field name, so such keys are simply unknown fields.
+#[cfg(feature = "alloc")]
 pub(crate) const INT_KEY_PLACEHOLDER: &str = "@@KEY@@";
 
-/// A serde deserializer that reads CBOR from a [`std::io::Read`].
+// A `core::fmt::Write` adapter over the scratch buffer; everything written
+// through it is valid UTF-8 by construction.
+#[cfg(feature = "alloc")]
+struct FmtBuf<'a>(&'a mut Vec<u8>);
+
+#[cfg(feature = "alloc")]
+impl core::fmt::Write for FmtBuf<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.0.extend_from_slice(s.as_bytes());
+        Ok(())
+    }
+}
+
+/// A serde deserializer that reads CBOR from a [`Read`].
+#[cfg(feature = "alloc")]
 pub struct Deserializer<R> {
     decoder: Decoder<R>,
     scratch: Vec<u8>,
@@ -153,11 +212,12 @@ pub struct Deserializer<R> {
 /// The default recursion limit for nested CBOR items.
 pub const DEFAULT_RECURSION_LIMIT: usize = 256;
 
+#[cfg(feature = "alloc")]
 impl<R: Read> Deserializer<R> {
     /// Creates a deserializer with the default recursion limit.
     ///
     /// For repeated small reads consider wrapping the reader in a
-    /// [`std::io::BufReader`].
+    /// `std::io::BufReader`.
     pub fn from_reader(reader: R) -> Self {
         Self::with_recursion_limit(reader, DEFAULT_RECURSION_LIMIT)
     }
@@ -331,6 +391,7 @@ impl<R: Read> Deserializer<R> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
     type Error = Error;
 
@@ -648,19 +709,19 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
                 // other identifier position they take a placeholder form
                 // that matches no field, so they are simply unknown.
                 Header::Positive(x) => {
-                    use std::io::Write as _;
+                    use core::fmt::Write as _;
 
                     self.scratch.clear();
-                    let _ = write!(&mut self.scratch, "{INT_KEY_PLACEHOLDER}{x}");
+                    let _ = write!(FmtBuf(&mut self.scratch), "{INT_KEY_PLACEHOLDER}{x}");
                     visitor.visit_str(core::str::from_utf8(&self.scratch).expect("decimal"))
                 }
 
                 Header::Negative(x) => {
-                    use std::io::Write as _;
+                    use core::fmt::Write as _;
 
                     self.scratch.clear();
                     let _ = write!(
-                        &mut self.scratch,
+                        FmtBuf(&mut self.scratch),
                         "{INT_KEY_PLACEHOLDER}{}",
                         -1 - i128::from(x)
                     );
@@ -772,8 +833,10 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
     }
 }
 
+#[cfg(feature = "alloc")]
 struct Access<'a, R>(&'a mut Deserializer<R>, Option<usize>);
 
+#[cfg(feature = "alloc")]
 impl<'de, R: Read> de::SeqAccess<'de> for Access<'_, R> {
     type Error = Error;
 
@@ -800,6 +863,7 @@ impl<'de, R: Read> de::SeqAccess<'de> for Access<'_, R> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'de, R: Read> de::MapAccess<'de> for Access<'_, R> {
     type Error = Error;
 
@@ -838,8 +902,10 @@ impl<'de, R: Read> de::MapAccess<'de> for Access<'_, R> {
 // through the `<field>=<key>` table of the container marker (see
 // [`STRUCT_MARKER`](crate::ser::STRUCT_MARKER)); everything else
 // deserializes as usual.
+#[cfg(feature = "alloc")]
 struct StructAccess<'a, R>(&'a mut Deserializer<R>, Option<usize>, &'static str);
 
+#[cfg(feature = "alloc")]
 impl<'de, R: Read> de::MapAccess<'de> for StructAccess<'_, R> {
     type Error = Error;
 
@@ -905,8 +971,10 @@ impl<'de, R: Read> de::MapAccess<'de> for StructAccess<'_, R> {
 // not consume any further items from the stream. The last field is the
 // key table of a marked enum (empty otherwise), applied to struct
 // variants.
+#[cfg(feature = "alloc")]
 struct Enum<'a, R>(&'a mut Deserializer<R>, bool, &'static str);
 
+#[cfg(feature = "alloc")]
 impl<'de, R: Read> de::EnumAccess<'de> for Enum<'_, R> {
     type Error = Error;
     type Variant = Self;
@@ -921,6 +989,7 @@ impl<'de, R: Read> de::EnumAccess<'de> for Enum<'_, R> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'de, R: Read> de::VariantAccess<'de> for Enum<'_, R> {
     type Error = Error;
 
@@ -992,8 +1061,10 @@ impl<'de, R: Read> de::VariantAccess<'de> for Enum<'_, R> {
 }
 
 // Yields the contents of a byte string as a sequence of integers.
+#[cfg(feature = "alloc")]
 struct BytesAccess(usize, Vec<u8>);
 
+#[cfg(feature = "alloc")]
 impl<'de> de::SeqAccess<'de> for BytesAccess {
     type Error = Error;
 
@@ -1022,11 +1093,13 @@ impl<'de> de::SeqAccess<'de> for BytesAccess {
 /// An iterator decoding consecutive top-level items from a reader.
 ///
 /// Created by [`Deserializer::into_iter`].
+#[cfg(feature = "alloc")]
 pub struct Iter<T, R> {
     de: Deserializer<R>,
     _marker: core::marker::PhantomData<T>,
 }
 
+#[cfg(feature = "alloc")]
 impl<T: de::DeserializeOwned, R: Read> Iterator for Iter<T, R> {
     type Item = Result<T, Error>;
 
@@ -1038,7 +1111,7 @@ impl<T: de::DeserializeOwned, R: Read> Iterator for Iter<T, R> {
         match self.de.decoder.pull() {
             Ok(header) => self.de.decoder.push(header),
             Err(crate::core::Error::Io(err))
-                if err.kind() == std::io::ErrorKind::UnexpectedEof
+                if err.kind() == crate::io::ErrorKind::UnexpectedEof
                     && self.de.decoder.offset() == start =>
             {
                 return None;
@@ -1082,7 +1155,7 @@ pub(crate) fn expect_eof<R: Read>(decoder: &mut Decoder<R>) -> Result<(), Error>
     let offset = decoder.offset();
     let mut probe = [0u8; 1];
     match decoder.read_exact(&mut probe) {
-        Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => Ok(()),
+        Err(err) if err.kind() == crate::io::ErrorKind::UnexpectedEof => Ok(()),
         Err(err) => Err(Error::Io(err)),
         Ok(()) => Err(Error::semantic(offset, "trailing data after the item")),
     }
@@ -1230,10 +1303,10 @@ fn check_utf8_body<R: Read>(decoder: &mut Decoder<R>, len: usize) -> Result<(), 
     Ok(())
 }
 
-/// Deserializes a value from CBOR read out of a [`std::io::Read`].
+/// Deserializes a value from CBOR read out of a [`Read`].
 ///
-/// For repeated small reads consider wrapping the reader in a
-/// [`std::io::BufReader`].
+/// With the `std` feature any `std::io::Read` is accepted; for repeated
+/// small reads consider wrapping the reader in a `std::io::BufReader`.
 ///
 /// This reads one leading CBOR item and leaves any following bytes unread.
 /// Use [`validate`] when an input must contain exactly one well-formed item,
@@ -1244,6 +1317,7 @@ fn check_utf8_body<R: Read>(decoder: &mut Decoder<R>, len: usize) -> Result<(), 
 /// let value: (String, u16) = cbor2::from_reader(&bytes[..]).unwrap();
 /// assert_eq!(value, ("ok".to_string(), 200));
 /// ```
+#[cfg(feature = "alloc")]
 #[inline]
 pub fn from_reader<T: de::DeserializeOwned, R: Read>(reader: R) -> Result<T, Error> {
     let mut deserializer = Deserializer::from_reader(reader);
@@ -1263,7 +1337,27 @@ pub fn from_reader<T: de::DeserializeOwned, R: Read>(reader: R) -> Result<T, Err
 /// assert_eq!(cbor2::from_slice::<u8>(&bytes).unwrap(), 1);
 /// assert!(cbor2::validate(&bytes[..]).is_err());
 /// ```
+#[cfg(feature = "alloc")]
 #[inline]
 pub fn from_slice<T: de::DeserializeOwned>(slice: &[u8]) -> Result<T, Error> {
     from_reader(slice)
+}
+
+#[cfg(all(test, feature = "alloc"))]
+mod tests {
+    use alloc::{string::String, vec, vec::Vec};
+
+    // Round-trips through the serde entry points using only the crate's
+    // own io implementations, so that `cargo test --no-default-features
+    // --features alloc` exercises the no_std configuration end to end.
+    #[test]
+    fn slice_roundtrip() {
+        let value = (1u8, "two", vec![3u32, 4]);
+        let bytes = crate::ser::to_vec(&value).unwrap();
+
+        let back: (u8, String, Vec<u32>) = super::from_slice(&bytes).unwrap();
+        assert_eq!(back, (1, String::from("two"), vec![3, 4]));
+        assert!(super::validate(&bytes[..]).is_ok());
+        assert!(super::validate(&bytes[..bytes.len() - 1]).is_err());
+    }
 }

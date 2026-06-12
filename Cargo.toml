@@ -4,7 +4,7 @@ members = [".", "cbor2-derive", "cbor_conv"]
 
 [package]
 name = "cbor2"
-version = "0.5.0"
+version = "1.0.0"
 authors = ["0xZensh <txr1883@gmail.com>"]
 description = "A serde implementation of CBOR (RFC 8949) with a dynamic Value type and tag support."
 homepage = "https://github.com/ldclabs/cbor2"
@@ -19,12 +19,20 @@ rust-version = "1.85"
 exclude = ["doc/", ".github/"]
 
 [features]
+default = ["std"]
+# Implements the io traits for std::io::{Read, Write} and adds the HashMap
+# conversions. Implies `alloc`.
+std = ["alloc", "serde/std"]
+# Everything that needs a heap: the Value type, the serde deserializer,
+# RawValue, diagnostic notation and the Vec-producing encode functions.
+# Without it the crate is serialization, validation and the core codec only.
+alloc = ["serde/alloc"]
 # Enables #[derive(cbor2::Cbor)] for integer map keys and CBOR tags.
 derive = ["dep:cbor2-derive", "serde/derive"]
 
 [dependencies]
-cbor2-derive = { path = "cbor2-derive", version = "0.5", optional = true }
-serde = { version = "1", default-features = false, features = ["std"] }
+cbor2-derive = { path = "cbor2-derive", version = "1", optional = true }
+serde = { version = "1", default-features = false }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

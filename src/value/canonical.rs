@@ -1,5 +1,7 @@
 //! Deterministic encoding support (RFC 8949 §4.2).
 
+use alloc::vec::Vec;
+
 use serde::ser::Error as _;
 
 use super::{Error, Integer, Value};

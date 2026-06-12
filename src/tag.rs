@@ -32,7 +32,9 @@
 //! * [`AllowAny<V>`] is the most permissive form: it preserves a present tag
 //!   and also accepts untagged input.
 
-use serde::{de, forward_to_deserialize_any, ser, Deserialize, Serialize};
+#[cfg(feature = "alloc")]
+use serde::forward_to_deserialize_any;
+use serde::{de, ser, Deserialize, Serialize};
 
 // The internal tag protocol: an enum with a magic name whose variants the
 // CBOR serializer and deserializer special-case. This is wire-compatible
@@ -285,13 +287,15 @@ impl<V: Serialize, const TAG: u64> Serialize for RequireExact<V, TAG> {
 
 // An `EnumAccess`/`Deserializer` that presents a tagged item to a visitor
 // using the internal tag protocol. The parent deserializer provides the
-// item following the tag.
+// item following the tag. Only the (alloc-gated) deserializers use it.
+#[cfg(feature = "alloc")]
 pub(crate) struct TagAccess<D> {
     parent: Option<D>,
     state: usize,
     tag: Option<u64>,
 }
 
+#[cfg(feature = "alloc")]
 impl<D> TagAccess<D> {
     pub(crate) fn new(parent: D, tag: Option<u64>) -> Self {
         Self {
@@ -302,6 +306,7 @@ impl<D> TagAccess<D> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'de, D: de::Deserializer<'de>> de::Deserializer<'de> for &mut TagAccess<D> {
     type Error = D::Error;
 
@@ -332,6 +337,7 @@ impl<'de, D: de::Deserializer<'de>> de::Deserializer<'de> for &mut TagAccess<D> 
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'de, D: de::Deserializer<'de>> de::EnumAccess<'de> for TagAccess<D> {
     type Error = D::Error;
     type Variant = Self;
@@ -346,6 +352,7 @@ impl<'de, D: de::Deserializer<'de>> de::EnumAccess<'de> for TagAccess<D> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'de, D: de::Deserializer<'de>> de::VariantAccess<'de> for TagAccess<D> {
     type Error = D::Error;
 
@@ -381,6 +388,7 @@ impl<'de, D: de::Deserializer<'de>> de::VariantAccess<'de> for TagAccess<D> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'de, D: de::Deserializer<'de>> de::SeqAccess<'de> for TagAccess<D> {
     type Error = D::Error;
 
@@ -451,6 +459,12 @@ impl ser::Serializer for TagNumberSerializer {
     #[inline]
     fn serialize_u64(self, v: u64) -> Result<u64, NotATag> {
         Ok(v)
+    }
+
+    // Without alloc, serde provides no default for `collect_str`; a
+    // formatted string is never a tag number either way.
+    fn collect_str<T: ?Sized + core::fmt::Display>(self, _: &T) -> Result<u64, NotATag> {
+        Err(NotATag)
     }
 
     fn serialize_bool(self, _: bool) -> Result<u64, NotATag> {
@@ -595,9 +609,19 @@ impl ser::Serializer for TagNumberSerializer {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "alloc")]
+    use alloc::{
+        format,
+        string::{String, ToString},
+    };
+
+    #[cfg(feature = "alloc")]
     use serde::de::value::{BytesDeserializer, Error as DeError, StrDeserializer};
+    #[cfg(feature = "alloc")]
     use serde::de::{IgnoredAny, VariantAccess as _, Visitor};
-    use serde::ser::{Error as _, Serializer as _};
+    #[cfg(feature = "alloc")]
+    use serde::ser::Error as _;
+    use serde::ser::Serializer as _;
 
     use super::*;
 
@@ -623,6 +647,7 @@ mod tests {
         assert!(TagNumberSerializer.serialize_f64(1.0).is_err());
         assert!(TagNumberSerializer.serialize_char('a').is_err());
         assert!(TagNumberSerializer.serialize_str("a").is_err());
+        assert!(TagNumberSerializer.collect_str(&1).is_err());
         assert!(TagNumberSerializer.serialize_bytes(b"a").is_err());
         assert!(TagNumberSerializer.serialize_none().is_err());
         assert!(TagNumberSerializer.serialize_some(&1u8).is_err());
@@ -650,6 +675,7 @@ mod tests {
             .is_err());
     }
 
+    #[cfg(feature = "alloc")]
     #[test]
     fn not_a_tag_error() {
         assert_eq!(NotATag.to_string(), "expected tag");
@@ -657,11 +683,13 @@ mod tests {
         assert!(format!("{NotATag:?}").contains("NotATag"));
     }
 
+    #[cfg(feature = "alloc")]
     // A visitor that drives the full TagAccess tuple flow, collecting the
     // tag number and the parent item, then confirming the end of the
     // sequence.
     struct Pair;
 
+    #[cfg(feature = "alloc")]
     impl<'de> Visitor<'de> for Pair {
         type Value = (u64, String);
 
@@ -677,6 +705,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "alloc")]
     #[test]
     fn tag_access_tagged_flow() {
         let access = TagAccess::new(StrDeserializer::<DeError>::new("body"), Some(42));
@@ -691,6 +720,7 @@ mod tests {
         assert_eq!((tag, val.as_str()), (42, "body"));
     }
 
+    #[cfg(feature = "alloc")]
     #[test]
     fn tag_access_untagged_flow() {
         let access = TagAccess::new(StrDeserializer::<DeError>::new("body"), None);
@@ -702,6 +732,7 @@ mod tests {
         assert_eq!(val, "body");
     }
 
+    #[cfg(feature = "alloc")]
     #[test]
     fn tag_access_propagates_seed_failures() {
         // A variant seed that cannot absorb the synthesized variant name.
@@ -731,6 +762,7 @@ mod tests {
         variant.tuple_variant(2, BoolFirst).unwrap();
     }
 
+    #[cfg(feature = "alloc")]
     #[test]
     fn tag_access_rejects_other_variant_shapes() {
         let access = TagAccess::new(BytesDeserializer::<DeError>::new(b"x"), Some(1));

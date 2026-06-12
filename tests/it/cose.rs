@@ -272,3 +272,35 @@ fn full_key_range() {
     );
     assert_eq!(cbor2::from_slice::<Edges>(&bytes).unwrap(), edges);
 }
+
+// The derive also implements the `cbor2::Cbor` trait, exposing the
+// declared protocol details for runtime inspection.
+#[test]
+fn derive_exposes_keys_and_tag() {
+    assert_eq!(
+        CoseKey::KEYS,
+        &[("kty", 1), ("alg", 3), ("crv", -1), ("x", -2)]
+    );
+    assert_eq!(CoseKey::TAG, None);
+
+    assert_eq!(ProtectedHeader::KEYS, &[("alg", 1), ("kid", 4)]);
+    assert_eq!(ProtectedHeader::TAG, Some(123));
+
+    // The convenience method collects the table into a map.
+    let keys = sample().keys();
+    assert_eq!(keys.len(), 4);
+    assert_eq!(keys["kty"], 1);
+    assert_eq!(keys["x"], -2);
+    assert!(!keys.contains_key("note")); // unkeyed fields are not listed
+
+    // A plain derive without #[cbor] attributes declares nothing.
+    #[derive(Cbor)]
+    struct Plain {
+        #[allow(dead_code)]
+        a: u8,
+    }
+
+    assert_eq!(Plain::KEYS, &[]);
+    assert_eq!(Plain::TAG, None);
+    assert!(Plain { a: 0 }.keys().is_empty());
+}

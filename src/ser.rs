@@ -1,31 +1,60 @@
 //! Serde serialization support for CBOR.
 
-use std::io::Write;
+#[cfg(feature = "alloc")]
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 
 use serde::ser;
 
 use crate::core::{simple, tag, Encoder, Header};
+use crate::io::Write;
+#[cfg(feature = "alloc")]
 use crate::value::KeyOrder;
 
 /// An error that occurred during serialization.
 #[derive(Debug)]
 pub enum Error {
     /// An error from the underlying writer.
-    Io(std::io::Error),
+    Io(crate::io::Error),
 
     /// A value cannot be represented in CBOR.
     ///
-    /// Contains a description of the problem.
+    /// Contains a description of the problem. Without the `alloc` feature
+    /// only a static description can be carried, so the messages that serde
+    /// composes at runtime are reduced to a generic one.
+    #[cfg(feature = "alloc")]
     Value(String),
+
+    /// A value cannot be represented in CBOR.
+    ///
+    /// Contains a description of the problem. Without the `alloc` feature
+    /// only a static description can be carried, so the messages that serde
+    /// composes at runtime are reduced to a generic one.
+    #[cfg(not(feature = "alloc"))]
+    Value(&'static str),
 }
 
-impl From<std::io::Error> for Error {
+impl Error {
+    // Composes a `Value` error from a static message in any configuration.
     #[inline]
-    fn from(value: std::io::Error) -> Self {
+    pub(crate) fn msg(msg: &'static str) -> Self {
+        #[cfg(feature = "alloc")]
+        return Self::Value(String::from(msg));
+        #[cfg(not(feature = "alloc"))]
+        return Self::Value(msg);
+    }
+}
+
+impl From<crate::io::Error> for Error {
+    #[inline]
+    fn from(value: crate::io::Error) -> Self {
         Self::Io(value)
     }
 }
 
+#[cfg(feature = "alloc")]
 impl From<crate::value::Error> for Error {
     fn from(value: crate::value::Error) -> Self {
         Self::Value(value.to_string())
@@ -41,8 +70,10 @@ impl core::fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+// `serde::ser::StdError` is `std::error::Error` whenever it is available,
+// and an identical substitute otherwise.
+impl serde::ser::StdError for Error {
+    fn source(&self) -> Option<&(dyn serde::ser::StdError + 'static)> {
         match self {
             Error::Io(err) => Some(err),
             Error::Value(..) => None,
@@ -51,8 +82,14 @@ impl std::error::Error for Error {
 }
 
 impl ser::Error for Error {
+    #[cfg(feature = "alloc")]
     fn custom<U: core::fmt::Display>(msg: U) -> Self {
         Error::Value(msg.to_string())
+    }
+
+    #[cfg(not(feature = "alloc"))]
+    fn custom<U: core::fmt::Display>(_msg: U) -> Self {
+        Error::Value("serialization error (message lost without alloc)")
     }
 }
 
@@ -61,7 +98,7 @@ impl ser::Error for Error {
 /// CBOR protocols like COSE (RFC 9052) key their maps with integers and
 /// wrap their messages in tags, which serde's data model cannot express.
 /// This crate's serializers read both from a marked *container* name —
-/// most conveniently produced by the `#[cbor2::cbor]` attribute macro —
+/// most conveniently produced by the `#[derive(cbor2::Cbor)]` macro —
 /// of the form:
 ///
 /// ```text
@@ -114,6 +151,8 @@ pub(crate) fn key_for_field(keys: &str, field: &str) -> Option<i128> {
 }
 
 // The struct field name for an integer map key, if the key table maps it.
+// Only the (alloc-gated) deserializers translate keys in this direction.
+#[cfg(feature = "alloc")]
 pub(crate) fn field_for_key(keys: &str, key: i128) -> Option<&str> {
     keys.split(';').find_map(|entry| {
         let (name, k) = entry.split_once('=')?;
@@ -157,7 +196,7 @@ fn canonical_u64(decimal: &str) -> Option<u64> {
     decimal.parse::<u64>().ok()
 }
 
-/// A serde serializer that writes CBOR to a [`std::io::Write`].
+/// A serde serializer that writes CBOR to a [`Write`].
 pub struct Serializer<W>(Encoder<W>);
 
 impl<W: Write> From<W> for Serializer<W> {
@@ -349,6 +388,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         value: &U,
     ) -> Result<(), Error> {
         // A `RawValue` splices its already-encoded bytes into the stream.
+        #[cfg(feature = "alloc")]
         if name == crate::raw::NAME {
             return match value.serialize(crate::raw::RawBytesSerializer) {
                 Ok(bytes) => Ok(self.0.write_all(&bytes)?),
@@ -506,7 +546,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
 
         let mut counter = Counter(0);
         if write!(&mut counter, "{value}").is_err() {
-            return Err(Error::Value("Display implementation failed".into()));
+            return Err(Error::msg("Display implementation failed"));
         }
 
         self.0.push(Header::Text(Some(counter.0)))?;
@@ -514,7 +554,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         struct Body<'a, W> {
             encoder: &'a mut Encoder<W>,
             remaining: usize,
-            error: Option<std::io::Error>,
+            error: Option<crate::io::Error>,
         }
 
         impl<W: Write> core::fmt::Write for Body<'_, W> {
@@ -547,9 +587,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             return Err(Error::Io(err));
         }
         if result.is_err() || body.remaining != 0 {
-            return Err(Error::Value(
-                "Display implementation is not deterministic".into(),
-            ));
+            return Err(Error::msg("Display implementation is not deterministic"));
         }
         Ok(())
     }
@@ -640,7 +678,7 @@ impl<W: Write> ser::SerializeTupleVariant for CollectionSerializer<'_, W> {
         self.tag = false;
         match value.serialize(crate::tag::TagNumberSerializer) {
             Ok(x) => Ok(self.encoder.0.push(Header::Tag(x))?),
-            Err(..) => Err(Error::Value("expected tag".into())),
+            Err(..) => Err(Error::msg("expected tag")),
         }
     }
 
@@ -710,10 +748,10 @@ impl<W: Write> ser::SerializeStructVariant for CollectionSerializer<'_, W> {
     }
 }
 
-/// Serializes a value as CBOR into a [`std::io::Write`].
+/// Serializes a value as CBOR into a [`Write`].
 ///
-/// For repeated small writes consider wrapping the writer in a
-/// [`std::io::BufWriter`].
+/// With the `std` feature any `std::io::Write` is accepted; for repeated
+/// small writes consider wrapping the writer in a `std::io::BufWriter`.
 #[inline]
 pub fn to_writer<T: ?Sized + ser::Serialize, W: Write>(value: &T, writer: W) -> Result<(), Error> {
     let mut serializer = Serializer::from(writer);
@@ -721,11 +759,37 @@ pub fn to_writer<T: ?Sized + ser::Serialize, W: Write>(value: &T, writer: W) -> 
 }
 
 /// Serializes a value as CBOR into a new `Vec<u8>`.
+#[cfg(feature = "alloc")]
 #[inline]
 pub fn to_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<Vec<u8>, Error> {
     let mut buffer = Vec::new();
     to_writer(value, &mut buffer)?;
     Ok(buffer)
+}
+
+/// Serializes a value as CBOR into the front of `buffer`, returning the
+/// written prefix.
+///
+/// This never allocates, which makes it the natural encoding function
+/// without the `alloc` feature; a buffer too small for the value fails
+/// with an [`Error::Io`] of kind
+/// [`WriteZero`](crate::io::ErrorKind::WriteZero). Use [`serialized_size`]
+/// to size the buffer in advance.
+///
+/// ```rust
+/// let mut buffer = [0u8; 64];
+/// let item = cbor2::to_slice(&("id", 42u8), &mut buffer).unwrap();
+/// assert_eq!(item, &[0x82, 0x62, b'i', b'd', 0x18, 42]);
+/// ```
+pub fn to_slice<'a, T: ?Sized + ser::Serialize>(
+    value: &T,
+    buffer: &'a mut [u8],
+) -> Result<&'a mut [u8], Error> {
+    let total = buffer.len();
+    let mut rest: &mut [u8] = buffer;
+    to_writer(value, &mut rest)?;
+    let written = total - rest.len();
+    Ok(&mut buffer[..written])
 }
 
 /// Computes the exact number of bytes that [`to_writer`] would produce for
@@ -750,7 +814,10 @@ pub fn serialized_size<T: ?Sized + ser::Serialize>(value: &T) -> Result<u64, Err
 // A sink that discards everything written to it, keeping only the count.
 struct ByteCounter(u64);
 
-impl Write for ByteCounter {
+// With std, the blanket implementation over std::io::Write provides the
+// crate's Write trait; without it, the trait is implemented directly.
+#[cfg(feature = "std")]
+impl std::io::Write for ByteCounter {
     #[inline]
     fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
         self.0 += data.len() as u64;
@@ -763,11 +830,26 @@ impl Write for ByteCounter {
     }
 }
 
+#[cfg(not(feature = "std"))]
+impl Write for ByteCounter {
+    #[inline]
+    fn write_all(&mut self, data: &[u8]) -> Result<(), crate::io::Error> {
+        self.0 += data.len() as u64;
+        Ok(())
+    }
+
+    #[inline]
+    fn flush(&mut self) -> Result<(), crate::io::Error> {
+        Ok(())
+    }
+}
+
 /// Serializes a value as deterministically encoded CBOR into a
-/// [`std::io::Write`], satisfying the core deterministic encoding
+/// [`Write`], satisfying the core deterministic encoding
 /// requirements of RFC 8949 §4.2.1.
 ///
 /// This is [`to_canonical_writer_with`] using [`KeyOrder::Bytewise`].
+#[cfg(feature = "alloc")]
 pub fn to_canonical_writer<T: ?Sized + ser::Serialize, W: Write>(
     value: &T,
     writer: W,
@@ -780,12 +862,13 @@ pub fn to_canonical_writer<T: ?Sized + ser::Serialize, W: Write>(
 /// RFC 8949 §4.2.1.
 ///
 /// This is [`to_canonical_vec_with`] using [`KeyOrder::Bytewise`].
+#[cfg(feature = "alloc")]
 pub fn to_canonical_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<Vec<u8>, Error> {
     to_canonical_vec_with(value, KeyOrder::Bytewise)
 }
 
 /// Serializes a value as deterministically encoded CBOR into a
-/// [`std::io::Write`], sorting map keys in the given [`KeyOrder`].
+/// [`Write`], sorting map keys in the given [`KeyOrder`].
 ///
 /// See [`Value::canonicalize_with`](crate::Value::canonicalize_with) for
 /// the exact normalization rules. The value is buffered as a
@@ -793,6 +876,7 @@ pub fn to_canonical_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<Vec<u8>
 /// expensive than [`to_writer`].
 ///
 /// Maps with duplicate keys (after normalization) are rejected.
+#[cfg(feature = "alloc")]
 pub fn to_canonical_writer_with<T: ?Sized + ser::Serialize, W: Write>(
     value: &T,
     writer: W,
@@ -807,6 +891,7 @@ pub fn to_canonical_writer_with<T: ?Sized + ser::Serialize, W: Write>(
 /// `Vec<u8>`, sorting map keys in the given [`KeyOrder`].
 ///
 /// See [`to_canonical_writer_with`] for details.
+#[cfg(feature = "alloc")]
 pub fn to_canonical_vec_with<T: ?Sized + ser::Serialize>(
     value: &T,
     order: KeyOrder,
@@ -823,8 +908,23 @@ mod tests {
     #[test]
     fn byte_counter_is_a_well_behaved_sink() {
         let mut counter = ByteCounter(0);
-        counter.write_all(b"12345").unwrap();
-        counter.flush().unwrap();
+        Write::write_all(&mut counter, b"12345").unwrap();
+        Write::flush(&mut counter).unwrap();
         assert_eq!(counter.0, 5);
+    }
+
+    // `to_slice` works without any allocation, returning the written
+    // prefix and rejecting a buffer that is too small.
+    #[test]
+    fn to_slice_returns_the_written_prefix() {
+        let mut buffer = [0xffu8; 8];
+        let item = to_slice(&(1u8, "ab"), &mut buffer).unwrap();
+        assert_eq!(item, &[0x82, 0x01, 0x62, b'a', b'b']);
+
+        let mut buffer = [0u8; 2];
+        assert!(matches!(
+            to_slice(&(1u8, "ab"), &mut buffer),
+            Err(Error::Io(..))
+        ));
     }
 }

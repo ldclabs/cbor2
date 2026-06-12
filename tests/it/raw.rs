@@ -98,6 +98,23 @@ fn value_paths_decode_and_reencode() {
 }
 
 #[test]
+fn converts_to_and_from_value() {
+    // RawValue -> Value decodes; non-preferred spellings normalize.
+    let raw = RawValue::new(hex::decode("1801").unwrap()).unwrap();
+    assert_eq!(Value::try_from(&raw).unwrap(), Value::from(1));
+    assert_eq!(Value::try_from(raw).unwrap(), Value::from(1));
+
+    // Value -> RawValue encodes in preferred form.
+    let value = cbor2::cbor!({ "a": [1, 2] }).unwrap();
+    let raw = RawValue::try_from(&value).unwrap();
+    assert_eq!(hex::encode(raw.as_bytes()), "a16161820102");
+    assert_eq!(RawValue::try_from(value.clone()).unwrap(), raw);
+
+    // And the pair round-trips.
+    assert_eq!(Value::try_from(raw).unwrap(), value);
+}
+
+#[test]
 fn formats_as_diagnostic_notation() {
     let raw = RawValue::new(hex::decode("9f0102ff").unwrap()).unwrap();
     assert_eq!(raw.to_string(), "[_ 1, 2]");
