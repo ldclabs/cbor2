@@ -521,6 +521,12 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
         name: &'static str,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
+        // A `RawValue` captures the `Value` re-encoded in preferred form.
+        if name == crate::raw::NAME {
+            let bytes = crate::to_vec(self.0).map_err(de::Error::custom)?;
+            return visitor.visit_byte_buf(bytes);
+        }
+
         match unwrap_struct_tag(name, self.0)? {
             Some(value) => visitor.visit_newtype_struct(Deserializer(value)),
             None => visitor.visit_newtype_struct(self),

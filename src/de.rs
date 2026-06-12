@@ -254,6 +254,16 @@ impl<R: Read> Deserializer<R> {
         }
     }
 
+    // Captures the wire bytes of the next item, byte for byte, while
+    // validating that it is well-formed (including text UTF-8). Used by
+    // `RawValue`.
+    fn capture_item(&mut self) -> Result<Vec<u8>, Error> {
+        self.decoder.start_recording();
+        let result = validate_item(&mut self.decoder, self.recurse);
+        let bytes = self.decoder.take_recording();
+        result.map(|()| bytes)
+    }
+
     // Pulls the next integer item, skipping any tags other than the bignum
     // tags.
     fn number(&mut self) -> Result<Num, Error> {
@@ -709,6 +719,11 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
         name: &'static str,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
+        // A `RawValue` captures the next item's bytes without decoding.
+        if name == crate::raw::NAME {
+            return visitor.visit_byte_buf(self.capture_item()?);
+        }
+
         self.expect_struct_tag(name)?;
         visitor.visit_newtype_struct(self)
     }

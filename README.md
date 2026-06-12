@@ -53,6 +53,10 @@ requires `std`.
   textual keys. Field names and the type name stay untouched, so the same
   types still serialize to plain JSON — `serde_json::to_string(&v)` just
   works, with the original field names and no tag.
+* **Raw values** — `RawValue` keeps one item as validated, undecoded
+  bytes: serializing splices them into the stream untouched and
+  deserializing captures them byte for byte, for signature payloads,
+  pass-through items and deferred decoding.
 * **Robust decoding** — indefinite-length items, segmented strings,
   duplicate map keys, unknown tags and CBOR sequences (RFC 8742) are all
   handled; recursion is depth-limited and forged lengths cannot trigger

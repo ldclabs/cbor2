@@ -348,6 +348,14 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         name: &'static str,
         value: &U,
     ) -> Result<(), Error> {
+        // A `RawValue` splices its already-encoded bytes into the stream.
+        if name == crate::raw::NAME {
+            return match value.serialize(crate::raw::RawBytesSerializer) {
+                Ok(bytes) => Ok(self.0.write_all(&bytes)?),
+                Err(err) => Err(Error::Value(err.to_string())),
+            };
+        }
+
         if let Some(StructMarker { tag: Some(tag), .. }) = parse_struct_marker(name) {
             self.0.push(Header::Tag(tag))?;
         }

@@ -53,6 +53,11 @@ been removed entirely.
   shadow type — so the same types serialize to plain JSON with the
   original field names and no tag: `serde_json::to_string(&v)` just
   works. (Extension over ciborium, which has no integer-key support.)
+* A `RawValue` type holding one item as validated, undecoded bytes (in
+  the spirit of `serde_json::value::RawValue`): serialization splices
+  the bytes into the stream untouched and deserialization captures them
+  byte for byte — exact even for non-preferred spellings — for
+  signature payloads, pass-through items and deferred decoding.
 * Deterministic encoding via `to_canonical_vec`, `to_canonical_writer` and
   `Value::canonicalize`: map key sorting, duplicate key rejection, bignum
   reduction to preferred form and NaN normalization. Both deterministic key

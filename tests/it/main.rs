@@ -12,6 +12,7 @@ mod diag;
 mod errors;
 mod limits;
 mod markers;
+mod raw;
 mod rfc8949;
 mod roundtrip;
 mod size;

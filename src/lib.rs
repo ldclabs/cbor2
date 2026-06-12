@@ -120,6 +120,35 @@ let point: Point = value.deserialized().unwrap();
 assert_eq!(point, Point { x: -2, y: 5 });
 ```
 
+# Raw values
+
+A [`RawValue`] keeps one CBOR item as its raw encoded bytes — validated
+for well-formedness, but never decoded. Serializing splices the bytes
+into the stream untouched and deserializing captures them byte for byte,
+which preserves the exact wire encoding for signature payloads,
+pass-through items and deferred decoding:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct Signed {
+    #[serde(with = "serde_bytes")]
+    signature: Vec<u8>,
+    payload: cbor2::RawValue,
+}
+
+let bytes = cbor2::to_vec(&Signed {
+    signature: vec![0xde, 0xad],
+    payload: cbor2::RawValue::serialized(&("untouched", 42)).unwrap(),
+}).unwrap();
+
+let signed: Signed = cbor2::from_slice(&bytes).unwrap();
+// Verify `signed.signature` over `signed.payload.as_bytes()`, then:
+let (text, n): (String, u8) = signed.payload.deserialized().unwrap();
+assert_eq!((text.as_str(), n), ("untouched", 42));
+```
+
 # CBOR sequences
 
 CBOR sequences (RFC 8742) are streams of adjacent complete CBOR items.
@@ -353,6 +382,7 @@ the legacy release — and none of the old API survives.
 pub mod core;
 pub mod de;
 mod diag;
+mod raw;
 pub mod ser;
 pub mod tag;
 pub mod value;
@@ -360,6 +390,7 @@ pub mod value;
 #[doc(inline)]
 pub use crate::de::{from_reader, from_slice, validate};
 pub use crate::diag::diagnostic;
+pub use crate::raw::RawValue;
 #[doc(inline)]
 pub use crate::ser::{
     serialized_size, to_canonical_vec, to_canonical_vec_with, to_canonical_writer,

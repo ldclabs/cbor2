@@ -321,6 +321,11 @@ pub struct Decoder<R> {
     offset: usize,
     pushback: Option<(Header, usize)>,
     mark: usize,
+    // The wire bytes of the most recently parsed header, so a recording
+    // can be seeded when it starts behind a pushed-back header.
+    last_header: ([u8; 9], u8),
+    // When active, a byte-exact copy of everything read from the wire.
+    record: Option<Vec<u8>>,
 }
 
 impl<R: Read> From<R> for Decoder<R> {
@@ -331,6 +336,8 @@ impl<R: Read> From<R> for Decoder<R> {
             offset: 0,
             pushback: None,
             mark: 0,
+            last_header: ([0; 9], 0),
+            record: None,
         }
     }
 }
@@ -383,6 +390,33 @@ impl<R: Read> Decoder<R> {
             31 => Arg::Indefinite,
             _ => return Err(Error::Syntax(start)),
         };
+
+        // Remember the exact wire spelling of this header: the argument
+        // width is given by the minor value, so the bytes reconstruct
+        // losslessly even for non-preferred encodings.
+        {
+            let (raw, raw_len) = &mut self.last_header;
+            raw[0] = prefix[0];
+            *raw_len = match arg {
+                Arg::This(..) | Arg::Indefinite => 1,
+                Arg::Next1(x) => {
+                    raw[1] = x;
+                    2
+                }
+                Arg::Next2(x) => {
+                    raw[1..3].copy_from_slice(&x.to_be_bytes());
+                    3
+                }
+                Arg::Next4(x) => {
+                    raw[1..5].copy_from_slice(&x.to_be_bytes());
+                    5
+                }
+                Arg::Next8(x) => {
+                    raw[1..9].copy_from_slice(&x.to_be_bytes());
+                    9
+                }
+            };
+        }
 
         let int = |arg: Arg| match arg {
             Arg::This(x) => Some(x as u64),
@@ -461,7 +495,28 @@ impl<R: Read> Decoder<R> {
         debug_assert!(self.pushback.is_none());
         self.reader.read_exact(data)?;
         self.offset += data.len();
+        if let Some(record) = &mut self.record {
+            record.extend_from_slice(data);
+        }
         Ok(())
+    }
+
+    // Starts a byte-exact recording of everything read from the wire.
+    // A pushed-back header was consumed before the recording began, so
+    // its wire bytes seed the buffer; re-pulling it reads nothing and
+    // records nothing, keeping the copy aligned with the stream.
+    pub(crate) fn start_recording(&mut self) {
+        let mut record = Vec::new();
+        if self.pushback.is_some() {
+            let (raw, raw_len) = &self.last_header;
+            record.extend_from_slice(&raw[..*raw_len as usize]);
+        }
+        self.record = Some(record);
+    }
+
+    // Stops recording and returns the bytes read since it started.
+    pub(crate) fn take_recording(&mut self) -> Vec<u8> {
+        self.record.take().unwrap_or_default()
     }
 
     // Appends `len` body bytes to `out`, growing the buffer as data arrives

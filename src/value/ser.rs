@@ -198,6 +198,14 @@ impl ser::Serializer for Serializer<()> {
         name: &'static str,
         value: &U,
     ) -> Result<Value, Error> {
+        // A `Value` has no raw form: decode the `RawValue` instead.
+        if name == crate::raw::NAME {
+            return match value.serialize(crate::raw::RawBytesSerializer) {
+                Ok(bytes) => crate::from_slice(&bytes).map_err(ser::Error::custom),
+                Err(err) => Err(ser::Error::custom(err)),
+            };
+        }
+
         let tag = crate::ser::parse_struct_marker(name).and_then(|marker| marker.tag);
         Ok(apply_tag(tag, value.serialize(self)?))
     }
