@@ -198,3 +198,108 @@ fn integer_conversions() {
         -2i128.pow(64)
     );
 }
+
+#[test]
+fn std_collection_conversions() {
+    use std::collections::{BTreeMap, HashMap};
+
+    // HashMap/BTreeMap -> Value (entry order follows the map's iteration
+    // order; sort for a stable assertion).
+    let map: HashMap<&str, u64> = [("b", 2), ("a", 1)].into();
+    let mut value = Value::from(map);
+    value
+        .as_map_mut()
+        .unwrap()
+        .sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+    assert_eq!(value, cbor2::cbor!({ "a": 1, "b": 2 }).unwrap());
+
+    let map: BTreeMap<Integer, Vec<u8>> = [(Integer::from(1), b"kid".to_vec())].into();
+    assert_eq!(
+        Value::from(map),
+        cbor2::cbor!({ 1: Value::Bytes(b"kid".to_vec()) }).unwrap()
+    );
+
+    // Value -> HashMap/BTreeMap, with typed or Value elements.
+    let value = cbor2::cbor!({ "a": 1, "b": 2 }).unwrap();
+    let typed: HashMap<String, u64> = value.clone().try_into().unwrap();
+    assert_eq!(typed["a"], 1);
+    let dynamic: HashMap<String, Value> = value.clone().try_into().unwrap();
+    assert_eq!(dynamic["b"], Value::from(2));
+    let sorted: BTreeMap<String, u64> = value.clone().try_into().unwrap();
+    assert_eq!(sorted.keys().collect::<Vec<_>>(), ["a", "b"]);
+
+    // COSE-style integer keys.
+    let header = cbor2::cbor!({ 1: -7, 4: Value::Bytes(b"kid".to_vec()) }).unwrap();
+    let map: BTreeMap<Integer, Value> = header.try_into().unwrap();
+    assert_eq!(map[&Integer::from(1)], Value::from(-7));
+
+    // Failures carry serde-style messages.
+    let msg = HashMap::<String, u64>::try_from(Value::from(1))
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("invalid type"), "{msg}");
+    let msg = HashMap::<String, u64>::try_from(cbor2::cbor!({ 1: 1 }).unwrap())
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("invalid map key"), "{msg}");
+    let msg = HashMap::<String, u64>::try_from(cbor2::cbor!({ "a": -1 }).unwrap())
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("invalid map value"), "{msg}");
+
+    // Later duplicate keys overwrite earlier ones, as on the wire.
+    let dup = Value::Map(vec![
+        (Value::from("a"), Value::from(1)),
+        (Value::from("a"), Value::from(2)),
+    ]);
+    let map: HashMap<String, u64> = dup.try_into().unwrap();
+    assert_eq!(map["a"], 2);
+}
+
+#[test]
+fn std_scalar_conversions() {
+    // From: Option, byte arrays, usize/isize, Cow, iterators.
+    assert_eq!(Value::from(Some(7)), Value::from(7));
+    assert_eq!(Value::from(None::<i32>), Value::Null);
+    assert_eq!(Value::from(*b"ab"), Value::Bytes(vec![0x61, 0x62]));
+    assert_eq!(Value::from(b"ab"), Value::Bytes(vec![0x61, 0x62]));
+    assert_eq!(Value::from(7usize), Value::from(7));
+    assert_eq!(Value::from(-7isize), Value::from(-7));
+    assert_eq!(Value::from(std::borrow::Cow::from("hi")), Value::from("hi"));
+    assert_eq!((1..=2).collect::<Value>(), cbor2::cbor!([1, 2]).unwrap());
+
+    // TryFrom: each variant moves out...
+    assert_eq!(String::try_from(Value::from("hi")).unwrap(), "hi");
+    assert_eq!(Vec::<u8>::try_from(Value::from(b"ab")).unwrap(), b"ab");
+    assert!(bool::try_from(Value::from(true)).unwrap());
+    assert_eq!(f64::try_from(Value::from(1.5)).unwrap(), 1.5);
+    assert_eq!(char::try_from(Value::from('x')).unwrap(), 'x');
+    assert_eq!(Integer::try_from(Value::from(7)).unwrap(), Integer::from(7));
+    assert_eq!(
+        Vec::<Value>::try_from(cbor2::cbor!([1]).unwrap()).unwrap(),
+        vec![Value::from(1)]
+    );
+    assert_eq!(
+        Vec::<(Value, Value)>::try_from(cbor2::cbor!({ "a": 1 }).unwrap()).unwrap(),
+        vec![(Value::from("a"), Value::from(1))]
+    );
+
+    // ... integers are range-checked ...
+    assert_eq!(u8::try_from(Value::from(255)).unwrap(), 255);
+    assert_eq!(i64::try_from(Value::from(-1)).unwrap(), -1);
+    assert_eq!(usize::try_from(Value::from(7)).unwrap(), 7);
+    let msg = u8::try_from(Value::from(256)).unwrap_err().to_string();
+    assert!(msg.contains("invalid value: integer `256`"), "{msg}");
+    let msg = u64::try_from(Value::from("x")).unwrap_err().to_string();
+    assert!(msg.contains("invalid type"), "{msg}");
+
+    // ... and the 128-bit forms round-trip through bignum tags.
+    assert_eq!(u128::try_from(Value::from(u128::MAX)).unwrap(), u128::MAX);
+    assert_eq!(i128::try_from(Value::from(i128::MIN)).unwrap(), i128::MIN);
+
+    // Type mismatches keep serde-style messages.
+    let msg = String::try_from(Value::from(1)).unwrap_err().to_string();
+    assert!(msg.contains("invalid type"), "{msg}");
+    let msg = char::try_from(Value::from("ab")).unwrap_err().to_string();
+    assert!(msg.contains("single-character"), "{msg}");
+}

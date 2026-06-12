@@ -46,6 +46,77 @@ fn macro_inlines_expressions() {
     );
 }
 
+#[test]
+fn macro_accepts_json_style_colons() {
+    // The `serde_json::json!` separator builds the same values as `=>`.
+    let colon = cbor!({
+        "code": 415,
+        "message": null,
+        "continue": false,
+        "extra": { "numbers": [8.2341e+4, 0.251425] },
+    })
+    .unwrap();
+    let arrow = cbor!({
+        "code" => 415,
+        "message" => null,
+        "continue" => false,
+        "extra" => { "numbers" => [8.2341e+4, 0.251425] },
+    })
+    .unwrap();
+    assert_eq!(colon, arrow);
+
+    // Unlike JSON, keys may be any CBOR value, including integers,
+    // multi-token expressions and nested containers.
+    let x = 2u8;
+    let value = cbor!({
+        1: "int",
+        -1: "negative int",
+        x + 1: "expression",
+        [4]: "array key",
+        {"k": 5}: "map key",
+    })
+    .unwrap();
+    let map = value.as_map().unwrap();
+    assert_eq!(map[0], (Value::from(1), Value::from("int")));
+    assert_eq!(map[1], (Value::from(-1), Value::from("negative int")));
+    assert_eq!(map[2], (Value::from(3), Value::from("expression")));
+    assert_eq!(
+        map[3],
+        (Value::Array(vec![Value::from(4)]), Value::from("array key"))
+    );
+    assert_eq!(
+        map[4],
+        (
+            Value::Map(vec![(Value::from("k"), Value::from(5))]),
+            Value::from("map key")
+        )
+    );
+
+    // A key expression containing a colon (a path) needs parentheses —
+    // or the `=>` separator.
+    let value = cbor!({
+        (i8::MAX): 0,
+        i8::MIN => 1,
+    })
+    .unwrap();
+    let map = value.as_map().unwrap();
+    assert_eq!(map[0], (Value::from(127), Value::from(0)));
+    assert_eq!(map[1], (Value::from(-128), Value::from(1)));
+
+    // Both separators may mix, with or without trailing commas; empty
+    // containers and bare expressions still work.
+    assert_eq!(
+        cbor!({ "a": 1, "b" => 2 }).unwrap(),
+        cbor!({ "a" => 1, "b": 2 }).unwrap()
+    );
+    assert_eq!(cbor!({}).unwrap(), Value::Map(vec![]));
+    assert_eq!(cbor!([]).unwrap(), Value::Array(vec![]));
+    assert_eq!(
+        cbor!([null, {"a": 1}]).unwrap().to_string(),
+        r#"[null, {"a": 1}]"#
+    );
+}
+
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct Point {
     x: i32,

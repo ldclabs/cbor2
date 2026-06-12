@@ -41,7 +41,7 @@ impl Value {
     /// ```rust
     /// use cbor2::{cbor, Value};
     ///
-    /// let mut value = cbor!({ "z" => 1, "aa" => 2 }).unwrap();
+    /// let mut value = cbor!({ "z": 1, "aa": 2 }).unwrap();
     /// value.canonicalize().unwrap();
     ///
     /// // "z" (0x617a) sorts before "aa" (0x626161).
@@ -73,7 +73,7 @@ impl Value {
     /// ```rust
     /// use cbor2::{cbor, KeyOrder, Value};
     ///
-    /// let mut value = cbor!({ "aa" => 2, 100 => 1, -1 => 0 }).unwrap();
+    /// let mut value = cbor!({ "aa": 2, 100: 1, -1: 0 }).unwrap();
     /// value.canonicalize_with(KeyOrder::LengthFirst).unwrap();
     ///
     /// // -1 (0x20, one byte) sorts before 100 (0x1864, two bytes).

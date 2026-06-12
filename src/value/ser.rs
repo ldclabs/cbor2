@@ -3,11 +3,20 @@ use serde::ser::{self, SerializeMap as _, SerializeSeq as _, SerializeTupleVaria
 use super::{Error, Integer, Value};
 
 // Struct field keys follow the same COSE-style rule as the streaming
-// serializer: canonical decimal names become integer keys.
-fn field_key(key: &'static str) -> Value {
-    match crate::ser::integer_field_key(key) {
+// serializer: fields named in the container's key table become integer
+// keys.
+fn field_key(keys: &str, key: &'static str) -> Value {
+    match crate::ser::key_for_field(keys, key) {
         Some(n) => Value::Integer(Integer::try_from(n).expect("field keys are in range")),
         None => key.into(),
+    }
+}
+
+// Wraps a finished value in the container marker's tag, if any.
+fn apply_tag(tag: Option<u64>, value: Value) -> Value {
+    match tag {
+        Some(tag) => Value::Tag(tag, value.into()),
+        None => value,
     }
 }
 
@@ -89,6 +98,7 @@ struct Named<T> {
     name: &'static str,
     data: T,
     tag: Option<Tagged>,
+    keys: &'static str,
 }
 
 struct Tagged {
@@ -101,6 +111,20 @@ struct Map {
     temp: Option<Value>,
 }
 
+// The collector for a struct: a map plus the key table and tag of its
+// container marker, if any.
+struct StructMap {
+    data: Vec<(Value, Value)>,
+    keys: &'static str,
+    tag: Option<u64>,
+}
+
+// The collector for a tuple struct, which may carry a marker tag.
+struct TaggedArray {
+    data: Vec<Value>,
+    tag: Option<u64>,
+}
+
 struct Serializer<T>(T);
 
 impl ser::Serializer for Serializer<()> {
@@ -109,10 +133,10 @@ impl ser::Serializer for Serializer<()> {
 
     type SerializeSeq = Serializer<Vec<Value>>;
     type SerializeTuple = Serializer<Vec<Value>>;
-    type SerializeTupleStruct = Serializer<Vec<Value>>;
+    type SerializeTupleStruct = Serializer<TaggedArray>;
     type SerializeTupleVariant = Serializer<Named<Vec<Value>>>;
     type SerializeMap = Serializer<Map>;
-    type SerializeStruct = Serializer<Vec<(Value, Value)>>;
+    type SerializeStruct = Serializer<StructMap>;
     type SerializeStructVariant = Serializer<Named<Vec<(Value, Value)>>>;
 
     mkserialize! {
@@ -153,8 +177,9 @@ impl ser::Serializer for Serializer<()> {
     }
 
     #[inline]
-    fn serialize_unit_struct(self, _name: &'static str) -> Result<Value, Error> {
-        self.serialize_unit()
+    fn serialize_unit_struct(self, name: &'static str) -> Result<Value, Error> {
+        let tag = crate::ser::parse_struct_marker(name).and_then(|marker| marker.tag);
+        Ok(apply_tag(tag, Value::Null))
     }
 
     #[inline]
@@ -170,10 +195,11 @@ impl ser::Serializer for Serializer<()> {
     #[inline]
     fn serialize_newtype_struct<U: ?Sized + ser::Serialize>(
         self,
-        _name: &'static str,
+        name: &'static str,
         value: &U,
     ) -> Result<Value, Error> {
-        value.serialize(self)
+        let tag = crate::ser::parse_struct_marker(name).and_then(|marker| marker.tag);
+        Ok(apply_tag(tag, value.serialize(self)?))
     }
 
     #[inline]
@@ -203,10 +229,13 @@ impl ser::Serializer for Serializer<()> {
     #[inline]
     fn serialize_tuple_struct(
         self,
-        _name: &'static str,
+        name: &'static str,
         length: usize,
     ) -> Result<Self::SerializeTupleStruct, Error> {
-        self.serialize_seq(Some(length))
+        Ok(Serializer(TaggedArray {
+            data: Vec::with_capacity(length),
+            tag: crate::ser::parse_struct_marker(name).and_then(|marker| marker.tag),
+        }))
     }
 
     #[inline]
@@ -228,6 +257,7 @@ impl ser::Serializer for Serializer<()> {
 
                 _ => None,
             },
+            keys: "",
         }))
     }
 
@@ -242,16 +272,21 @@ impl ser::Serializer for Serializer<()> {
     #[inline]
     fn serialize_struct(
         self,
-        _name: &'static str,
+        name: &'static str,
         length: usize,
     ) -> Result<Self::SerializeStruct, Error> {
-        Ok(Serializer(Vec::with_capacity(length)))
+        let marker = crate::ser::parse_struct_marker(name);
+        Ok(Serializer(StructMap {
+            data: Vec::with_capacity(length),
+            keys: marker.as_ref().map_or("", |marker| marker.keys),
+            tag: marker.and_then(|marker| marker.tag),
+        }))
     }
 
     #[inline]
     fn serialize_struct_variant(
         self,
-        _name: &'static str,
+        name: &'static str,
         _index: u32,
         variant: &'static str,
         length: usize,
@@ -260,6 +295,7 @@ impl ser::Serializer for Serializer<()> {
             name: variant,
             data: Vec::with_capacity(length),
             tag: None,
+            keys: crate::ser::parse_struct_marker(name).map_or("", |marker| marker.keys),
         }))
     }
 
@@ -301,19 +337,19 @@ impl ser::SerializeTuple for Serializer<Vec<Value>> {
     }
 }
 
-impl ser::SerializeTupleStruct for Serializer<Vec<Value>> {
+impl ser::SerializeTupleStruct for Serializer<TaggedArray> {
     type Ok = Value;
     type Error = Error;
 
     #[inline]
     fn serialize_field<U: ?Sized + ser::Serialize>(&mut self, value: &U) -> Result<(), Error> {
-        self.0.push(Value::serialized(value)?);
+        self.0.data.push(Value::serialized(value)?);
         Ok(())
     }
 
     #[inline]
     fn end(self) -> Result<Value, Error> {
-        Ok(self.0.into())
+        Ok(apply_tag(self.0.tag, self.0.data.into()))
     }
 }
 
@@ -386,7 +422,7 @@ impl ser::SerializeMap for Serializer<Map> {
     }
 }
 
-impl ser::SerializeStruct for Serializer<Vec<(Value, Value)>> {
+impl ser::SerializeStruct for Serializer<StructMap> {
     type Ok = Value;
     type Error = Error;
 
@@ -396,13 +432,15 @@ impl ser::SerializeStruct for Serializer<Vec<(Value, Value)>> {
         key: &'static str,
         value: &U,
     ) -> Result<(), Error> {
-        self.0.push((field_key(key), Value::serialized(value)?));
+        self.0
+            .data
+            .push((field_key(self.0.keys, key), Value::serialized(value)?));
         Ok(())
     }
 
     #[inline]
     fn end(self) -> Result<Value, Error> {
-        Ok(self.0.into())
+        Ok(apply_tag(self.0.tag, self.0.data.into()))
     }
 }
 
@@ -418,7 +456,7 @@ impl ser::SerializeStructVariant for Serializer<Named<Vec<(Value, Value)>>> {
     ) -> Result<(), Error> {
         self.0
             .data
-            .push((field_key(key), Value::serialized(value)?));
+            .push((field_key(self.0.keys, key), Value::serialized(value)?));
         Ok(())
     }
 

@@ -56,23 +56,75 @@ impl ser::Error for Error {
     }
 }
 
-/// The marker prefix that maps a struct field to an integer key.
+/// The marker prefix that carries a struct's CBOR protocol details.
 ///
-/// CBOR protocols like COSE (RFC 9052) key their maps with integers,
-/// which serde's string-only field names cannot express. A field whose
-/// name is this marker followed by a canonical decimal integer — most
-/// conveniently produced by the `#[cbor2::int_keys]` attribute macro — is
-/// encoded as an integer key rather than as text; plain field names,
-/// numeric-looking or not, always encode as text.
-pub const KEY_MARKER: &str = "@@KEY@@";
+/// CBOR protocols like COSE (RFC 9052) key their maps with integers and
+/// wrap their messages in tags, which serde's data model cannot express.
+/// This crate's serializers read both from a marked *container* name —
+/// most conveniently produced by the `#[cbor2::cbor]` attribute macro —
+/// of the form:
+///
+/// ```text
+/// @@CBOR@@<tag>@@<field>=<key>;<field>=<key>@@<OriginalName>
+/// ```
+///
+/// `<tag>` is an optional CBOR tag number and each `<field>=<key>` entry
+/// maps a serde field name to an integer map key; both segments may be
+/// empty. Because the marker renames only the *container* — which
+/// formats like JSON ignore — field names stay untouched and the same
+/// type serializes naturally everywhere else.
+///
+/// Only canonical decimals count: no leading zeros, no `-0`, no `+`,
+/// within the CBOR integer range (the tag within `0..=2^64-1`). A name
+/// that does not parse is an ordinary container name with no effect.
+pub const STRUCT_MARKER: &str = "@@CBOR@@";
 
-// Returns the integer key denoted by a marked field name. Only canonical
-// decimals qualify — no leading zeros, no "-0", no sign prefix other than
-// `-`, within the CBOR integer range — so every integer key corresponds
-// to exactly one field name.
-pub(crate) fn integer_field_key(name: &str) -> Option<i128> {
-    let name = name.strip_prefix(KEY_MARKER)?;
-    let bytes = name.as_bytes();
+// A parsed `STRUCT_MARKER` container name.
+pub(crate) struct StructMarker<'a> {
+    pub tag: Option<u64>,
+    pub keys: &'a str,
+}
+
+// Splits a marked container name into its tag number and its field key
+// table. Returns `None` — no special handling — unless the marker frame
+// and the tag segment are well-formed.
+pub(crate) fn parse_struct_marker(name: &str) -> Option<StructMarker<'_>> {
+    let rest = name.strip_prefix(STRUCT_MARKER)?;
+    let (tag, rest) = rest.split_once("@@")?;
+    let (keys, _original) = rest.split_once("@@")?;
+
+    let tag = match tag {
+        "" => None,
+        _ => Some(canonical_u64(tag)?),
+    };
+
+    Some(StructMarker { tag, keys })
+}
+
+// The integer map key for a struct field, if the key table names it.
+pub(crate) fn key_for_field(keys: &str, field: &str) -> Option<i128> {
+    keys.split(';').find_map(|entry| {
+        let (name, key) = entry.split_once('=')?;
+        if name == field {
+            canonical_int(key)
+        } else {
+            None
+        }
+    })
+}
+
+// The struct field name for an integer map key, if the key table maps it.
+pub(crate) fn field_for_key(keys: &str, key: i128) -> Option<&str> {
+    keys.split(';').find_map(|entry| {
+        let (name, k) = entry.split_once('=')?;
+        (canonical_int(k)? == key).then_some(name)
+    })
+}
+
+// Parses a canonical decimal in the CBOR integer range: no leading
+// zeros, no "-0", no sign prefix other than `-`.
+fn canonical_int(decimal: &str) -> Option<i128> {
+    let bytes = decimal.as_bytes();
     let digits = match bytes.first()? {
         b'-' => &bytes[1..],
         b'0'..=b'9' => bytes,
@@ -86,9 +138,23 @@ pub(crate) fn integer_field_key(name: &str) -> Option<i128> {
         _ => {}
     }
 
-    let value = name.parse::<i128>().ok()?;
+    let value = decimal.parse::<i128>().ok()?;
     let in_range = value <= u64::MAX as i128 && value >= -(u64::MAX as i128) - 1;
     in_range.then_some(value)
+}
+
+// Parses a canonical decimal CBOR tag number.
+fn canonical_u64(decimal: &str) -> Option<u64> {
+    let bytes = decimal.as_bytes();
+    match bytes {
+        [] => return None,
+        [b'0'] => {}
+        [b'0', ..] => return None,
+        _ if !bytes.iter().all(u8::is_ascii_digit) => return None,
+        _ => {}
+    }
+
+    decimal.parse::<u64>().ok()
 }
 
 /// A serde serializer that writes CBOR to a [`std::io::Write`].
@@ -109,10 +175,10 @@ impl<W: Write> From<Encoder<W>> for Serializer<W> {
 }
 
 impl<W: Write> Serializer<W> {
-    // Writes a struct field key: an integer for canonical decimal names
-    // (COSE-style), text otherwise.
-    fn push_field_key(&mut self, key: &'static str) -> Result<(), Error> {
-        match integer_field_key(key) {
+    // Writes a struct field key: an integer for fields named in the
+    // container's key table (COSE-style), text otherwise.
+    fn push_field_key(&mut self, keys: &str, key: &'static str) -> Result<(), Error> {
+        match key_for_field(keys, key) {
             Some(n) if n >= 0 => Ok(self.0.push(Header::Positive(n as u64))?),
             Some(n) => Ok(self.0.push(Header::Negative(n as u64 ^ !0))?),
             None => Ok(self.0.text(key)?),
@@ -259,7 +325,10 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     #[inline]
-    fn serialize_unit_struct(self, _name: &'static str) -> Result<(), Error> {
+    fn serialize_unit_struct(self, name: &'static str) -> Result<(), Error> {
+        if let Some(StructMarker { tag: Some(tag), .. }) = parse_struct_marker(name) {
+            self.0.push(Header::Tag(tag))?;
+        }
         self.serialize_unit()
     }
 
@@ -276,9 +345,12 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
     #[inline]
     fn serialize_newtype_struct<U: ?Sized + ser::Serialize>(
         self,
-        _name: &'static str,
+        name: &'static str,
         value: &U,
     ) -> Result<(), Error> {
+        if let Some(StructMarker { tag: Some(tag), .. }) = parse_struct_marker(name) {
+            self.0.push(Header::Tag(tag))?;
+        }
         value.serialize(self)
     }
 
@@ -305,6 +377,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             encoder: self,
             ending: length.is_none(),
             tag: false,
+            keys: "",
         })
     }
 
@@ -316,9 +389,12 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
     #[inline]
     fn serialize_tuple_struct(
         self,
-        _name: &'static str,
+        name: &'static str,
         length: usize,
     ) -> Result<Self::SerializeTupleStruct, Error> {
+        if let Some(StructMarker { tag: Some(tag), .. }) = parse_struct_marker(name) {
+            self.0.push(Header::Tag(tag))?;
+        }
         self.serialize_seq(Some(length))
     }
 
@@ -335,6 +411,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
                 encoder: self,
                 ending: false,
                 tag: true,
+                keys: "",
             });
         }
 
@@ -345,6 +422,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             encoder: self,
             ending: false,
             tag: false,
+            keys: "",
         })
     }
 
@@ -355,26 +433,43 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             encoder: self,
             ending: length.is_none(),
             tag: false,
+            keys: "",
         })
     }
 
     #[inline]
     fn serialize_struct(
         self,
-        _name: &'static str,
+        name: &'static str,
         length: usize,
     ) -> Result<Self::SerializeStruct, Error> {
-        self.serialize_map(Some(length))
+        let mut keys = "";
+        if let Some(marker) = parse_struct_marker(name) {
+            keys = marker.keys;
+            if let Some(tag) = marker.tag {
+                self.0.push(Header::Tag(tag))?;
+            }
+        }
+
+        self.0.push(Header::Map(Some(length)))?;
+        Ok(CollectionSerializer {
+            encoder: self,
+            ending: false,
+            tag: false,
+            keys,
+        })
     }
 
     #[inline]
     fn serialize_struct_variant(
         self,
-        _name: &'static str,
+        name: &'static str,
         _index: u32,
         variant: &'static str,
         length: usize,
     ) -> Result<Self::SerializeStructVariant, Error> {
+        let keys = parse_struct_marker(name).map_or("", |marker| marker.keys);
+
         self.0.push(Header::Map(Some(1)))?;
         self.serialize_str(variant)?;
         self.0.push(Header::Map(Some(length)))?;
@@ -382,6 +477,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             encoder: self,
             ending: false,
             tag: false,
+            keys,
         })
     }
 
@@ -461,6 +557,9 @@ pub struct CollectionSerializer<'a, W> {
     encoder: &'a mut Serializer<W>,
     ending: bool,
     tag: bool,
+    // The `<field>=<key>` table of a marked struct (see [`STRUCT_MARKER`]);
+    // empty for everything else.
+    keys: &'static str,
 }
 
 impl<W: Write> CollectionSerializer<'_, W> {
@@ -573,7 +672,7 @@ impl<W: Write> ser::SerializeStruct for CollectionSerializer<'_, W> {
         key: &'static str,
         value: &U,
     ) -> Result<(), Error> {
-        self.encoder.push_field_key(key)?;
+        self.encoder.push_field_key(self.keys, key)?;
         value.serialize(&mut *self.encoder)
     }
 
@@ -593,7 +692,7 @@ impl<W: Write> ser::SerializeStructVariant for CollectionSerializer<'_, W> {
         key: &'static str,
         value: &U,
     ) -> Result<(), Error> {
-        self.encoder.push_field_key(key)?;
+        self.encoder.push_field_key(self.keys, key)?;
         value.serialize(&mut *self.encoder)
     }
 

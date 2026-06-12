@@ -91,9 +91,9 @@ builds `Value`s with a JSON-like syntax:
 use cbor2::{cbor, Value};
 
 let value = cbor!({
-    "code" => 415,
-    "message" => null,
-    "tags" => ["legacy", 1.5],
+    "code": 415,
+    "message": null,
+    "tags": ["legacy", 1.5],
 }).unwrap();
 
 let bytes = cbor2::to_vec(&value).unwrap();
@@ -156,40 +156,62 @@ let bytes = cbor2::to_vec(&uri).unwrap();
 assert_eq!(bytes[0], 0xd8); // tag(32)
 ```
 
-# Integer map keys (COSE)
+# Integer map keys and tags (COSE)
 
-Protocols like COSE (RFC 9052) key their maps with integers, which
-serde's string-only field names cannot express. With the `derive`
-feature, the [`#[cbor2::int_keys]`](int_keys) attribute macro maps struct
-fields to integer keys explicitly — a textual `#[serde(rename = "1")]`
-stays a *text* key, so there is no ambiguity between the two:
+Protocols like COSE (RFC 9052) key their maps with integers and wrap
+their messages in tags, which serde's data model cannot express. With the
+`derive` feature, [`#[derive(Cbor)]`](Cbor) declares both — a textual
+`#[serde(rename = "1")]` stays a *text* key, so there is no ambiguity
+between the two. The derive generates the `Serialize` and `Deserialize`
+impls itself, so serde's derives must not be repeated alongside it:
 
 ```rust
 # #[cfg(feature = "derive")] {
-use serde::{Deserialize, Serialize};
+use cbor2::Cbor;
 
-#[cbor2::int_keys]
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
-struct CoseKey {
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 98)]
+struct CoseSign {
     #[cbor(key = 1)]
     kty: u8,
     #[cbor(key = 3)]
-    #[serde(alias = "alg")]
     alg: i8,
 }
 
-let key = CoseKey { kty: 2, alg: -7 };
+let key = CoseSign { kty: 2, alg: -7 };
 let bytes = cbor2::to_vec(&key).unwrap();
-assert_eq!(hex::encode(&bytes), "a201020326"); // {1: 2, 3: -7}
-assert_eq!(cbor2::from_slice::<CoseKey>(&bytes).unwrap(), key);
+assert_eq!(hex::encode(&bytes), "d862a201020326"); // 98({1: 2, 3: -7})
+assert_eq!(cbor2::from_slice::<CoseSign>(&bytes).unwrap(), key);
 # }
 ```
 
-The other serde field attributes (`alias`, `default`, `skip`, ...) work
-as usual, and map types like `HashMap<String, _>` are unaffected. The
-macro expands to `#[serde(rename = "@@KEY@@1")]` — a marker recognized
-by this crate's serializers (see [`ser::KEY_MARKER`]) — so the integer
-keys also work in builds of this crate without the `derive` feature.
+The tag is optional, and the serde attributes (`alias`, `default`,
+`skip`, `with`, ...) work as usual; map types like `HashMap<String, _>`
+are unaffected.
+
+The derive touches neither the field names nor the type name — the
+protocol details ride along on a hidden shadow type (see
+[`ser::STRUCT_MARKER`]) recognized only by this crate's serializers — so
+the same type still serializes naturally everywhere else. JSON, for
+example, just works, with the original field names and no tag:
+
+```rust
+# #[cfg(feature = "derive")] {
+# use cbor2::Cbor;
+# #[derive(Debug, PartialEq, Cbor)]
+# #[cbor(tag = 98)]
+# struct CoseSign {
+#     #[cbor(key = 1)]
+#     kty: u8,
+#     #[cbor(key = 3)]
+#     alg: i8,
+# }
+# let key = CoseSign { kty: 2, alg: -7 };
+let json = serde_json::to_string(&key).unwrap();
+assert_eq!(json, r#"{"kty":2,"alg":-7}"#);
+assert_eq!(serde_json::from_str::<CoseSign>(&json).unwrap(), key);
+# }
+```
 
 # Allocation-free helpers
 
@@ -223,7 +245,7 @@ assert_eq!(
     r#"{_ "a": 1, "b": [_ 2, 3]}"#
 );
 
-let value = cbor2::cbor!({ "k" => [1, -2.5, null] }).unwrap();
+let value = cbor2::cbor!({ "k": [1, -2.5, null] }).unwrap();
 assert_eq!(value.to_string(), r#"{"k": [1, -2.5, null]}"#);
 ```
 
@@ -345,123 +367,256 @@ pub use crate::ser::{
 };
 #[doc(inline)]
 pub use crate::value::{KeyOrder, Value};
-/// Maps struct fields to integer CBOR map keys (COSE, RFC 9052).
+/// Derives [`serde::Serialize`] and [`serde::Deserialize`] with CBOR
+/// protocol details: integer map keys and a CBOR tag (COSE, RFC 9052).
 ///
-/// Place above `#[derive(Serialize, Deserialize)]` and annotate fields
-/// with `#[cbor(key = <integer>)]`; see the [crate-level
-/// documentation](crate#integer-map-keys-cose) for an example.
+/// Annotate fields with `#[cbor(key = <integer>)]` and the container with
+/// `#[cbor(tag = <integer>)]`. Do **not** also derive serde's
+/// `Serialize`/`Deserialize` — this macro generates both impls. Field
+/// names and the type name stay untouched, so the same type still
+/// serializes naturally to JSON and other formats. See the [crate-level
+/// documentation](crate#integer-map-keys-and-tags-cose) for examples.
 #[cfg(feature = "derive")]
-pub use cbor2_derive::int_keys;
+pub use cbor2_derive::Cbor;
 
 /// Builds a [`Value`] from JSON-like syntax.
 ///
-/// Maps use `=>` between keys and values; any expression implementing
-/// [`serde::Serialize`] can be inlined, including nested `cbor!` maps and
-/// arrays. The macro returns `Result<Value, value::Error>`.
+/// Maps use `:` between keys and values, exactly like `serde_json::json!`;
+/// any expression implementing [`serde::Serialize`] can be inlined,
+/// including nested `cbor!` maps and arrays. Going beyond JSON, map keys
+/// may be any CBOR value — integers included — and `null` is the CBOR
+/// null. The macro returns `Result<Value, value::Error>`.
 ///
 /// ```rust
 /// use cbor2::cbor;
 ///
 /// let value = cbor!({
-///     "code" => 415,
-///     "message" => null,
-///     "continue" => false,
-///     "extra" => { "numbers" => [8.2341e+4, 0.251425] },
+///     "code": 415,
+///     "message": null,
+///     "continue": false,
+///     "extra": { "numbers": [8.2341e+4, 0.251425] },
+///     1: "an integer key",
 /// }).unwrap();
+/// ```
+///
+/// The ciborium-style `=>` separator is accepted as well, and is handy
+/// when a key expression itself contains a colon (alternatively,
+/// parenthesize the key):
+///
+/// ```rust
+/// use cbor2::cbor;
+///
+/// const ALG: i8 = 1;
+///
+/// let value = cbor!({ ALG => -7, (i8::MAX) : 0 }).unwrap();
 /// ```
 #[macro_export]
 macro_rules! cbor {
-    (@map {$($key:expr => $val:expr),*} $(,)?) => {{
-        $crate::value::Value::Map(vec![
-            $(
-                ($crate::cbor!( $key )?, $crate::cbor!( $val )?)
-            ),*
-        ])
+    //////////// arrays ////////////
+
+    // Done, with or without a trailing comma.
+    (@array [$($elems:expr,)*]) => {
+        $crate::value::Value::Array(vec![$($elems,)*])
+    };
+    (@array [$($elems:expr),*]) => {
+        $crate::value::Value::Array(vec![$($elems),*])
+    };
+
+    // Next element is an array.
+    (@array [$($elems:expr,)*] [$($array:tt)*] $($rest:tt)*) => {
+        $crate::cbor!(@array [$($elems,)* $crate::cbor!(@array [] $($array)*)] $($rest)*)
+    };
+
+    // Next element is a map.
+    (@array [$($elems:expr,)*] {$($map:tt)*} $($rest:tt)*) => {
+        $crate::cbor!(@array [$($elems,)* $crate::cbor!(@map [] () ($($map)*) ($($map)*))] $($rest)*)
+    };
+
+    // Next element is an expression followed by a comma.
+    (@array [$($elems:expr,)*] $next:expr, $($rest:tt)*) => {
+        $crate::cbor!(@array [$($elems,)* $crate::cbor!(@leaf $next),] $($rest)*)
+    };
+
+    // Last element is an expression with no trailing comma.
+    (@array [$($elems:expr,)*] $last:expr) => {
+        $crate::cbor!(@array [$($elems,)* $crate::cbor!(@leaf $last)])
+    };
+
+    // Comma after the most recent element.
+    (@array [$($elems:expr),*] , $($rest:tt)*) => {
+        $crate::cbor!(@array [$($elems,)*] $($rest)*)
+    };
+
+    // Unexpected token after the most recent element.
+    (@array [$($elems:expr),*] $unexpected:tt $($rest:tt)*) => {
+        $crate::cbor_unexpected!($unexpected)
+    };
+
+    //////////// maps ////////////
+    //
+    // The state is `[finished (key, value) pairs] (tokens of the key
+    // being munched) (remaining input) (copy of the remaining input,
+    // for error reporting)`. Keys are munched one token at a time
+    // because an `expr` fragment cannot be followed by `:`.
+
+    // Done.
+    (@map [$($pairs:expr,)*] () () ()) => {
+        $crate::value::Value::Map(vec![$($pairs,)*])
+    };
+
+    // Insert the current entry followed by a trailing comma.
+    (@map [$($pairs:expr,)*] [$($key:tt)+] ($value:expr) , $($rest:tt)*) => {
+        $crate::cbor!(@map [$($pairs,)* ($crate::cbor!(@key $($key)+), $value),] () ($($rest)*) ($($rest)*))
+    };
+
+    // Current entry followed by an unexpected token.
+    (@map [$($pairs:expr,)*] [$($key:tt)+] ($value:expr) $unexpected:tt $($rest:tt)*) => {
+        $crate::cbor_unexpected!($unexpected)
+    };
+
+    // Insert the last entry without a trailing comma.
+    (@map [$($pairs:expr,)*] [$($key:tt)+] ($value:expr)) => {
+        $crate::value::Value::Map(vec![$($pairs,)* ($crate::cbor!(@key $($key)+), $value)])
+    };
+
+    // Next value is an array.
+    (@map [$($pairs:expr,)*] ($($key:tt)+) (: [$($array:tt)*] $($rest:tt)*) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] [$($key)+] ($crate::cbor!(@array [] $($array)*)) $($rest)*)
+    };
+    (@map [$($pairs:expr,)*] ($($key:tt)+) (=> [$($array:tt)*] $($rest:tt)*) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] [$($key)+] ($crate::cbor!(@array [] $($array)*)) $($rest)*)
+    };
+
+    // Next value is a map.
+    (@map [$($pairs:expr,)*] ($($key:tt)+) (: {$($map:tt)*} $($rest:tt)*) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] [$($key)+] ($crate::cbor!(@map [] () ($($map)*) ($($map)*))) $($rest)*)
+    };
+    (@map [$($pairs:expr,)*] ($($key:tt)+) (=> {$($map:tt)*} $($rest:tt)*) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] [$($key)+] ($crate::cbor!(@map [] () ($($map)*) ($($map)*))) $($rest)*)
+    };
+
+    // Next value is an expression followed by a comma.
+    (@map [$($pairs:expr,)*] ($($key:tt)+) (: $value:expr , $($rest:tt)*) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] [$($key)+] ($crate::cbor!(@leaf $value)) , $($rest)*)
+    };
+    (@map [$($pairs:expr,)*] ($($key:tt)+) (=> $value:expr , $($rest:tt)*) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] [$($key)+] ($crate::cbor!(@leaf $value)) , $($rest)*)
+    };
+
+    // Last value is an expression with no trailing comma.
+    (@map [$($pairs:expr,)*] ($($key:tt)+) (: $value:expr) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] [$($key)+] ($crate::cbor!(@leaf $value)))
+    };
+    (@map [$($pairs:expr,)*] ($($key:tt)+) (=> $value:expr) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] [$($key)+] ($crate::cbor!(@leaf $value)))
+    };
+
+    // Missing value for the last entry: "unexpected end of macro
+    // invocation".
+    (@map [$($pairs:expr,)*] ($($key:tt)+) (:) $copy:tt) => {
+        $crate::cbor!()
+    };
+    (@map [$($pairs:expr,)*] ($($key:tt)+) (=>) $copy:tt) => {
+        $crate::cbor!()
+    };
+
+    // Missing separator and value for the last entry.
+    (@map [$($pairs:expr,)*] ($($key:tt)+) () $copy:tt) => {
+        $crate::cbor!()
+    };
+
+    // Misplaced separator: no key came before it. "No rules expected
+    // the token `:`/`=>`".
+    (@map [$($pairs:expr,)*] () (: $($rest:tt)*) ($sep:tt $($copy:tt)*)) => {
+        $crate::cbor_unexpected!($sep)
+    };
+    (@map [$($pairs:expr,)*] () (=> $($rest:tt)*) ($sep:tt $($copy:tt)*)) => {
+        $crate::cbor_unexpected!($sep)
+    };
+
+    // A comma inside a key. "No rules expected the token `,`".
+    (@map [$($pairs:expr,)*] ($($key:tt)*) (, $($rest:tt)*) ($comma:tt $($copy:tt)*)) => {
+        $crate::cbor_unexpected!($comma)
+    };
+
+    // A fully parenthesized key — for key expressions containing `:`.
+    (@map [$($pairs:expr,)*] () (($key:expr) : $($rest:tt)*) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] ($key) (: $($rest)*) ($copy))
+    };
+    (@map [$($pairs:expr,)*] () (($key:expr) => $($rest:tt)*) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] ($key) (=> $($rest)*) ($copy))
+    };
+
+    // Refuse to absorb a separator into the key expression.
+    (@map [$($pairs:expr,)*] ($($key:tt)*) (: $($unexpected:tt)+) $copy:tt) => {
+        $crate::cbor_expect_expr_comma!($($unexpected)+)
+    };
+    (@map [$($pairs:expr,)*] ($($key:tt)*) (=> $($unexpected:tt)+) $copy:tt) => {
+        $crate::cbor_expect_expr_comma!($($unexpected)+)
+    };
+
+    // Munch a token into the current key.
+    (@map [$($pairs:expr,)*] ($($key:tt)*) ($tt:tt $($rest:tt)*) $copy:tt) => {
+        $crate::cbor!(@map [$($pairs,)*] ($($key)* $tt) ($($rest)*) ($copy))
+    };
+
+    //////////// keys and leaves ////////////
+
+    // A nested map or array as the key.
+    (@key {$($map:tt)*}) => {
+        $crate::cbor!(@map [] () ($($map)*) ($($map)*))
+    };
+    (@key [$($array:tt)*]) => {
+        $crate::cbor!(@array [] $($array)*)
+    };
+    (@key $key:expr) => {
+        $crate::cbor!(@leaf $key)
+    };
+
+    // Any serializable expression; `null` is the CBOR null.
+    (@leaf $val:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::value::Value::Null as null;
+        $crate::value::Value::serialized(&$val)?
     }};
 
-    (@map {$($key:expr => $val:expr),*} { $($nkey:tt)* } => $($next:tt)*) => {
-        $crate::cbor!(
-            @map
-            { $($key => $val),* }
-            $crate::cbor!({ $($nkey)* })? =>
-            $($next)*
-        )
+    //////////// entry points ////////////
+
+    ({ $($map:tt)* }) => {
+        (|| {
+            ::core::result::Result::<_, $crate::value::Error>::Ok(
+                $crate::cbor!(@map [] () ($($map)*) ($($map)*)),
+            )
+        })()
     };
 
-    (@map {$($key:expr => $val:expr),*} [ $($nkey:tt)* ] => $($next:tt)*) => {
-        $crate::cbor!(
-            @map
-            { $($key => $val),* }
-            $crate::cbor!([ $($nkey)* ])? =>
-            $($next)*
-        )
+    ([ $($array:tt)* ]) => {
+        (|| {
+            ::core::result::Result::<_, $crate::value::Error>::Ok(
+                $crate::cbor!(@array [] $($array)*),
+            )
+        })()
     };
-
-    (@map {$($key:expr => $val:expr),*} $nkey:expr => { $($nval:tt)* }, $($next:tt)*) => {
-        $crate::cbor!(
-            @map
-            { $($key => $val,)* $nkey => $crate::cbor!({ $($nval)* })? }
-            $($next)*
-        )
-    };
-
-    (@map {$($key:expr => $val:expr),*} $nkey:expr => [ $($nval:tt)* ], $($next:tt)*) => {
-        $crate::cbor!(
-            @map
-            { $($key => $val,)* $nkey => $crate::cbor!([ $($nval)* ])? }
-            $($next)*
-        )
-    };
-
-    (@map {$($key:expr => $val:expr),*} $nkey:expr => $nval:expr, $($next:tt)*) => {
-        $crate::cbor!(
-            @map
-            { $($key => $val,)* $nkey => $crate::cbor!($nval)? }
-            $($next)*
-        )
-    };
-
-    (@seq [$($val:expr),*] $(,)?) => {
-        $crate::value::Value::Array(
-            vec![$( $crate::cbor!($val)? ),*]
-        )
-    };
-
-    (@seq [$($val:expr),*] { $($item:tt)* }, $($next:tt)*) => {
-        $crate::cbor!(
-            @seq
-            [ $($val,)* $crate::cbor!({ $($item)* })? ]
-            $($next)*
-        )
-    };
-
-    (@seq [$($val:expr),*] [ $($item:tt)* ], $($next:tt)*) => {
-        $crate::cbor!(
-            @seq
-            [ $($val,)* $crate::cbor!([ $($item)* ])? ]
-            $($next)*
-        )
-    };
-
-    (@seq [$($val:expr),*] $item:expr, $($next:tt)*) => {
-        $crate::cbor!(
-            @seq
-            [ $($val,)* $item ]
-            $($next)*
-        )
-    };
-
-    ({ $($next:tt)* }) => {(|| {
-        ::core::result::Result::<_, $crate::value::Error>::Ok($crate::cbor!(@map {} $($next)* ,))
-    })()};
-
-    ([ $($next:tt)* ]) => {(|| {
-        ::core::result::Result::<_, $crate::value::Error>::Ok($crate::cbor!(@seq [] $($next)* ,))
-    })()};
 
     ($val:expr) => {{
         #[allow(unused_imports)]
         use $crate::value::Value::Null as null;
         $crate::value::Value::serialized(&$val)
     }};
+}
+
+// Produces a "no rules expected the token ..." error at the offending
+// token. Not public API.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! cbor_unexpected {
+    () => {};
+}
+
+// Produces an "expected expression followed by `,`"-shaped error at the
+// offending tokens. Not public API.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! cbor_expect_expr_comma {
+    ($e:expr , $($tt:tt)*) => {};
 }

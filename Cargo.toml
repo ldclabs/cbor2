@@ -19,8 +19,8 @@ rust-version = "1.85"
 exclude = ["doc/", ".github/"]
 
 [features]
-# Enables the #[cbor2::int_keys] attribute macro for integer map keys.
-derive = ["dep:cbor2-derive"]
+# Enables #[derive(cbor2::Cbor)] for integer map keys and CBOR tags.
+derive = ["dep:cbor2-derive", "serde/derive"]
 
 [dependencies]
 cbor2-derive = { path = "cbor2-derive", version = "0.5", optional = true }
@@ -29,10 +29,11 @@ serde = { version = "1", default-features = false, features = ["std"] }
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
+serde_json = "1"
 hex = "0.4"
 
 [[example]]
-name = "cose_int_keys"
+name = "cose"
 required-features = ["derive"]
 
 [package.metadata.docs.rs]

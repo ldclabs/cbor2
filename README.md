@@ -46,11 +46,13 @@ requires `std`.
   For protocols built on the older RFC 7049 §3.9 "Canonical CBOR" rule
   (kept as RFC 8949 §4.2.3, and used by ciborium's canonical module), the
   `*_with` variants take `KeyOrder::LengthFirst`.
-* **Integer map keys (COSE)** — with the `derive` feature, the
-  `#[cbor2::int_keys]` attribute macro maps struct fields to integer keys
-  (`#[cbor(key = 1)]`), as RFC 9052 requires, with no ambiguity against
-  textual keys; `alias` and the other serde field attributes work as
-  usual.
+* **Integer map keys and tags (COSE)** — with the `derive` feature,
+  `#[derive(cbor2::Cbor)]` maps struct fields to integer keys
+  (`#[cbor(key = 1)]`) and wraps the struct in a CBOR tag
+  (`#[cbor(tag = 18)]`), as RFC 9052 requires, with no ambiguity against
+  textual keys. Field names and the type name stay untouched, so the same
+  types still serialize to plain JSON — `serde_json::to_string(&v)` just
+  works, with the original field names and no tag.
 * **Robust decoding** — indefinite-length items, segmented strings,
   duplicate map keys, unknown tags and CBOR sequences (RFC 8742) are all
   handled; recursion is depth-limited and forged lengths cannot trigger
@@ -142,15 +144,105 @@ If you build data with `Value`, use `Value::Bytes(...)` or the `From`
 implementations for byte slices/vectors; those already represent a CBOR
 byte string.
 
+### Integer map keys and tags: COSE with `#[derive(Cbor)]`
+
+With the `derive` feature, `#[derive(cbor2::Cbor)]` generates the serde
+`Serialize`/`Deserialize` impls with CBOR protocol details: fields
+annotated `#[cbor(key = ...)]` use integer map keys and the container is
+wrapped in a CBOR tag (`#[cbor(tag = ...)]`, required on decode). Field
+names and the type name stay untouched, so the same types still
+serialize to plain JSON.
+
+```toml
+[dependencies]
+cbor2 = { version = "0.5", features = ["derive"] }
+```
+
+This reproduces the Simple Encrypted Message of
+[RFC 9052, Appendix C.4.1](https://datatracker.ietf.org/doc/html/rfc9052#appendix-C.4)
+byte for byte (52 bytes):
+
+```rust
+use cbor2::Cbor;
+
+/// Protected header parameters (RFC 9052 §3.1). They travel as a byte
+/// string holding their own CBOR encoding.
+#[derive(Debug, PartialEq, Cbor)]
+struct Protected {
+    /// 10 = AES-CCM-16-64-128 (RFC 9053 §4.2)
+    #[cbor(key = 1)]
+    alg: i8,
+}
+
+/// Unprotected header parameters.
+#[derive(Debug, PartialEq, Cbor)]
+struct Unprotected {
+    #[cbor(key = 5)]
+    #[serde(with = "serde_bytes")]
+    iv: Vec<u8>,
+}
+
+/// COSE_Encrypt0 (RFC 9052 §5.2): tag 16 around
+/// `[protected: bstr, unprotected: map, ciphertext: bstr]`.
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 16)]
+struct CoseEncrypt0(
+    #[serde(with = "serde_bytes")] Vec<u8>, // protected, already encoded
+    Unprotected,
+    #[serde(with = "serde_bytes")] Vec<u8>, // ciphertext
+);
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The protected header is the encoded map {1: 10}.
+    let protected = cbor2::to_canonical_vec(&Protected { alg: 10 })?;
+    assert_eq!(hex::encode(&protected), "a1010a");
+
+    let msg = CoseEncrypt0(
+        protected,
+        Unprotected {
+            iv: hex::decode("89f52f65a1c580933b5261a78c")?,
+        },
+        hex::decode("5974e1b99a3a4cc09a659aa2e9e7fff161d38ce71cb45ce460ffb569")?,
+    );
+
+    // The RFC's 52-byte message, byte for byte.
+    let bytes = cbor2::to_canonical_vec(&msg)?;
+    assert_eq!(bytes.len(), 52);
+    assert_eq!(
+        hex::encode(&bytes),
+        "d08343a1010aa1054d89f52f65a1c580933b5261a78c581c\
+         5974e1b99a3a4cc09a659aa2e9e7fff161d38ce71cb45ce460ffb569"
+    );
+
+    println!("{}", cbor2::diagnostic(&bytes[..])?);
+    // 16([h'a1010a', {5: h'89f52f65a1c580933b5261a78c'},
+    //     h'5974e1b99a3a4cc09a659aa2e9e7fff161d38ce71cb45ce460ffb569'])
+
+    // Decoding requires tag 16 and restores every layer.
+    let back: CoseEncrypt0 = cbor2::from_slice(&bytes)?;
+    assert_eq!(back, msg);
+    let header: Protected = cbor2::from_slice(&back.0)?;
+    assert_eq!(header, Protected { alg: 10 });
+
+    // JSON stays natural — original field names, no tags, no integer keys.
+    let json = serde_json::to_string(&header)?;
+    assert_eq!(json, r#"{"alg":10}"#);
+    Ok(())
+}
+```
+
+The full program lives in [`examples/cose.rs`](examples/cose.rs):
+`cargo run --features derive --example cose`.
+
 ### Dynamic values
 
 ```rust
 use cbor2::{cbor, Value};
 
 let value = cbor!({
-    "code" => 415,
-    "message" => null,
-    "extra" => { "numbers" => [8.2341e+4, 0.251425] },
+    "code": 415,
+    "message": null,
+    "extra": { "numbers": [8.2341e+4, 0.251425] },
 }).unwrap();
 
 let bytes = cbor2::to_vec(&value).unwrap();
@@ -194,7 +286,7 @@ cargo run --example basic
 cargo run --example bytes
 cargo run --example sequence
 cargo run --example core_headers
-cargo run --features derive --example cose_int_keys
+cargo run --features derive --example cose
 ```
 
 ## Design decisions

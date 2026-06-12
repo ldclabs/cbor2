@@ -1,5 +1,7 @@
 //! A dynamic CBOR value.
 
+use std::collections::{BTreeMap, HashMap};
+
 mod canonical;
 mod de;
 mod integer;
@@ -44,8 +46,8 @@ impl serde::ser::Error for Error {
 ///
 /// Maps are represented as `Vec<(Value, Value)>` rather than as an ordered
 /// or hashed map type. This preserves the order of the pairs on the wire and
-/// makes no assumptions about key uniqueness; `collect()` the pairs into a
-/// map type of your choice if you need one.
+/// makes no assumptions about key uniqueness; convert with `TryFrom` —
+/// `HashMap` and `BTreeMap` are supported directly — if you need a map type.
 ///
 /// `Value` intentionally models the serde-visible CBOR data model, not every
 /// byte-level spelling. For example, indefinite-length strings are decoded
@@ -93,7 +95,7 @@ pub enum Value {
 /// ```
 /// use cbor2::cbor;
 ///
-/// let value = cbor!({ "a" => [1, 2] }).unwrap();
+/// let value = cbor!({ "a": [1, 2] }).unwrap();
 /// assert_eq!(
 ///     format!("{value:?}"),
 ///     "{\n  \"a\": [\n    1,\n    2\n  ]\n}"
@@ -342,7 +344,7 @@ impl Value {
 /// ```
 /// use cbor2::{cbor, Value};
 ///
-/// let value = cbor!({ "k" => [1, -2.5, null] }).unwrap();
+/// let value = cbor!({ "k": [1, -2.5, null] }).unwrap();
 /// assert_eq!(value.to_string(), r#"{"k": [1, -2.5, null]}"#);
 /// ```
 impl core::fmt::Display for Value {
@@ -438,5 +440,284 @@ impl From<char> for Value {
         let mut v = String::with_capacity(value.len_utf8());
         v.push(value);
         Value::Text(v)
+    }
+}
+
+impl From<std::borrow::Cow<'_, str>> for Value {
+    #[inline]
+    fn from(value: std::borrow::Cow<'_, str>) -> Self {
+        Value::Text(value.into_owned())
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for Value {
+    #[inline]
+    fn from(value: [u8; N]) -> Self {
+        Value::Bytes(value.into())
+    }
+}
+
+impl<const N: usize> From<&[u8; N]> for Value {
+    #[inline]
+    fn from(value: &[u8; N]) -> Self {
+        Value::Bytes(value.into())
+    }
+}
+
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+impl From<usize> for Value {
+    #[inline]
+    fn from(value: usize) -> Self {
+        Value::Integer(value.into())
+    }
+}
+
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+impl From<isize> for Value {
+    #[inline]
+    fn from(value: isize) -> Self {
+        Value::Integer(value.into())
+    }
+}
+
+/// Converts `Some` to the inner value and `None` to [`Value::Null`].
+impl<T: Into<Value>> From<Option<T>> for Value {
+    #[inline]
+    fn from(value: Option<T>) -> Self {
+        match value {
+            Some(value) => value.into(),
+            None => Value::Null,
+        }
+    }
+}
+
+/// Converts to [`Value::Map`], keeping the map's iteration order — which
+/// a `HashMap` randomizes. Encode with the `to_canonical_*` functions (or
+/// [`canonicalize`](Value::canonicalize) first) when a deterministic
+/// order matters.
+///
+/// ```
+/// use std::collections::HashMap;
+/// use cbor2::Value;
+///
+/// let map: HashMap<&str, u64> = [("a", 1)].into();
+/// assert_eq!(Value::from(map), cbor2::cbor!({ "a": 1 }).unwrap());
+/// ```
+impl<K: Into<Value>, V: Into<Value>> From<HashMap<K, V>> for Value {
+    fn from(value: HashMap<K, V>) -> Self {
+        Value::Map(
+            value
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        )
+    }
+}
+
+/// Converts to [`Value::Map`] in the map's order: ascending by key.
+impl<K: Into<Value>, V: Into<Value>> From<BTreeMap<K, V>> for Value {
+    fn from(value: BTreeMap<K, V>) -> Self {
+        Value::Map(
+            value
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        )
+    }
+}
+
+/// Collects an iterator of values into [`Value::Array`].
+///
+/// ```
+/// use cbor2::Value;
+///
+/// let value: Value = (1..=3).collect();
+/// assert_eq!(value, cbor2::cbor!([1, 2, 3]).unwrap());
+/// ```
+impl<T: Into<Value>> FromIterator<T> for Value {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Value::Array(iter.into_iter().map(Into::into).collect())
+    }
+}
+
+// A serde-style "invalid type" error for a failed conversion.
+fn invalid_type(value: &Value, expected: &'static str) -> Error {
+    serde::de::Error::invalid_type(value.into(), &expected)
+}
+
+macro_rules! tryfrom_value {
+    ($($t:ty: $variant:ident => $expected:literal,)+) => {$(
+        #[doc = concat!("Converts from [`Value::", stringify!($variant), "`]; any other variant is an `\"invalid type\"` error.")]
+        ///
+        /// The [`Value::into_*`](Value::into_bytes) accessors are the
+        /// non-consuming-on-failure alternative: they hand the original
+        /// value back instead of an error message.
+        impl TryFrom<Value> for $t {
+            type Error = Error;
+
+            #[inline]
+            fn try_from(value: Value) -> Result<Self, Error> {
+                match value {
+                    Value::$variant(x) => Ok(x),
+                    other => Err(invalid_type(&other, $expected)),
+                }
+            }
+        }
+    )+};
+}
+
+tryfrom_value! {
+    Integer: Integer => "integer",
+    Vec<u8>: Bytes => "bytes",
+    f64: Float => "float",
+    String: Text => "text",
+    bool: Bool => "bool",
+    Vec<Value>: Array => "array",
+    Vec<(Value, Value)>: Map => "map",
+}
+
+/// Converts from a single-character [`Value::Text`].
+impl TryFrom<Value> for char {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Error> {
+        if let Value::Text(text) = &value {
+            let mut chars = text.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                return Ok(c);
+            }
+        }
+
+        Err(invalid_type(&value, "a single-character text"))
+    }
+}
+
+macro_rules! tryfrom_int {
+    ($($(#[$($attr:meta)+])? $t:ident)+) => {$(
+        $(#[$($attr)+])?
+        #[doc = concat!("Converts from a [`Value::Integer`] in `", stringify!($t), "` range.")]
+        impl TryFrom<Value> for $t {
+            type Error = Error;
+
+            #[inline]
+            fn try_from(value: Value) -> Result<Self, Error> {
+                match value {
+                    Value::Integer(x) => $t::try_from(x).map_err(|_| {
+                        Error::Custom(format!(
+                            concat!(
+                                "invalid value: integer `{}`, expected ",
+                                stringify!($t),
+                            ),
+                            i128::from(x),
+                        ))
+                    }),
+                    other => Err(invalid_type(&other, "integer")),
+                }
+            }
+        }
+    )+};
+}
+
+tryfrom_int! {
+    u8 u16 u32 u64
+    i8 i16 i32 i64
+
+    #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+    usize
+
+    #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+    isize
+}
+
+/// Converts from any integer representation that fits, including the
+/// bignum form (tag 2 or 3) that [`From<u128>`](Value#impl-From%3Cu128%3E-for-Value)
+/// produces for values beyond 64 bits.
+impl TryFrom<Value> for u128 {
+    type Error = Error;
+
+    #[inline]
+    fn try_from(value: Value) -> Result<Self, Error> {
+        value.deserialized()
+    }
+}
+
+/// Converts from any integer representation that fits, including the
+/// bignum form (tag 2 or 3) that [`From<i128>`](Value#impl-From%3Ci128%3E-for-Value)
+/// produces for values beyond 64 bits.
+impl TryFrom<Value> for i128 {
+    type Error = Error;
+
+    #[inline]
+    fn try_from(value: Value) -> Result<Self, Error> {
+        value.deserialized()
+    }
+}
+
+// Converts the entries of a map, reporting the first failure.
+fn map_entries<K, V, M>(pairs: Vec<(Value, Value)>) -> Result<M, Error>
+where
+    K: TryFrom<Value>,
+    K::Error: core::fmt::Display,
+    V: TryFrom<Value>,
+    V::Error: core::fmt::Display,
+    M: FromIterator<(K, V)>,
+{
+    pairs
+        .into_iter()
+        .map(|(k, v)| {
+            Ok((
+                K::try_from(k).map_err(|err| Error::Custom(format!("invalid map key: {err}")))?,
+                V::try_from(v).map_err(|err| Error::Custom(format!("invalid map value: {err}")))?,
+            ))
+        })
+        .collect()
+}
+
+/// Converts from [`Value::Map`], converting every key and value in turn;
+/// later duplicate keys overwrite earlier ones. For deep, typed
+/// extraction with detailed errors prefer
+/// [`Value::deserialized`](Value::deserialized).
+///
+/// ```
+/// use std::collections::HashMap;
+/// use cbor2::Value;
+///
+/// let value = cbor2::cbor!({ "a": 1, "b": 2 }).unwrap();
+/// let map: HashMap<String, u64> = value.try_into().unwrap();
+/// assert_eq!(map["a"], 1);
+/// ```
+impl<K, V> TryFrom<Value> for HashMap<K, V>
+where
+    K: TryFrom<Value> + Eq + std::hash::Hash,
+    K::Error: core::fmt::Display,
+    V: TryFrom<Value>,
+    V::Error: core::fmt::Display,
+{
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Error> {
+        match value {
+            Value::Map(pairs) => map_entries(pairs),
+            other => Err(invalid_type(&other, "map")),
+        }
+    }
+}
+
+/// Converts from [`Value::Map`], converting every key and value in turn;
+/// later duplicate keys overwrite earlier ones.
+impl<K, V> TryFrom<Value> for BTreeMap<K, V>
+where
+    K: TryFrom<Value> + Ord,
+    K::Error: core::fmt::Display,
+    V: TryFrom<Value>,
+    V::Error: core::fmt::Display,
+{
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Error> {
+        match value {
+            Value::Map(pairs) => map_entries(pairs),
+            other => Err(invalid_type(&other, "map")),
+        }
     }
 }

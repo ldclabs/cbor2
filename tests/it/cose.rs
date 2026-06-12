@@ -1,17 +1,13 @@
-//! End-to-end tests for the `#[cbor2::int_keys]` attribute macro
-//! (`derive` feature).
+//! End-to-end tests for `#[derive(cbor2::Cbor)]` (`derive` feature).
 
-use cbor2::Value;
-use serde::{Deserialize, Serialize};
+use cbor2::{Cbor, Value};
 
 // A COSE_Key-shaped structure (RFC 9052 §7): all map keys are integers.
-#[cbor2::int_keys]
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Cbor)]
 struct CoseKey {
     #[cbor(key = 1)]
     kty: u8,
     #[cbor(key = 3)]
-    #[serde(alias = "alg")]
     alg: i8,
     #[cbor(key = -1)]
     crv: u8,
@@ -41,11 +37,12 @@ fn cose_key_round_trip() {
     );
     assert_eq!(cbor2::from_slice::<CoseKey>(&bytes).unwrap(), sample());
 
-    // Through Value, with the textual alias accepted alongside.
+    // Through Value, and decoding accepts text keys (the field names)
+    // alongside the integers.
     let value = Value::serialized(&sample()).unwrap();
     assert_eq!(value.deserialized::<CoseKey>().unwrap(), sample());
 
-    let aliased = cbor2::cbor!({
+    let textual = cbor2::cbor!({
         1 => 2,
         "alg" => -7,
         -1 => 1,
@@ -53,13 +50,128 @@ fn cose_key_round_trip() {
         "note" => null,
     })
     .unwrap();
-    assert_eq!(aliased.deserialized::<CoseKey>().unwrap(), sample());
+    assert_eq!(textual.deserialized::<CoseKey>().unwrap(), sample());
+}
+
+#[test]
+fn json_just_works() {
+    // The derive leaves field names untouched, so plain serde_json uses
+    // them — no integer keys, no tag, no wrappers.
+    let json = serde_json::to_string(&sample()).unwrap();
+    assert_eq!(
+        json,
+        r#"{"kty":2,"alg":-7,"crv":1,"x":[17,34,51,68],"note":null}"#
+    );
+    assert_eq!(serde_json::from_str::<CoseKey>(&json).unwrap(), sample());
+}
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 123)]
+struct ProtectedHeader {
+    #[cbor(key = 1)]
+    alg: i8,
+
+    #[cbor(key = 4)]
+    #[serde(with = "serde_bytes")]
+    kid: Vec<u8>,
+}
+
+fn header() -> ProtectedHeader {
+    ProtectedHeader {
+        alg: -7,
+        kid: b"kid".to_vec(),
+    }
+}
+
+#[test]
+fn tagged_structs_wrap_and_require_their_tag() {
+    // 123({1: -7, 4: h'6b6964'})
+    let bytes = cbor2::to_vec(&header()).unwrap();
+    assert_eq!(hex::encode(&bytes), "d87ba2012604436b6964");
+    assert_eq!(
+        cbor2::diagnostic(&bytes[..]).unwrap(),
+        "123({1: -7, 4: h'6b6964'})"
+    );
+    assert_eq!(
+        cbor2::from_slice::<ProtectedHeader>(&bytes).unwrap(),
+        header()
+    );
+
+    // Canonical encoding keeps the tag.
+    assert_eq!(cbor2::to_canonical_vec(&header()).unwrap(), bytes);
+
+    // The declared tag is required ...
+    let untagged = hex::decode("a2012604436b6964").unwrap();
+    let msg = cbor2::from_slice::<ProtectedHeader>(&untagged)
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("expected tag(123)"), "{msg}");
+
+    // ... a different tag does not satisfy it ...
+    let wrong = hex::decode("d87ca2012604436b6964").unwrap(); // 124(...)
+    let msg = cbor2::from_slice::<ProtectedHeader>(&wrong)
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("expected tag(123)"), "{msg}");
+
+    // ... and extra foreign tags around it stay transparent.
+    let wrapped = hex::decode("d9d9f7d87ba2012604436b6964").unwrap(); // 55799(123(...))
+    assert_eq!(
+        cbor2::from_slice::<ProtectedHeader>(&wrapped).unwrap(),
+        header()
+    );
+
+    // The same rules apply through Value.
+    let value = Value::serialized(&header()).unwrap();
+    assert_eq!(
+        value,
+        Value::Tag(
+            123,
+            Box::new(cbor2::cbor!({ 1 => -7, 4 => Value::Bytes(b"kid".to_vec()) }).unwrap())
+        )
+    );
+    assert_eq!(value.deserialized::<ProtectedHeader>().unwrap(), header());
+    let untagged = cbor2::cbor!({ 1 => -7, 4 => Value::Bytes(b"kid".to_vec()) }).unwrap();
+    let msg = untagged
+        .deserialized::<ProtectedHeader>()
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("expected tag(123)"), "{msg}");
+
+    // JSON carries neither the tag nor the integer keys.
+    let json = serde_json::to_string(&header()).unwrap();
+    assert_eq!(json, r#"{"alg":-7,"kid":[107,105,100]}"#);
+    assert_eq!(
+        serde_json::from_str::<ProtectedHeader>(&json).unwrap(),
+        header()
+    );
+}
+
+#[test]
+fn tagged_tuple_structs_work_too() {
+    // COSE_Sign1-shaped: a tagged array (RFC 9052 §4.2).
+    #[derive(Debug, PartialEq, Cbor)]
+    #[cbor(tag = 18)]
+    struct Sign1(
+        #[serde(with = "serde_bytes")] Vec<u8>,
+        u8,
+        #[serde(with = "serde_bytes")] Vec<u8>,
+        #[serde(with = "serde_bytes")] Vec<u8>,
+    );
+
+    let msg = Sign1(vec![0xa0], 0, vec![], vec![0xff]);
+    let bytes = cbor2::to_vec(&msg).unwrap();
+    // 18([h'a0', 0, h'', h'ff'])
+    assert_eq!(hex::encode(&bytes), "d28441a0004041ff");
+    assert_eq!(cbor2::from_slice::<Sign1>(&bytes).unwrap(), msg);
+
+    let msg2 = cbor2::from_slice::<Sign1>(&hex::decode("8441a0004041ff").unwrap());
+    assert!(msg2.unwrap_err().to_string().contains("expected tag(18)"));
 }
 
 #[test]
 fn enums_and_generics_work_too() {
-    #[cbor2::int_keys]
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Cbor)]
     enum Message {
         Signed {
             #[cbor(key = 1)]
@@ -84,12 +196,60 @@ fn enums_and_generics_work_too() {
         }
     );
     assert_eq!(cbor2::to_vec(&Message::Unit).unwrap(), b"\x64Unit");
+
+    let json = serde_json::to_string(&Message::Signed {
+        payload: 7,
+        label: true,
+    })
+    .unwrap();
+    assert_eq!(json, r#"{"Signed":{"payload":7,"label":true}}"#);
+
+    #[derive(Debug, PartialEq, Cbor)]
+    #[cbor(tag = 7)]
+    struct Wrap<T> {
+        #[cbor(key = 1)]
+        inner: T,
+    }
+
+    let wrapped = Wrap { inner: 5u8 };
+    let bytes = cbor2::to_vec(&wrapped).unwrap();
+    assert_eq!(hex::encode(&bytes), "c7a10105"); // 7({1: 5})
+    assert_eq!(cbor2::from_slice::<Wrap<u8>>(&bytes).unwrap(), wrapped);
+}
+
+#[test]
+fn serde_attributes_combine() {
+    // An explicit field rename carries over to the key table and to JSON.
+    #[derive(Debug, PartialEq, Cbor)]
+    struct Renamed {
+        #[cbor(key = 3)]
+        #[serde(rename = "alg", alias = "algorithm")]
+        algorithm: i8,
+        #[serde(default)]
+        note: String,
+    }
+
+    let value = Renamed {
+        algorithm: -7,
+        note: String::new(),
+    };
+    let bytes = cbor2::to_vec(&value).unwrap();
+    // {3: -7, "note": ""}
+    assert_eq!(hex::encode(&bytes), "a20326646e6f746560");
+    assert_eq!(cbor2::from_slice::<Renamed>(&bytes).unwrap(), value);
+
+    assert_eq!(
+        serde_json::to_string(&value).unwrap(),
+        r#"{"alg":-7,"note":""}"#
+    );
+    let parsed: Renamed = serde_json::from_str(r#"{"algorithm":-7}"#).unwrap();
+    assert_eq!(parsed, value);
 }
 
 #[test]
 fn full_key_range() {
-    #[cbor2::int_keys]
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Cbor)]
+    #[cbor(tag = 18446744073709551615)]
     struct Edges {
         #[cbor(key = 0)]
         zero: u8,
@@ -105,10 +265,10 @@ fn full_key_range() {
         lo: 2,
     };
     let bytes = cbor2::to_vec(&edges).unwrap();
-    // {0: 0, 18446744073709551615: 1, -18446744073709551616: 2}
+    // 18446744073709551615({0: 0, 18446744073709551615: 1, -18446744073709551616: 2})
     assert_eq!(
         hex::encode(&bytes),
-        "a300001bffffffffffffffff013bffffffffffffffff02"
+        "dbffffffffffffffffa300001bffffffffffffffff013bffffffffffffffff02"
     );
     assert_eq!(cbor2::from_slice::<Edges>(&bytes).unwrap(), edges);
 }

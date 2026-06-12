@@ -13,7 +13,16 @@ been removed entirely.
 * serde `Serializer`/`Deserializer` over `std::io::Write`/`Read`, with
   `to_vec`, `to_writer`, `from_slice` and `from_reader` entry points.
 * A dynamic `Value` type with `Value::serialized`/`Value::deserialized`,
-  plus the `cbor!` macro for building values in JSON-like syntax.
+  plus the `cbor!` macro for building values in JSON-like syntax: `:`
+  between keys and values, exactly like `serde_json::json!` (the
+  ciborium-style `=>` is accepted as well), with arbitrary CBOR values —
+  integers included — as map keys. `Value` converts to and from the
+  common std types: `From` covers the primitive scalars, `Option`,
+  byte arrays/vectors, `String`/`&str`/`Cow<str>`, `HashMap`/`BTreeMap`
+  (any `Into<Value>` keys and values) and `FromIterator` into an array;
+  `TryFrom<Value>` extracts every variant's payload, range-checked
+  integers (the 128-bit forms accept bignums) and typed
+  `HashMap`/`BTreeMap` with serde-style error messages.
 * Tag support via `tag::{AllowAny, AllowExact, RequireAny, RequireExact}`;
   `u128`/`i128` encode as bignums (tags 2/3) when out of 64-bit range.
 * Indefinite-length *encoding* (for unsized sequences/maps) and decoding
@@ -32,13 +41,18 @@ been removed entirely.
   (RFC 8949 §5.3.1, plus text UTF-8 validity) and `serialized_size`
   computes the exact encoded size of a value without buffering output.
   `collect_str` no longer buffers formatted output either.
-* Integer map keys for structs (COSE, RFC 9052): the `derive` feature
-  provides the `#[cbor2::int_keys]` attribute macro, which maps fields
-  annotated `#[cbor(key = 1)]` to integer map keys, while a plain
-  `#[serde(rename = "1")]` stays a text key, so the two cannot be
-  confused. serde field attributes such as `alias` combine freely with
-  integer keys. (Extension over ciborium, which has no integer-key
-  support.)
+* Integer map keys and tags for structs (COSE, RFC 9052): the `derive`
+  feature provides `#[derive(cbor2::Cbor)]`, which generates the serde
+  `Serialize`/`Deserialize` impls with fields annotated
+  `#[cbor(key = 1)]` mapped to integer map keys and the container
+  optionally wrapped in a CBOR tag (`#[cbor(tag = 18)]`, required on
+  decode), while a plain `#[serde(rename = "1")]` stays a text key, so
+  the two cannot be confused. serde attributes such as `alias`, `with`
+  and `default` combine freely. Field names and the type name stay
+  untouched — the protocol details ride on a hidden serde-`remote`
+  shadow type — so the same types serialize to plain JSON with the
+  original field names and no tag: `serde_json::to_string(&v)` just
+  works. (Extension over ciborium, which has no integer-key support.)
 * Deterministic encoding via `to_canonical_vec`, `to_canonical_writer` and
   `Value::canonicalize`: map key sorting, duplicate key rejection, bignum
   reduction to preferred form and NaN normalization. Both deterministic key
