@@ -5,6 +5,8 @@
 //! merge properly.
 
 mod canonical;
+#[cfg(feature = "derive")]
+mod cose;
 mod de_edge;
 mod diag;
 mod errors;

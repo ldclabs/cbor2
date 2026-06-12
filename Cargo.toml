@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "cbor_conv"]
+members = [".", "cbor-derive", "cbor_conv"]
 
 [package]
 name = "cbor"
@@ -21,7 +21,12 @@ exclude = ["doc/", ".github/"]
 [lib]
 name = "cbor"
 
+[features]
+# Enables the #[cbor::int_keys] attribute macro for integer map keys.
+derive = ["dep:cbor-derive"]
+
 [dependencies]
+cbor-derive = { path = "cbor-derive", version = "0.5", optional = true }
 serde = { version = "1", default-features = false, features = ["std"] }
 
 [dev-dependencies]

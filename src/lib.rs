@@ -74,20 +74,23 @@ assert_eq!(bytes[0], 0xd8); // tag(32)
 
 # Integer map keys (COSE)
 
-Protocols like COSE (RFC 9052) key their maps with integers. A struct
-field whose name — usually set with `#[serde(rename)]` — is a canonical
-decimal integer is encoded as an integer key, and integer keys on the
-wire match struct fields through the same decimal form, so the serde
-field attributes (`rename`, `alias`, ...) work as usual:
+Protocols like COSE (RFC 9052) key their maps with integers, which
+serde's string-only field names cannot express. With the `derive`
+feature, the [`#[cbor::int_keys]`](int_keys) attribute macro maps struct
+fields to integer keys explicitly — a textual `#[serde(rename = "1")]`
+stays a *text* key, so there is no ambiguity between the two:
 
 ```rust
+# #[cfg(feature = "derive")] {
 use serde::{Deserialize, Serialize};
 
+#[cbor::int_keys]
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct CoseKey {
-    #[serde(rename = "1")]
+    #[cbor(key = 1)]
     kty: u8,
-    #[serde(rename = "3", alias = "alg")]
+    #[cbor(key = 3)]
+    #[serde(alias = "alg")]
     alg: i8,
 }
 
@@ -95,13 +98,14 @@ let key = CoseKey { kty: 2, alg: -7 };
 let bytes = cbor::to_vec(&key).unwrap();
 assert_eq!(hex::encode(&bytes), "a201020326"); // {1: 2, 3: -7}
 assert_eq!(cbor::from_slice::<CoseKey>(&bytes).unwrap(), key);
+# }
 ```
 
-Only canonical decimals qualify (no leading zeros, no `-0`, no `+`
-sign, within the 64-bit CBOR integer range); any other field name is
-encoded as text, and map types like `HashMap<String, _>` are not
-affected. Note that this is an intentional extension over ciborium,
-which encodes such field names as text.
+The other serde field attributes (`alias`, `default`, `skip`, ...) work
+as usual, and map types like `HashMap<String, _>` are unaffected. The
+macro expands to `#[serde(rename = "@@KEY@@1")]` — a marker recognized
+by this crate's serializers (see [`ser::KEY_MARKER`]) — so the integer
+keys also work in builds of this crate without the `derive` feature.
 
 # Allocation-free helpers
 
@@ -225,6 +229,13 @@ pub use crate::ser::{
 };
 #[doc(inline)]
 pub use crate::value::{KeyOrder, Value};
+/// Maps struct fields to integer CBOR map keys (COSE, RFC 9052).
+///
+/// Place above `#[derive(Serialize, Deserialize)]` and annotate fields
+/// with `#[cbor(key = <integer>)]`; see the [crate-level
+/// documentation](crate#integer-map-keys-cose) for an example.
+#[cfg(feature = "derive")]
+pub use cbor_derive::int_keys;
 
 /// Builds a [`Value`] from JSON-like syntax.
 ///

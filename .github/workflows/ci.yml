@@ -22,8 +22,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
-      - run: cargo build --workspace
-      - run: cargo test --workspace
+      - run: cargo build --workspace --all-features
+      - run: cargo test --workspace --all-features
 
   lint:
     name: rustfmt and clippy
@@ -34,7 +34,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -Dwarnings
+      - run: cargo clippy --workspace --all-targets --all-features -- -Dwarnings
 
   docs:
     name: docs
@@ -42,6 +42,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --no-deps
+      - run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -Dwarnings

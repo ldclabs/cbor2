@@ -1,33 +1,34 @@
-//! Integer map keys for structs (COSE, RFC 9052) and serde field
-//! attributes such as `alias` and `rename`.
+//! Integer map keys through the `@@KEY@@` marker protocol. These tests
+//! write the marker by hand to exercise the library without the `derive`
+//! feature; the `cose` module covers the `#[cbor::int_keys]` macro.
 
 use cbor::Value;
 use serde::{Deserialize, Serialize};
 
-// A COSE_Key-shaped structure (RFC 9052 §7): all map keys are integers.
+// What #[cbor::int_keys] expands to.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct CoseKey {
-    #[serde(rename = "1")]
+    #[serde(rename = "@@KEY@@1")]
     kty: u8,
-    #[serde(rename = "3", alias = "alg")]
+    #[serde(rename = "@@KEY@@3", alias = "alg")]
     alg: i8,
-    #[serde(rename = "-1")]
+    #[serde(rename = "@@KEY@@-1")]
     crv: u8,
-    #[serde(rename = "-2")]
+    #[serde(rename = "@@KEY@@-2")]
     x: serde_bytes::ByteBuf,
 }
 
 fn sample() -> CoseKey {
     CoseKey {
-        kty: 2,  // EC2
-        alg: -7, // ES256
-        crv: 1,  // P-256
+        kty: 2,
+        alg: -7,
+        crv: 1,
         x: serde_bytes::ByteBuf::from(vec![0x11, 0x22, 0x33, 0x44]),
     }
 }
 
 #[test]
-fn cose_style_integer_keys() {
+fn marked_fields_become_integer_keys() {
     // {1: 2, 3: -7, -1: 1, -2: h'11223344'}
     let bytes = cbor::to_vec(&sample()).unwrap();
     assert_eq!(hex::encode(&bytes), "a4010203262001214411223344");
@@ -51,9 +52,24 @@ fn cose_style_integer_keys() {
     assert_eq!(Value::serialized(&sample()).unwrap(), value);
     assert_eq!(value.deserialized::<CoseKey>().unwrap(), sample());
 
-    // Canonical encoding sorts the integer keys like any other key.
+    // Canonical encoding sorts integer keys like any other key.
     let canonical = cbor::to_canonical_vec(&sample()).unwrap();
     assert_eq!(hex::encode(&canonical), "a4010203262001214411223344");
+}
+
+#[test]
+fn plain_numeric_names_stay_text() {
+    // Without the marker there is no ambiguity: a numeric-looking field
+    // name is a text key, exactly as in ciborium.
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Plain {
+        #[serde(rename = "1")]
+        a: u8,
+    }
+
+    let bytes = cbor::to_vec(&Plain { a: 7 }).unwrap();
+    assert_eq!(hex::encode(&bytes), "a1613107"); // {"1": 7}
+    assert_eq!(cbor::from_slice::<Plain>(&bytes).unwrap(), Plain { a: 7 });
 }
 
 #[test]
@@ -70,7 +86,7 @@ fn aliases_match_text_and_integer_keys() {
     let aliased = cbor::to_vec(&cbor::cbor!({ "title" => "x" }).unwrap()).unwrap();
     assert_eq!(cbor::from_slice::<Named>(&aliased).unwrap().n, "x");
 
-    // An integer-renamed field with a textual alias accepts both forms.
+    // An integer-keyed field with a textual alias accepts both forms.
     let mixed = cbor::cbor!({
         1 => 2,
         "alg" => -7,
@@ -99,34 +115,38 @@ fn unknown_integer_keys_are_ignored() {
 }
 
 #[test]
-fn only_canonical_decimals_become_integer_keys() {
+fn only_canonical_marked_decimals_become_integer_keys() {
+    // Handwritten marker forms that are not canonical decimals stay text;
+    // the attribute macro never generates these.
     #[derive(Serialize)]
     struct Oddballs {
-        #[serde(rename = "0")]
+        #[serde(rename = "@@KEY@@0")]
         zero: u8, // integer key 0
-        #[serde(rename = "18446744073709551615")]
+        #[serde(rename = "@@KEY@@18446744073709551615")]
         umax: u8, // integer key u64::MAX
-        #[serde(rename = "-9223372036854775808")]
-        imin: u8, // integer key i64::MIN
-        #[serde(rename = "01")]
+        #[serde(rename = "@@KEY@@-18446744073709551616")]
+        imin: u8, // integer key -2^64
+        #[serde(rename = "@@KEY@@01")]
         zero_padded: u8, // text: leading zero
-        #[serde(rename = "-0")]
+        #[serde(rename = "@@KEY@@-0")]
         negative_zero: u8, // text: not canonical
-        #[serde(rename = "+1")]
+        #[serde(rename = "@@KEY@@+1")]
         plus: u8, // text: explicit sign
-        #[serde(rename = "1x")]
+        #[serde(rename = "@@KEY@@1x")]
         suffixed: u8, // text: not a number
-        #[serde(rename = "-")]
+        #[serde(rename = "@@KEY@@-")]
         dash: u8, // text: no digits
-        #[serde(rename = "18446744073709551616")]
-        too_big: u8, // text: beyond u64
-        #[serde(rename = "-9223372036854775809")]
-        too_small: u8, // text: beyond i64
-        #[serde(rename = "")]
-        empty: u8, // text: empty name
+        #[serde(rename = "@@KEY@@")]
+        empty: u8, // text: no digits at all
+        #[serde(rename = "@@KEY@@18446744073709551616")]
+        too_big: u8, // text: beyond the CBOR integer range
+        #[serde(rename = "@@KEY@@-18446744073709551617")]
+        too_small: u8, // text: beyond the CBOR integer range
+        #[serde(rename = "999")]
+        unmarked: u8, // text: no marker
     }
 
-    let value = Value::serialized(&Oddballs {
+    let oddballs = || Oddballs {
         zero: 0,
         umax: 1,
         imin: 2,
@@ -135,45 +155,34 @@ fn only_canonical_decimals_become_integer_keys() {
         plus: 5,
         suffixed: 6,
         dash: 7,
-        too_big: 8,
-        too_small: 9,
-        empty: 10,
-    })
-    .unwrap();
+        empty: 8,
+        too_big: 9,
+        too_small: 10,
+        unmarked: 11,
+    };
 
+    let value = Value::serialized(&oddballs()).unwrap();
     let keys: Vec<&Value> = value.as_map().unwrap().iter().map(|(k, _)| k).collect();
     assert_eq!(
         keys,
         [
             &Value::from(0u64),
             &Value::from(u64::MAX),
-            &Value::from(i64::MIN),
-            &Value::from("01"),
-            &Value::from("-0"),
-            &Value::from("+1"),
-            &Value::from("1x"),
-            &Value::from("-"),
-            &Value::from("18446744073709551616"),
-            &Value::from("-9223372036854775809"),
-            &Value::from(""),
+            &Value::Integer((-(u64::MAX as i128) - 1).try_into().unwrap()),
+            &Value::from("@@KEY@@01"),
+            &Value::from("@@KEY@@-0"),
+            &Value::from("@@KEY@@+1"),
+            &Value::from("@@KEY@@1x"),
+            &Value::from("@@KEY@@-"),
+            &Value::from("@@KEY@@"),
+            &Value::from("@@KEY@@18446744073709551616"),
+            &Value::from("@@KEY@@-18446744073709551617"),
+            &Value::from("999"),
         ]
     );
 
     // The streaming serializer agrees with the Value serializer.
-    let direct = cbor::to_vec(&Oddballs {
-        zero: 0,
-        umax: 1,
-        imin: 2,
-        zero_padded: 3,
-        negative_zero: 4,
-        plus: 5,
-        suffixed: 6,
-        dash: 7,
-        too_big: 8,
-        too_small: 9,
-        empty: 10,
-    })
-    .unwrap();
+    let direct = cbor::to_vec(&oddballs()).unwrap();
     assert_eq!(direct, cbor::to_vec(&value).unwrap());
 }
 
@@ -182,7 +191,7 @@ fn struct_variants_use_integer_keys_too() {
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     enum Message {
         Signed {
-            #[serde(rename = "1")]
+            #[serde(rename = "@@KEY@@1")]
             payload: u8,
         },
     }
@@ -227,7 +236,7 @@ fn tagged_integer_keys_still_match() {
     // A tag wrapped around an integer key is transparent, like elsewhere.
     #[derive(Debug, PartialEq, Deserialize)]
     struct K {
-        #[serde(rename = "1")]
+        #[serde(rename = "@@KEY@@1")]
         a: u8,
     }
 
@@ -261,13 +270,13 @@ fn integer_key_write_failures_propagate() {
 
     #[derive(Serialize)]
     struct Pos {
-        #[serde(rename = "1")]
+        #[serde(rename = "@@KEY@@1")]
         a: u8,
     }
 
     #[derive(Serialize)]
     struct Neg {
-        #[serde(rename = "-1")]
+        #[serde(rename = "@@KEY@@-1")]
         a: u8,
     }
 

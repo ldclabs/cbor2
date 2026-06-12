@@ -44,10 +44,11 @@ requires `std`.
   For protocols built on the older RFC 7049 §3.9 "Canonical CBOR" rule
   (kept as RFC 8949 §4.2.3, and used by ciborium's canonical module), the
   `*_with` variants take `KeyOrder::LengthFirst`.
-* **Integer map keys (COSE)** — struct fields renamed to canonical
-  decimal integers (`#[serde(rename = "1")]`) encode as integer keys and
-  match them on decode, as RFC 9052 requires; `alias` and the other serde
-  field attributes work as usual.
+* **Integer map keys (COSE)** — with the `derive` feature, the
+  `#[cbor::int_keys]` attribute macro maps struct fields to integer keys
+  (`#[cbor(key = 1)]`), as RFC 9052 requires, with no ambiguity against
+  textual keys; `alias` and the other serde field attributes work as
+  usual.
 * **Robust decoding** — indefinite-length items, segmented strings,
   duplicate map keys, unknown tags and CBOR sequences (RFC 8742) are all
   handled; recursion is depth-limited and forged lengths cannot trigger

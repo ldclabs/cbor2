@@ -56,13 +56,22 @@ impl ser::Error for Error {
     }
 }
 
-// CBOR protocols like COSE (RFC 9052) key their maps with integers. A
-// struct field whose (possibly `#[serde(rename)]`d) name is a canonical
-// decimal integer is therefore encoded as an integer key rather than as
-// text. Only canonical decimals qualify — no leading zeros, no "-0", no
-// sign prefix other than `-`, and the value must fit major type 0 or 1 —
-// so every integer key corresponds to exactly one field name.
+/// The marker prefix that maps a struct field to an integer key.
+///
+/// CBOR protocols like COSE (RFC 9052) key their maps with integers,
+/// which serde's string-only field names cannot express. A field whose
+/// name is this marker followed by a canonical decimal integer — most
+/// conveniently produced by the `#[cbor::int_keys]` attribute macro — is
+/// encoded as an integer key rather than as text; plain field names,
+/// numeric-looking or not, always encode as text.
+pub const KEY_MARKER: &str = "@@KEY@@";
+
+// Returns the integer key denoted by a marked field name. Only canonical
+// decimals qualify — no leading zeros, no "-0", no sign prefix other than
+// `-`, within the CBOR integer range — so every integer key corresponds
+// to exactly one field name.
 pub(crate) fn integer_field_key(name: &str) -> Option<i128> {
+    let name = name.strip_prefix(KEY_MARKER)?;
     let bytes = name.as_bytes();
     let digits = match bytes.first()? {
         b'-' => &bytes[1..],
@@ -77,11 +86,9 @@ pub(crate) fn integer_field_key(name: &str) -> Option<i128> {
         _ => {}
     }
 
-    if bytes[0] == b'-' {
-        name.parse::<i64>().ok().map(i128::from)
-    } else {
-        name.parse::<u64>().ok().map(i128::from)
-    }
+    let value = name.parse::<i128>().ok()?;
+    let in_range = value <= u64::MAX as i128 && value >= -(u64::MAX as i128) - 1;
+    in_range.then_some(value)
 }
 
 /// A serde serializer that writes CBOR to a [`std::io::Write`].
