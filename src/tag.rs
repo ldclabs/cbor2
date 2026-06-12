@@ -5,15 +5,15 @@
 //! serializers and deserializers in this crate understand:
 //!
 //! ```rust
-//! use cbor::tag::RequireExact;
+//! use cbor2::tag::RequireExact;
 //!
 //! // Tag 0: a date/time string.
 //! let datetime = RequireExact::<_, 0>("2013-03-21T20:04:00Z".to_string());
 //!
-//! let bytes = cbor::to_vec(&datetime).unwrap();
+//! let bytes = cbor2::to_vec(&datetime).unwrap();
 //! assert_eq!(hex::decode("c074323031332d30332d32315432303a30343a30305a").unwrap(), bytes);
 //!
-//! let back: RequireExact<String, 0> = cbor::from_slice(&bytes).unwrap();
+//! let back: RequireExact<String, 0> = cbor2::from_slice(&bytes).unwrap();
 //! assert_eq!(back, datetime);
 //! ```
 //!

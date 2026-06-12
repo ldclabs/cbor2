@@ -3,12 +3,12 @@
 
 use std::collections::BTreeMap;
 
-use cbor::{cbor, Value};
+use cbor2::{cbor, Value};
 use serde::{Deserialize, Serialize};
 
 fn assert_size<T: ?Sized + Serialize>(value: &T) {
-    let actual = cbor::to_vec(value).unwrap().len() as u64;
-    assert_eq!(cbor::serialized_size(value).unwrap(), actual);
+    let actual = cbor2::to_vec(value).unwrap().len() as u64;
+    assert_eq!(cbor2::serialized_size(value).unwrap(), actual);
 }
 
 #[derive(Serialize, Deserialize)]
@@ -136,7 +136,7 @@ fn containers() {
 
 #[test]
 fn tags_and_values() {
-    use cbor::tag::{AllowAny, RequireExact};
+    use cbor2::tag::{AllowAny, RequireExact};
 
     assert_size(&RequireExact::<_, 42>("tagged"));
     assert_size(&AllowAny(Some(0x1_0000), 123u64));
@@ -185,10 +185,10 @@ impl Serialize for Displayed {
 fn collected_strings() {
     assert_size(&Displayed);
     assert_eq!(
-        cbor::to_vec(&Displayed).unwrap(),
-        cbor::to_vec(&"id-42-水").unwrap()
+        cbor2::to_vec(&Displayed).unwrap(),
+        cbor2::to_vec(&"id-42-水").unwrap()
     );
-    let back: String = cbor::from_slice(&cbor::to_vec(&Displayed).unwrap()).unwrap();
+    let back: String = cbor2::from_slice(&cbor2::to_vec(&Displayed).unwrap()).unwrap();
     assert_eq!(back, "id-42-水");
 }
 
@@ -229,21 +229,21 @@ fn misbehaving_display_is_rejected() {
     // Grows between the measuring and the writing pass.
     let grow = Shifty(std::cell::Cell::new(0), &["ab", "abcd"]);
     assert!(matches!(
-        cbor::to_vec(&grow),
-        Err(cbor::ser::Error::Value(..))
+        cbor2::to_vec(&grow),
+        Err(cbor2::ser::Error::Value(..))
     ));
 
     // Shrinks between the passes.
     let shrink = Shifty(std::cell::Cell::new(0), &["abcd", "ab"]);
     assert!(matches!(
-        cbor::to_vec(&shrink),
-        Err(cbor::ser::Error::Value(..))
+        cbor2::to_vec(&shrink),
+        Err(cbor2::ser::Error::Value(..))
     ));
 
     // Fails outright.
     assert!(matches!(
-        cbor::to_vec(&FailingDisplay),
-        Err(cbor::ser::Error::Value(..))
+        cbor2::to_vec(&FailingDisplay),
+        Err(cbor2::ser::Error::Value(..))
     ));
 
     // An I/O failure while streaming the body is an I/O error.
@@ -262,13 +262,13 @@ fn misbehaving_display_is_rejected() {
         }
     }
     assert!(matches!(
-        cbor::to_writer(&Displayed, Limited(1)),
-        Err(cbor::ser::Error::Io(..))
+        cbor2::to_writer(&Displayed, Limited(1)),
+        Err(cbor2::ser::Error::Io(..))
     ));
     // And while writing the text header itself.
     assert!(matches!(
-        cbor::to_writer(&Displayed, Limited(0)),
-        Err(cbor::ser::Error::Io(..))
+        cbor2::to_writer(&Displayed, Limited(0)),
+        Err(cbor2::ser::Error::Io(..))
     ));
 }
 
@@ -282,5 +282,5 @@ fn errors_propagate() {
         }
     }
 
-    assert!(cbor::serialized_size(&Boom).is_err());
+    assert!(cbor2::serialized_size(&Boom).is_err());
 }

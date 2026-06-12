@@ -1,10 +1,10 @@
 //! Tests for diagnostic notation (RFC 8949 §8).
 
-use cbor::{cbor, Value};
+use cbor2::{cbor, Value};
 
 fn diag(hex: &str) -> String {
     let bytes = hex::decode(hex).unwrap();
-    cbor::diagnostic(&bytes[..]).unwrap()
+    cbor2::diagnostic(&bytes[..]).unwrap()
 }
 
 #[test]
@@ -165,22 +165,22 @@ fn beyond_the_appendix() {
 
     // Large bodies cross the internal 4096-byte chunking.
     let big = "a".repeat(5000);
-    let bytes = cbor::to_vec(&big).unwrap();
-    assert_eq!(cbor::diagnostic(&bytes[..]).unwrap(), format!("\"{big}\""));
+    let bytes = cbor2::to_vec(&big).unwrap();
+    assert_eq!(cbor2::diagnostic(&bytes[..]).unwrap(), format!("\"{big}\""));
 
     let blob = serde_bytes::ByteBuf::from(vec![0xabu8; 5000]);
-    let bytes = cbor::to_vec(&blob).unwrap();
+    let bytes = cbor2::to_vec(&blob).unwrap();
     assert_eq!(
-        cbor::diagnostic(&bytes[..]).unwrap(),
+        cbor2::diagnostic(&bytes[..]).unwrap(),
         format!("h'{}'", "ab".repeat(5000))
     );
 
     // Multi-byte characters straddling the chunk boundary.
     let mut text = "a".repeat(4095);
     text.push_str("水水");
-    let bytes = cbor::to_vec(&text).unwrap();
+    let bytes = cbor2::to_vec(&text).unwrap();
     assert_eq!(
-        cbor::diagnostic(&bytes[..]).unwrap(),
+        cbor2::diagnostic(&bytes[..]).unwrap(),
         format!("\"{}\\u6c34\\u6c34\"", "a".repeat(4095))
     );
 }
@@ -189,7 +189,7 @@ fn beyond_the_appendix() {
 fn malformed_input_is_rejected() {
     fn bad(hex: &str) {
         let bytes = hex::decode(hex).unwrap();
-        assert!(cbor::diagnostic(&bytes[..]).is_err(), "0x{hex}");
+        assert!(cbor2::diagnostic(&bytes[..]).is_err(), "0x{hex}");
     }
 
     bad(""); // empty
@@ -228,8 +228,8 @@ fn malformed_input_is_rejected() {
     let mut bomb = vec![0xc1u8; 65536];
     *bomb.last_mut().unwrap() = 0x01;
     assert!(matches!(
-        cbor::diagnostic(&bomb[..]),
-        Err(cbor::de::Error::RecursionLimitExceeded)
+        cbor2::diagnostic(&bomb[..]),
+        Err(cbor2::de::Error::RecursionLimitExceeded)
     ));
 
     // I/O failures surface as such.
@@ -240,8 +240,8 @@ fn malformed_input_is_rejected() {
         }
     }
     assert!(matches!(
-        cbor::diagnostic(FailReader),
-        Err(cbor::de::Error::Io(..))
+        cbor2::diagnostic(FailReader),
+        Err(cbor2::de::Error::Io(..))
     ));
 }
 
@@ -299,8 +299,8 @@ fn value_display_is_diagnostic_notation() {
         cbor!({ "deep" => { 1 => [null, true] } }).unwrap(),
         Value::Tag(1, Box::new(Value::from(1363896240))),
     ] {
-        let bytes = cbor::to_vec(&value).unwrap();
-        assert_eq!(cbor::diagnostic(&bytes[..]).unwrap(), value.to_string());
+        let bytes = cbor2::to_vec(&value).unwrap();
+        assert_eq!(cbor2::diagnostic(&bytes[..]).unwrap(), value.to_string());
     }
 
     fn h_bytes() -> Value {

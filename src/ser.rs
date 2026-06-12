@@ -61,7 +61,7 @@ impl ser::Error for Error {
 /// CBOR protocols like COSE (RFC 9052) key their maps with integers,
 /// which serde's string-only field names cannot express. A field whose
 /// name is this marker followed by a canonical decimal integer — most
-/// conveniently produced by the `#[cbor::int_keys]` attribute macro — is
+/// conveniently produced by the `#[cbor2::int_keys]` attribute macro — is
 /// encoded as an integer key rather than as text; plain field names,
 /// numeric-looking or not, always encode as text.
 pub const KEY_MARKER: &str = "@@KEY@@";
@@ -631,8 +631,8 @@ pub fn to_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<Vec<u8>, Error> {
 ///
 /// ```rust
 /// let value = ("hello", 42u64, vec![1u8, 2, 3]);
-/// let size = cbor::serialized_size(&value).unwrap();
-/// assert_eq!(size as usize, cbor::to_vec(&value).unwrap().len());
+/// let size = cbor2::serialized_size(&value).unwrap();
+/// assert_eq!(size as usize, cbor2::to_vec(&value).unwrap().len());
 /// ```
 pub fn serialized_size<T: ?Sized + ser::Serialize>(value: &T) -> Result<u64, Error> {
     let mut counter = ByteCounter(0);

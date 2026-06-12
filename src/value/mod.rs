@@ -85,7 +85,7 @@ pub enum Value {
 /// the compact form.
 ///
 /// ```
-/// use cbor::cbor;
+/// use cbor2::cbor;
 ///
 /// let value = cbor!({ "a" => [1, 2] }).unwrap();
 /// assert_eq!(
@@ -334,7 +334,7 @@ impl Value {
 /// exponent and bignum tags (2 and 3) are written as plain integers.
 ///
 /// ```
-/// use cbor::{cbor, Value};
+/// use cbor2::{cbor, Value};
 ///
 /// let value = cbor!({ "k" => [1, -2.5, null] }).unwrap();
 /// assert_eq!(value.to_string(), r#"{"k": [1, -2.5, null]}"#);

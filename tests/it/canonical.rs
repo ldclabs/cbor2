@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use cbor::{cbor, KeyOrder, Value};
+use cbor2::{cbor, KeyOrder, Value};
 
 // The eight example keys shared by RFC 8949 §4.2.1 and §4.2.3, scrambled.
 fn rfc_example_map() -> Value {
@@ -23,7 +23,7 @@ fn keys_of(value: &Value) -> Vec<String> {
         .as_map()
         .unwrap()
         .iter()
-        .map(|(k, _)| hex::encode(cbor::to_vec(k).unwrap()))
+        .map(|(k, _)| hex::encode(cbor2::to_vec(k).unwrap()))
         .collect()
 }
 
@@ -57,10 +57,10 @@ fn rfc_key_order_example_length_first() {
 fn length_first_through_serde() {
     let map: HashMap<i64, bool> = [(100, true), (-1, false)].into();
 
-    let core = cbor::to_canonical_vec(&map).unwrap();
+    let core = cbor2::to_canonical_vec(&map).unwrap();
     assert_eq!(hex::encode(&core), "a21864f520f4");
 
-    let legacy = cbor::to_canonical_vec_with(&map, KeyOrder::LengthFirst).unwrap();
+    let legacy = cbor2::to_canonical_vec_with(&map, KeyOrder::LengthFirst).unwrap();
     assert_eq!(hex::encode(&legacy), "a220f41864f5");
 
     // Both reject duplicate keys.
@@ -68,12 +68,12 @@ fn length_first_through_serde() {
         (Value::from(1), Value::Null),
         (Value::from(1), Value::Null),
     ]);
-    assert!(cbor::to_canonical_vec_with(&dup, KeyOrder::LengthFirst).is_err());
+    assert!(cbor2::to_canonical_vec_with(&dup, KeyOrder::LengthFirst).is_err());
 
     // The default order is bytewise.
     assert_eq!(
         core,
-        cbor::to_canonical_vec_with(&map, KeyOrder::default()).unwrap()
+        cbor2::to_canonical_vec_with(&map, KeyOrder::default()).unwrap()
     );
 }
 
@@ -159,7 +159,7 @@ fn bignums_are_reduced() {
     let mut value = Value::Tag(3, Box::new(Value::Bytes(vec![255; 8])));
     value.canonicalize().unwrap();
     assert_eq!(
-        cbor::to_vec(&value).unwrap(),
+        cbor2::to_vec(&value).unwrap(),
         hex::decode("3bffffffffffffffff").unwrap()
     );
 
@@ -174,7 +174,7 @@ fn nan_is_normalized() {
     let mut value = Value::Float(f64::from_bits(0x7ff8_dead_beef_0000));
     value.canonicalize().unwrap();
     assert_eq!(
-        cbor::to_vec(&value).unwrap(),
+        cbor2::to_vec(&value).unwrap(),
         hex::decode("f97e00").unwrap()
     );
 }
@@ -184,7 +184,7 @@ fn to_canonical_vec_sorts_any_serialize() {
     // HashMap iteration order is nondeterministic; the canonical encoding
     // is not.
     let map: HashMap<&str, i32> = [("z", 1), ("aa", 2), ("b", 3), ("c", 4)].into();
-    let bytes = cbor::to_canonical_vec(&map).unwrap();
+    let bytes = cbor2::to_canonical_vec(&map).unwrap();
     assert_eq!(
         hex::encode(&bytes),
         "a461620361630461 7a01626161 02".replace(' ', "")
@@ -196,7 +196,7 @@ fn to_canonical_vec_sorts_any_serialize() {
         b: u8,
         a: u8,
     }
-    let bytes = cbor::to_canonical_vec(&Unsorted { b: 1, a: 2 }).unwrap();
+    let bytes = cbor2::to_canonical_vec(&Unsorted { b: 1, a: 2 }).unwrap();
     assert_eq!(hex::encode(&bytes), "a26161026162 01".replace(' ', ""));
 }
 
@@ -206,10 +206,10 @@ fn canonical_decode_encode_roundtrip_is_stable() {
     // canonically yields a definite-length, sorted document; doing it
     // again is a fixed point.
     let messy = hex::decode("bf617a017f626161ff9f0102ffff").unwrap(); // {_ "z": 1, (_ "aa"): [_ 1, 2]}
-    let value: Value = cbor::from_slice(&messy).unwrap();
+    let value: Value = cbor2::from_slice(&messy).unwrap();
 
-    let once = cbor::to_canonical_vec(&value).unwrap();
-    let twice = cbor::to_canonical_vec(&cbor::from_slice::<Value>(&once).unwrap()).unwrap();
+    let once = cbor2::to_canonical_vec(&value).unwrap();
+    let twice = cbor2::to_canonical_vec(&cbor2::from_slice::<Value>(&once).unwrap()).unwrap();
 
     assert_eq!(once, twice);
     assert_eq!(hex::encode(&once), "a2617a01626161 820102".replace(' ', ""));

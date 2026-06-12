@@ -1,6 +1,6 @@
 //! Tests for the dynamic `Value` type and the `cbor!` macro.
 
-use cbor::{cbor, Value};
+use cbor2::{cbor, Value};
 use serde::{Deserialize, Serialize};
 
 #[test]
@@ -73,8 +73,8 @@ fn value_through_the_wire() {
     })
     .unwrap();
 
-    let bytes = cbor::to_vec(&value).unwrap();
-    let back: Value = cbor::from_slice(&bytes).unwrap();
+    let bytes = cbor2::to_vec(&value).unwrap();
+    let back: Value = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(back, value);
 }
 

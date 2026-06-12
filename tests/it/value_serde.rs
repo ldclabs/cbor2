@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use cbor::{cbor, Value};
+use cbor2::{cbor, Value};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
@@ -141,7 +141,7 @@ fn malformed_tag_protocol_is_rejected() {
     let err = Value::serialized(&BadTagNumber).unwrap_err();
     assert!(err.to_string().contains("expected tag"));
 
-    let err = cbor::to_vec(&BadTagNumber).unwrap_err();
+    let err = cbor2::to_vec(&BadTagNumber).unwrap_err();
     assert!(err.to_string().contains("expected tag"));
 
     let err = Value::serialized(&HalfATag).unwrap_err();
@@ -169,8 +169,8 @@ impl<'de> Deserialize<'de> for HumanCheck {
 #[test]
 fn binary_format() {
     assert_eq!(Value::serialized(&HumanCheck).unwrap(), Value::Null);
-    let bytes = cbor::to_vec(&HumanCheck).unwrap();
-    let _: HumanCheck = cbor::from_slice(&bytes).unwrap();
+    let bytes = cbor2::to_vec(&HumanCheck).unwrap();
+    let _: HumanCheck = cbor2::from_slice(&bytes).unwrap();
     let _: HumanCheck = Value::Null.deserialized().unwrap();
 }
 
@@ -433,10 +433,10 @@ fn roundtrip_through_value_equals_direct_wire() {
     macro_rules! check {
         ($t:ty, $v:expr) => {{
             let v: $t = $v;
-            let direct = cbor::to_vec(&v).unwrap();
-            let through = cbor::to_vec(&Value::serialized(&v).unwrap()).unwrap();
+            let direct = cbor2::to_vec(&v).unwrap();
+            let through = cbor2::to_vec(&Value::serialized(&v).unwrap()).unwrap();
             assert_eq!(direct, through);
-            let value: Value = cbor::from_slice(&direct).unwrap();
+            let value: Value = cbor2::from_slice(&direct).unwrap();
             assert_eq!(value.deserialized::<$t>().unwrap(), v);
         }};
     }
@@ -486,7 +486,7 @@ fn value_identity_through_deserialized() {
 
 #[test]
 fn tag_wrappers_from_values() {
-    use cbor::tag::AllowAny;
+    use cbor2::tag::AllowAny;
 
     // An untagged value satisfies AllowAny without a tag.
     let plain = Value::from(5);
@@ -531,7 +531,7 @@ impl Serialize for TagInTagNumber {
 #[test]
 fn tag_protocol_rejects_tagged_tag_numbers() {
     assert!(Value::serialized(&TagInTagNumber).is_err());
-    assert!(cbor::to_vec(&TagInTagNumber).is_err());
+    assert!(cbor2::to_vec(&TagInTagNumber).is_err());
 }
 
 // A deserializer that presents data through the visitor methods the CBOR
@@ -542,7 +542,7 @@ mod foreign {
     use serde::forward_to_deserialize_any;
     use serde::Deserialize;
 
-    use cbor::Value;
+    use cbor2::Value;
 
     pub enum Mode {
         Some,
@@ -720,9 +720,9 @@ fn unserializable_values_fail_inside_every_container() {
     assert!(Value::serialized(&E::Struct(Boom)).is_err());
 
     // The tagged protocol with a good tag number and a failing payload.
-    assert!(Value::serialized(&cbor::tag::AllowAny(Some(1), Boom)).is_err());
+    assert!(Value::serialized(&cbor2::tag::AllowAny(Some(1), Boom)).is_err());
     // The untagged protocol with a failing payload.
-    assert!(Value::serialized(&cbor::tag::AllowAny(None, Boom)).is_err());
+    assert!(Value::serialized(&cbor2::tag::AllowAny(None, Boom)).is_err());
 
     // Value::Array and Value::Map serialized into a failing serializer:
     // the container headers themselves are rejected.
@@ -735,11 +735,11 @@ fn unserializable_values_fail_inside_every_container() {
             Ok(())
         }
     }
-    assert!(cbor::to_writer(&Value::Array(vec![]), FW).is_err());
-    assert!(cbor::to_writer(&Value::Map(vec![]), FW).is_err());
+    assert!(cbor2::to_writer(&Value::Array(vec![]), FW).is_err());
+    assert!(cbor2::to_writer(&Value::Map(vec![]), FW).is_err());
 
     // A failing key inside the *streaming* serializer's map path.
-    assert!(cbor::to_vec(&BoomKeyMap).is_err());
+    assert!(cbor2::to_vec(&BoomKeyMap).is_err());
 }
 
 #[test]

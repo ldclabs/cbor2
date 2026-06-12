@@ -1,15 +1,15 @@
 [workspace]
 resolver = "2"
-members = [".", "cbor-derive", "cbor_conv"]
+members = [".", "cbor2-derive", "cbor_conv"]
 
 [package]
-name = "cbor"
+name = "cbor2"
 version = "0.5.0"
-authors = ["Andrew Gallant <jamslam@gmail.com>", "0xZensh <txr1883@gmail.com>"]
+authors = ["0xZensh <txr1883@gmail.com>"]
 description = "A serde implementation of CBOR (RFC 8949) with a dynamic Value type and tag support."
-homepage = "https://github.com/ldclabs/rust-cbor"
-repository = "https://github.com/ldclabs/rust-cbor"
-documentation = "https://docs.rs/cbor"
+homepage = "https://github.com/ldclabs/cbor2"
+repository = "https://github.com/ldclabs/cbor2"
+documentation = "https://docs.rs/cbor2"
 readme = "README.md"
 keywords = ["cbor", "serde", "serialization", "binary", "encoding"]
 categories = ["encoding", "parsing"]
@@ -18,15 +18,12 @@ edition = "2021"
 rust-version = "1.85"
 exclude = ["doc/", ".github/"]
 
-[lib]
-name = "cbor"
-
 [features]
-# Enables the #[cbor::int_keys] attribute macro for integer map keys.
-derive = ["dep:cbor-derive"]
+# Enables the #[cbor2::int_keys] attribute macro for integer map keys.
+derive = ["dep:cbor2-derive"]
 
 [dependencies]
-cbor-derive = { path = "cbor-derive", version = "0.5", optional = true }
+cbor2-derive = { path = "cbor2-derive", version = "0.5", optional = true }
 serde = { version = "1", default-features = false, features = ["std"] }
 
 [dev-dependencies]

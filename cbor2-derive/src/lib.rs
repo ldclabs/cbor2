@@ -1,6 +1,6 @@
-//! The attribute macro behind `cbor::int_keys`.
+//! The attribute macro behind `cbor2::int_keys`.
 //!
-//! See the documentation in the `cbor` crate; this crate is an
+//! See the documentation in the `cbor2` crate; this crate is an
 //! implementation detail and is not meant to be used directly.
 
 use proc_macro2::TokenStream;
@@ -8,12 +8,12 @@ use quote::ToTokens;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned as _;
 
-// The marker prefix recognized by the `cbor` serializers. Keep in sync
-// with `cbor::ser::KEY_MARKER`; the integration tests of the `cbor` crate
+// The marker prefix recognized by the `cbor2` serializers. Keep in sync
+// with `cbor2::ser::KEY_MARKER`; the integration tests of the `cbor2` crate
 // pin the resulting wire bytes.
 const MARKER: &str = "@@KEY@@";
 
-/// Maps struct fields to integer CBOR map keys (see `cbor::int_keys`).
+/// Maps struct fields to integer CBOR map keys (see `cbor2::int_keys`).
 #[proc_macro_attribute]
 pub fn int_keys(
     attr: proc_macro::TokenStream,

@@ -1,11 +1,11 @@
-# cbor
+# cbor2
 
 A serde implementation of [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949)
 — the Concise Binary Object Representation (CBOR) — for Rust.
 
-[![CI](https://github.com/ldclabs/rust-cbor/actions/workflows/ci.yml/badge.svg)](https://github.com/ldclabs/rust-cbor/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/cbor.svg)](https://crates.io/crates/cbor)
-[![docs.rs](https://docs.rs/cbor/badge.svg)](https://docs.rs/cbor)
+[![CI](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml/badge.svg)](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/cbor2.svg)](https://crates.io/crates/cbor2)
+[![docs.rs](https://docs.rs/cbor2/badge.svg)](https://docs.rs/cbor2)
 
 CBOR adopts and modestly builds on the *data model* used by JSON, except the
 encoding is in binary form. Its primary goals include a balance of
@@ -15,11 +15,13 @@ Dual-licensed under MIT or the [UNLICENSE](http://unlicense.org).
 
 ## Status
 
-This crate was created by [Andrew Gallant](https://github.com/BurntSushi) in
-2015 and built on the pre-serde `rustc-serialize` framework; it went
-unmaintained for many years. Version 0.5 is a from-scratch rewrite on top of
-[serde](https://serde.rs), now maintained by [LDC Labs](https://github.com/ldclabs).
-None of the 0.4 API survives.
+This project descends from the `cbor` crate created by
+[Andrew Gallant](https://github.com/BurntSushi) in 2015, which was built on
+the pre-serde `rustc-serialize` framework and went unmaintained for many
+years. Version 0.5 is a from-scratch rewrite on top of
+[serde](https://serde.rs), maintained by [LDC Labs](https://github.com/ldclabs)
+and published as **`cbor2`** — the `cbor` name on crates.io stays with the
+legacy 0.4 release. None of the 0.4 API survives.
 
 The rewrite follows the design of (and is wire-compatible with)
 [ciborium](https://github.com/enarx/ciborium) — many thanks to its authors.
@@ -45,7 +47,7 @@ requires `std`.
   (kept as RFC 8949 §4.2.3, and used by ciborium's canonical module), the
   `*_with` variants take `KeyOrder::LengthFirst`.
 * **Integer map keys (COSE)** — with the `derive` feature, the
-  `#[cbor::int_keys]` attribute macro maps struct fields to integer keys
+  `#[cbor2::int_keys]` attribute macro maps struct fields to integer keys
   (`#[cbor(key = 1)]`), as RFC 9052 requires, with no ambiguity against
   textual keys; `alias` and the other serde field attributes work as
   usual.
@@ -69,7 +71,7 @@ requires `std`.
 
 ```toml
 [dependencies]
-cbor = "0.5"
+cbor2 = "0.5"
 ```
 
 ### Type-based encoding and decoding
@@ -90,8 +92,8 @@ let photo = Photo {
     tags: vec!["morning".into(), "gradient".into()],
 };
 
-let bytes = cbor::to_vec(&photo).unwrap();
-let back: Photo = cbor::from_slice(&bytes).unwrap();
+let bytes = cbor2::to_vec(&photo).unwrap();
+let back: Photo = cbor2::from_slice(&bytes).unwrap();
 assert_eq!(photo, back);
 ```
 
@@ -101,7 +103,7 @@ assert_eq!(photo, back);
 ### Dynamic values
 
 ```rust
-use cbor::{cbor, Value};
+use cbor2::{cbor, Value};
 
 let value = cbor!({
     "code" => 415,
@@ -109,19 +111,19 @@ let value = cbor!({
     "extra" => { "numbers" => [8.2341e+4, 0.251425] },
 }).unwrap();
 
-let bytes = cbor::to_vec(&value).unwrap();
-let back: Value = cbor::from_slice(&bytes).unwrap();
+let bytes = cbor2::to_vec(&value).unwrap();
+let back: Value = cbor2::from_slice(&bytes).unwrap();
 assert_eq!(value, back);
 ```
 
 ### Tags
 
 ```rust
-use cbor::tag::RequireExact;
+use cbor2::tag::RequireExact;
 
 // Tag 0: standard date/time string.
 let datetime = RequireExact::<String, 0>("2013-03-21T20:04:00Z".into());
-let bytes = cbor::to_vec(&datetime).unwrap();
+let bytes = cbor2::to_vec(&datetime).unwrap();
 assert_eq!(bytes[0], 0xc0);
 ```
 

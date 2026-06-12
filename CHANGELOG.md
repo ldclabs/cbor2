@@ -2,7 +2,9 @@
 
 ## 0.5.0 (unreleased)
 
-A from-scratch rewrite. The crate now targets RFC 8949 (which obsoleted
+A from-scratch rewrite, published as **`cbor2`** (with the companion
+`cbor2-derive`): the `cbor` name on crates.io stays with the legacy 0.4
+release. The crate now targets RFC 8949 (which obsoleted
 RFC 7049) and is built on serde; the `rustc-serialize` based 0.4 API has
 been removed entirely.
 
@@ -31,7 +33,7 @@ been removed entirely.
   computes the exact encoded size of a value without buffering output.
   `collect_str` no longer buffers formatted output either.
 * Integer map keys for structs (COSE, RFC 9052): the `derive` feature
-  provides the `#[cbor::int_keys]` attribute macro, which maps fields
+  provides the `#[cbor2::int_keys]` attribute macro, which maps fields
   annotated `#[cbor(key = 1)]` to integer map keys, while a plain
   `#[serde(rename = "1")]` stays a text key, so the two cannot be
   confused. serde field attributes such as `alias` combine freely with

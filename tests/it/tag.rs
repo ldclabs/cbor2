@@ -1,70 +1,70 @@
 //! Tests for CBOR tag support.
 
-use cbor::tag::{AllowAny, AllowExact, RequireAny, RequireExact};
-use cbor::Value;
+use cbor2::tag::{AllowAny, AllowExact, RequireAny, RequireExact};
+use cbor2::Value;
 
 #[test]
 fn require_exact() {
     // Tag 0: standard date/time string.
     let datetime = RequireExact::<String, 0>("2013-03-21T20:04:00Z".into());
-    let bytes = cbor::to_vec(&datetime).unwrap();
+    let bytes = cbor2::to_vec(&datetime).unwrap();
     assert_eq!(
         hex::encode(&bytes),
         "c074323031332d30332d32315432303a30343a30305a"
     );
 
-    let back: RequireExact<String, 0> = cbor::from_slice(&bytes).unwrap();
+    let back: RequireExact<String, 0> = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(back, datetime);
 
     // The wrong tag is rejected...
-    assert!(cbor::from_slice::<RequireExact<String, 1>>(&bytes).is_err());
+    assert!(cbor2::from_slice::<RequireExact<String, 1>>(&bytes).is_err());
     // ...and so is a missing tag.
-    let untagged = cbor::to_vec(&"2013-03-21T20:04:00Z").unwrap();
-    assert!(cbor::from_slice::<RequireExact<String, 0>>(&untagged).is_err());
+    let untagged = cbor2::to_vec(&"2013-03-21T20:04:00Z").unwrap();
+    assert!(cbor2::from_slice::<RequireExact<String, 0>>(&untagged).is_err());
 }
 
 #[test]
 fn allow_exact() {
-    let bytes = cbor::to_vec(&AllowExact::<u64, 1>(1363896240)).unwrap();
+    let bytes = cbor2::to_vec(&AllowExact::<u64, 1>(1363896240)).unwrap();
     assert_eq!(hex::encode(&bytes), "c11a514b67b0");
 
     // Tagged and untagged input both decode.
-    let tagged: AllowExact<u64, 1> = cbor::from_slice(&bytes).unwrap();
+    let tagged: AllowExact<u64, 1> = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(tagged.0, 1363896240);
 
-    let untagged_bytes = cbor::to_vec(&1363896240u64).unwrap();
-    let untagged: AllowExact<u64, 1> = cbor::from_slice(&untagged_bytes).unwrap();
+    let untagged_bytes = cbor2::to_vec(&1363896240u64).unwrap();
+    let untagged: AllowExact<u64, 1> = cbor2::from_slice(&untagged_bytes).unwrap();
     assert_eq!(untagged.0, 1363896240);
 
     // A different tag is rejected.
-    assert!(cbor::from_slice::<AllowExact<u64, 7>>(&bytes).is_err());
+    assert!(cbor2::from_slice::<AllowExact<u64, 7>>(&bytes).is_err());
 }
 
 #[test]
 fn require_any() {
-    let bytes = cbor::to_vec(&RequireAny(32, String::from("https://example.com"))).unwrap();
-    let back: RequireAny<String> = cbor::from_slice(&bytes).unwrap();
+    let bytes = cbor2::to_vec(&RequireAny(32, String::from("https://example.com"))).unwrap();
+    let back: RequireAny<String> = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(back.0, 32);
     assert_eq!(back.1, "https://example.com");
 
-    let untagged = cbor::to_vec(&"https://example.com").unwrap();
-    assert!(cbor::from_slice::<RequireAny<String>>(&untagged).is_err());
+    let untagged = cbor2::to_vec(&"https://example.com").unwrap();
+    assert!(cbor2::from_slice::<RequireAny<String>>(&untagged).is_err());
 }
 
 #[test]
 fn allow_any() {
     let tagged = hex::decode("c11a514b67b0").unwrap();
-    let back: AllowAny<u64> = cbor::from_slice(&tagged).unwrap();
+    let back: AllowAny<u64> = cbor2::from_slice(&tagged).unwrap();
     assert_eq!(back, AllowAny(Some(1), 1363896240));
 
-    let untagged = cbor::to_vec(&1363896240u64).unwrap();
-    let back: AllowAny<u64> = cbor::from_slice(&untagged).unwrap();
+    let untagged = cbor2::to_vec(&1363896240u64).unwrap();
+    let back: AllowAny<u64> = cbor2::from_slice(&untagged).unwrap();
     assert_eq!(back, AllowAny(None, 1363896240));
 
     // Round trip preserves the tag (or its absence).
-    let bytes = cbor::to_vec(&AllowAny(Some(1), 1363896240u64)).unwrap();
+    let bytes = cbor2::to_vec(&AllowAny(Some(1), 1363896240u64)).unwrap();
     assert_eq!(hex::encode(&bytes), "c11a514b67b0");
-    let bytes = cbor::to_vec(&AllowAny(None, 1363896240u64)).unwrap();
+    let bytes = cbor2::to_vec(&AllowAny(None, 1363896240u64)).unwrap();
     assert_eq!(hex::encode(&bytes), "1a514b67b0");
 }
 
@@ -72,15 +72,15 @@ fn allow_any() {
 fn value_tags() {
     // Tags survive a round trip through Value.
     let value = Value::Tag(262, Box::new(Value::from("x")));
-    let bytes = cbor::to_vec(&value).unwrap();
+    let bytes = cbor2::to_vec(&value).unwrap();
     assert_eq!(hex::encode(&bytes), "d901066178");
-    let back: Value = cbor::from_slice(&bytes).unwrap();
+    let back: Value = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(back, value);
 
     // Nested tags survive too. (Note that a nested *bignum* tag would
     // collapse into an integer by design.)
     let nested = Value::Tag(1, Box::new(Value::Tag(0, Box::new(Value::from("x")))));
-    let back: Value = cbor::from_slice(&cbor::to_vec(&nested).unwrap()).unwrap();
+    let back: Value = cbor2::from_slice(&cbor2::to_vec(&nested).unwrap()).unwrap();
     assert_eq!(back, nested);
 
     // Value and the tag wrappers interconvert.
@@ -98,14 +98,14 @@ fn oversized_bignums_stay_tagged() {
     payload.extend_from_slice(&[0u8; 16]);
 
     let value = Value::Tag(2, Box::new(Value::Bytes(payload)));
-    let bytes = cbor::to_vec(&value).unwrap();
-    let back: Value = cbor::from_slice(&bytes).unwrap();
+    let bytes = cbor2::to_vec(&value).unwrap();
+    let back: Value = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(back, value);
 
     // While a small one collapses.
     let small = Value::Tag(2, Box::new(Value::Bytes(vec![42])));
-    let bytes = cbor::to_vec(&small).unwrap();
-    let back: Value = cbor::from_slice(&bytes).unwrap();
+    let bytes = cbor2::to_vec(&small).unwrap();
+    let back: Value = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(back, Value::from(42));
 }
 
@@ -120,7 +120,7 @@ mod synthetic {
     use serde::de::{self, IntoDeserializer};
     use serde::forward_to_deserialize_any;
 
-    use cbor::tag::AllowAny;
+    use cbor2::tag::AllowAny;
 
     pub enum VariantId {
         Index(u64),
@@ -354,7 +354,7 @@ mod foreign_value {
     use serde::forward_to_deserialize_any;
     use serde::Deserialize;
 
-    use cbor::Value;
+    use cbor2::Value;
 
     pub struct EnumDe {
         pub variant: &'static str,
@@ -614,38 +614,38 @@ mod foreign_value {
 
 #[test]
 fn wrappers_reject_garbage_input() {
-    use cbor::tag::{AllowAny, AllowExact, RequireAny, RequireExact};
+    use cbor2::tag::{AllowAny, AllowExact, RequireAny, RequireExact};
 
     // The Allow* wrappers accept untagged input by design; the Require*
     // wrappers do not.
     let untagged = [0x01u8];
     assert_eq!(
-        cbor::from_slice::<AllowAny<u8>>(&untagged).unwrap(),
+        cbor2::from_slice::<AllowAny<u8>>(&untagged).unwrap(),
         AllowAny(None, 1)
     );
     assert_eq!(
-        cbor::from_slice::<AllowExact<u8, 1>>(&untagged).unwrap(),
+        cbor2::from_slice::<AllowExact<u8, 1>>(&untagged).unwrap(),
         AllowExact(1)
     );
-    assert!(cbor::from_slice::<RequireAny<u8>>(&untagged).is_err());
-    assert!(cbor::from_slice::<RequireExact<u8, 1>>(&untagged).is_err());
+    assert!(cbor2::from_slice::<RequireAny<u8>>(&untagged).is_err());
+    assert!(cbor2::from_slice::<RequireExact<u8, 1>>(&untagged).is_err());
 
     // A tagged item whose payload fails to parse.
     let tagged_bool = [0xc1, 0xf5];
-    assert!(cbor::from_slice::<AllowAny<u8>>(&tagged_bool).is_err());
-    assert!(cbor::from_slice::<RequireExact<u8, 1>>(&tagged_bool).is_err());
+    assert!(cbor2::from_slice::<AllowAny<u8>>(&tagged_bool).is_err());
+    assert!(cbor2::from_slice::<RequireExact<u8, 1>>(&tagged_bool).is_err());
 }
 
 #[test]
 fn wrapper_payload_failures_propagate() {
-    use cbor::tag::{AllowAny, AllowExact, RequireAny, RequireExact};
+    use cbor2::tag::{AllowAny, AllowExact, RequireAny, RequireExact};
 
     // The untagged payload fails to parse for each wrapper.
     let not_a_u8 = [0xf5u8]; // true
-    assert!(cbor::from_slice::<AllowAny<u8>>(&not_a_u8).is_err());
-    assert!(cbor::from_slice::<AllowExact<u8, 1>>(&not_a_u8).is_err());
-    assert!(cbor::from_slice::<RequireAny<u8>>(&not_a_u8).is_err());
-    assert!(cbor::from_slice::<RequireExact<u8, 1>>(&not_a_u8).is_err());
+    assert!(cbor2::from_slice::<AllowAny<u8>>(&not_a_u8).is_err());
+    assert!(cbor2::from_slice::<AllowExact<u8, 1>>(&not_a_u8).is_err());
+    assert!(cbor2::from_slice::<RequireAny<u8>>(&not_a_u8).is_err());
+    assert!(cbor2::from_slice::<RequireExact<u8, 1>>(&not_a_u8).is_err());
 }
 
 // A tag wrapper used as the tag-number field of another tag: the tag
@@ -656,7 +656,7 @@ impl serde::Serialize for WrapperAsTagNumber {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeTupleVariant;
         let mut acc = serializer.serialize_tuple_variant("@@TAG@@", 1, "@@TAGGED@@", 2)?;
-        acc.serialize_field(&cbor::tag::AllowAny(Some(1), 0u8))?;
+        acc.serialize_field(&cbor2::tag::AllowAny(Some(1), 0u8))?;
         acc.serialize_field(&0u8)?;
         acc.end()
     }
@@ -664,6 +664,6 @@ impl serde::Serialize for WrapperAsTagNumber {
 
 #[test]
 fn tag_protocol_rejects_wrapper_tag_numbers() {
-    assert!(cbor::to_vec(&WrapperAsTagNumber).is_err());
+    assert!(cbor2::to_vec(&WrapperAsTagNumber).is_err());
     assert!(Value::serialized(&WrapperAsTagNumber).is_err());
 }

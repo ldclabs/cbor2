@@ -16,7 +16,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut stdout = stdout.lock();
 
     for value in serde_json::Deserializer::from_reader(stdin).into_iter::<serde_json::Value>() {
-        cbor::to_writer(&value?, &mut stdout)?;
+        cbor2::to_writer(&value?, &mut stdout)?;
     }
 
     Ok(stdout.flush()?)

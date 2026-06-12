@@ -7,13 +7,13 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 fn roundtrip<T: Serialize + DeserializeOwned + PartialEq + Debug>(value: T) {
-    let bytes = cbor::to_vec(&value).unwrap();
-    let back: T = cbor::from_slice(&bytes).unwrap();
+    let bytes = cbor2::to_vec(&value).unwrap();
+    let back: T = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(value, back);
 }
 
 fn assert_wire<T: Serialize>(value: T, hex: &str) {
-    assert_eq!(hex::encode(cbor::to_vec(&value).unwrap()), hex);
+    assert_eq!(hex::encode(cbor2::to_vec(&value).unwrap()), hex);
 }
 
 #[test]
@@ -55,27 +55,27 @@ fn big_integers() {
 
     // A bignum that fits in a primitive type decodes into it.
     let small_bignum = hex::decode("c24101").unwrap(); // 2(h'01')
-    assert_eq!(cbor::from_slice::<u8>(&small_bignum).unwrap(), 1);
+    assert_eq!(cbor2::from_slice::<u8>(&small_bignum).unwrap(), 1);
 }
 
 #[test]
 fn widening_and_narrowing() {
     // Integer width is not a wire property: anything fits anywhere as long
     // as the value is in range.
-    let one = cbor::to_vec(&1u8).unwrap();
-    assert_eq!(cbor::from_slice::<u64>(&one).unwrap(), 1);
-    assert_eq!(cbor::from_slice::<i8>(&one).unwrap(), 1);
-    assert_eq!(cbor::from_slice::<u128>(&one).unwrap(), 1);
+    let one = cbor2::to_vec(&1u8).unwrap();
+    assert_eq!(cbor2::from_slice::<u64>(&one).unwrap(), 1);
+    assert_eq!(cbor2::from_slice::<i8>(&one).unwrap(), 1);
+    assert_eq!(cbor2::from_slice::<u128>(&one).unwrap(), 1);
 
-    let big = cbor::to_vec(&300u64).unwrap();
-    assert!(cbor::from_slice::<u8>(&big).is_err());
+    let big = cbor2::to_vec(&300u64).unwrap();
+    assert!(cbor2::from_slice::<u8>(&big).is_err());
 
-    let neg = cbor::to_vec(&-1i8).unwrap();
-    assert!(cbor::from_slice::<u64>(&neg).is_err());
+    let neg = cbor2::to_vec(&-1i8).unwrap();
+    assert!(cbor2::from_slice::<u64>(&neg).is_err());
 
     // Floats decode at any width (f32 -> f64).
-    let f = cbor::to_vec(&1.5f32).unwrap();
-    assert_eq!(cbor::from_slice::<f64>(&f).unwrap(), 1.5);
+    let f = cbor2::to_vec(&1.5f32).unwrap();
+    assert_eq!(cbor2::from_slice::<f64>(&f).unwrap(), 1.5);
 }
 
 #[test]
@@ -85,14 +85,14 @@ fn options() {
     assert_wire(Option::<u32>::None, "f6");
 
     // Like in most formats, Some(None) collapses to null on the wire.
-    let bytes = cbor::to_vec(&Some(Option::<String>::None)).unwrap();
+    let bytes = cbor2::to_vec(&Some(Option::<String>::None)).unwrap();
     assert_eq!(
-        cbor::from_slice::<Option<Option<String>>>(&bytes).unwrap(),
+        cbor2::from_slice::<Option<Option<String>>>(&bytes).unwrap(),
         None
     );
 
     // Undefined (0xf7) also decodes as None.
-    assert_eq!(cbor::from_slice::<Option<u32>>(&[0xf7]).unwrap(), None);
+    assert_eq!(cbor2::from_slice::<Option<u32>>(&[0xf7]).unwrap(), None);
 }
 
 #[test]
@@ -114,19 +114,19 @@ fn sequences_and_maps() {
 #[test]
 fn byte_strings() {
     let bytes = serde_bytes::ByteBuf::from(vec![1u8, 2, 3, 4]);
-    let encoded = cbor::to_vec(&bytes).unwrap();
+    let encoded = cbor2::to_vec(&bytes).unwrap();
     assert_eq!(hex::encode(&encoded), "4401020304");
-    let back: serde_bytes::ByteBuf = cbor::from_slice(&encoded).unwrap();
+    let back: serde_bytes::ByteBuf = cbor2::from_slice(&encoded).unwrap();
     assert_eq!(back, bytes);
 
     // Liberality: a byte string decodes as Vec<u8> (array of ints) and an
     // array of ints decodes as a byte buffer.
-    let v: Vec<u8> = cbor::from_slice(&encoded).unwrap();
+    let v: Vec<u8> = cbor2::from_slice(&encoded).unwrap();
     assert_eq!(v, vec![1, 2, 3, 4]);
 
-    let array = cbor::to_vec(&vec![1u8, 2, 3, 4]).unwrap();
+    let array = cbor2::to_vec(&vec![1u8, 2, 3, 4]).unwrap();
     assert_eq!(hex::encode(&array), "8401020304");
-    let back: serde_bytes::ByteBuf = cbor::from_slice(&array).unwrap();
+    let back: serde_bytes::ByteBuf = cbor2::from_slice(&array).unwrap();
     assert_eq!(back, bytes);
 }
 
@@ -196,7 +196,7 @@ fn skipped_and_unknown_fields() {
     }
 
     // Extra fields in the input are ignored.
-    let full = cbor::to_vec(&Plain {
+    let full = cbor2::to_vec(&Plain {
         name: "x".into(),
         size: 42,
         tags: vec![],
@@ -204,7 +204,7 @@ fn skipped_and_unknown_fields() {
     })
     .unwrap();
 
-    let small: Small = cbor::from_slice(&full).unwrap();
+    let small: Small = cbor2::from_slice(&full).unwrap();
     assert_eq!(small, Small { name: "x".into() });
 }
 
@@ -212,21 +212,21 @@ fn skipped_and_unknown_fields() {
 fn indefinite_containers_decode() {
     // [_ 1, 2] (indefinite array)
     let bytes = hex::decode("9f0102ff").unwrap();
-    assert_eq!(cbor::from_slice::<Vec<u32>>(&bytes).unwrap(), vec![1, 2]);
+    assert_eq!(cbor2::from_slice::<Vec<u32>>(&bytes).unwrap(), vec![1, 2]);
 
     // {_ "a": 1} (indefinite map)
     let bytes = hex::decode("bf616101ff").unwrap();
-    let map: BTreeMap<String, u32> = cbor::from_slice(&bytes).unwrap();
+    let map: BTreeMap<String, u32> = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(map.len(), 1);
     assert_eq!(map["a"], 1);
 
     // (_ "strea", "ming") (segmented text)
     let bytes = hex::decode("7f657374726561646d696e67ff").unwrap();
-    assert_eq!(cbor::from_slice::<String>(&bytes).unwrap(), "streaming");
+    assert_eq!(cbor2::from_slice::<String>(&bytes).unwrap(), "streaming");
 
     // (_ h'0102', h'030405') (segmented bytes)
     let bytes = hex::decode("5f42010243030405ff").unwrap();
-    let buf: serde_bytes::ByteBuf = cbor::from_slice(&bytes).unwrap();
+    let buf: serde_bytes::ByteBuf = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(buf.as_ref(), &[1, 2, 3, 4, 5]);
 }
 
@@ -234,35 +234,35 @@ fn indefinite_containers_decode() {
 fn unknown_tags_are_transparent() {
     // 4711("x") decodes as a plain string when a string is requested.
     let bytes = hex::decode("d912676178").unwrap();
-    assert_eq!(cbor::from_slice::<String>(&bytes).unwrap(), "x");
+    assert_eq!(cbor2::from_slice::<String>(&bytes).unwrap(), "x");
 
     // 1(1363896240) decodes as a plain integer.
     let bytes = hex::decode("c11a514b67b0").unwrap();
-    assert_eq!(cbor::from_slice::<u64>(&bytes).unwrap(), 1363896240);
+    assert_eq!(cbor2::from_slice::<u64>(&bytes).unwrap(), 1363896240);
 }
 
 #[test]
 fn stream_of_items() {
     let mut buffer = Vec::new();
-    cbor::to_writer(&1u32, &mut buffer).unwrap();
-    cbor::to_writer(&"two", &mut buffer).unwrap();
-    cbor::to_writer(&vec![3u8], &mut buffer).unwrap();
+    cbor2::to_writer(&1u32, &mut buffer).unwrap();
+    cbor2::to_writer(&"two", &mut buffer).unwrap();
+    cbor2::to_writer(&vec![3u8], &mut buffer).unwrap();
 
-    let mut iter = cbor::de::Deserializer::from_reader(&buffer[..]).into_iter::<cbor::Value>();
-    assert_eq!(iter.next().unwrap().unwrap(), cbor::Value::from(1));
-    assert_eq!(iter.next().unwrap().unwrap(), cbor::Value::from("two"));
+    let mut iter = cbor2::de::Deserializer::from_reader(&buffer[..]).into_iter::<cbor2::Value>();
+    assert_eq!(iter.next().unwrap().unwrap(), cbor2::Value::from(1));
+    assert_eq!(iter.next().unwrap().unwrap(), cbor2::Value::from("two"));
     assert_eq!(
         iter.next().unwrap().unwrap(),
-        cbor::Value::Array(vec![cbor::Value::from(3)])
+        cbor2::Value::Array(vec![cbor2::Value::from(3)])
     );
     assert!(iter.next().is_none());
 
     // A truncated trailing item is an error, not a silent end.
     let mut truncated = Vec::new();
-    cbor::to_writer(&1u32, &mut truncated).unwrap();
+    cbor2::to_writer(&1u32, &mut truncated).unwrap();
     truncated.extend_from_slice(&[0x19, 0x01]); // u16 header missing a byte
 
-    let mut iter = cbor::de::Deserializer::from_reader(&truncated[..]).into_iter::<u32>();
+    let mut iter = cbor2::de::Deserializer::from_reader(&truncated[..]).into_iter::<u32>();
     assert_eq!(iter.next().unwrap().unwrap(), 1);
     assert!(iter.next().unwrap().is_err());
 }
@@ -302,11 +302,11 @@ impl Serialize for UnsizedMap {
 fn indefinite_containers_encode() {
     assert_wire(Unsized, "9f010203ff");
     assert_eq!(
-        cbor::from_slice::<Vec<u8>>(&cbor::to_vec(&Unsized).unwrap()).unwrap(),
+        cbor2::from_slice::<Vec<u8>>(&cbor2::to_vec(&Unsized).unwrap()).unwrap(),
         vec![1, 2, 3]
     );
 
     assert_wire(UnsizedMap, "bf0102ff");
-    let map: BTreeMap<u8, u8> = cbor::from_slice(&cbor::to_vec(&UnsizedMap).unwrap()).unwrap();
+    let map: BTreeMap<u8, u8> = cbor2::from_slice(&cbor2::to_vec(&UnsizedMap).unwrap()).unwrap();
     assert_eq!(map, [(1, 2)].into());
 }

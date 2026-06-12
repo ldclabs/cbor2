@@ -1,7 +1,7 @@
 //! Exhaustive tests for `Value` accessors, conversions and `Integer`.
 
-use cbor::value::Integer;
-use cbor::Value;
+use cbor2::value::Integer;
+use cbor2::Value;
 
 #[test]
 fn accessors_match_their_variant() {

@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 use std::io::{self, BufReader, Write};
 use std::process;
 
-use cbor::Value;
+use cbor2::Value;
 
 // Reads a stream of CBOR items from stdin and writes each of them to
 // stdout as a pretty-printed JSON value.
@@ -24,7 +24,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
-    for item in cbor::de::Deserializer::from_reader(stdin).into_iter::<Value>() {
+    for item in cbor2::de::Deserializer::from_reader(stdin).into_iter::<Value>() {
         let json = to_json(item?);
         serde_json::to_writer_pretty(&mut stdout, &json)?;
         stdout.write_all(b"\n")?;

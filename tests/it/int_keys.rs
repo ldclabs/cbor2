@@ -1,11 +1,11 @@
 //! Integer map keys through the `@@KEY@@` marker protocol. These tests
 //! write the marker by hand to exercise the library without the `derive`
-//! feature; the `cose` module covers the `#[cbor::int_keys]` macro.
+//! feature; the `cose` module covers the `#[cbor2::int_keys]` macro.
 
-use cbor::Value;
+use cbor2::Value;
 use serde::{Deserialize, Serialize};
 
-// What #[cbor::int_keys] expands to.
+// What #[cbor2::int_keys] expands to.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct CoseKey {
     #[serde(rename = "@@KEY@@1")]
@@ -30,15 +30,15 @@ fn sample() -> CoseKey {
 #[test]
 fn marked_fields_become_integer_keys() {
     // {1: 2, 3: -7, -1: 1, -2: h'11223344'}
-    let bytes = cbor::to_vec(&sample()).unwrap();
+    let bytes = cbor2::to_vec(&sample()).unwrap();
     assert_eq!(hex::encode(&bytes), "a4010203262001214411223344");
 
-    let back: CoseKey = cbor::from_slice(&bytes).unwrap();
+    let back: CoseKey = cbor2::from_slice(&bytes).unwrap();
     assert_eq!(back, sample());
 
     // The same bytes decode through a Value, and Value::serialized
     // produces integer keys too.
-    let value: Value = cbor::from_slice(&bytes).unwrap();
+    let value: Value = cbor2::from_slice(&bytes).unwrap();
     let keys: Vec<&Value> = value.as_map().unwrap().iter().map(|(k, _)| k).collect();
     assert_eq!(
         keys,
@@ -53,7 +53,7 @@ fn marked_fields_become_integer_keys() {
     assert_eq!(value.deserialized::<CoseKey>().unwrap(), sample());
 
     // Canonical encoding sorts integer keys like any other key.
-    let canonical = cbor::to_canonical_vec(&sample()).unwrap();
+    let canonical = cbor2::to_canonical_vec(&sample()).unwrap();
     assert_eq!(hex::encode(&canonical), "a4010203262001214411223344");
 }
 
@@ -67,9 +67,9 @@ fn plain_numeric_names_stay_text() {
         a: u8,
     }
 
-    let bytes = cbor::to_vec(&Plain { a: 7 }).unwrap();
+    let bytes = cbor2::to_vec(&Plain { a: 7 }).unwrap();
     assert_eq!(hex::encode(&bytes), "a1613107"); // {"1": 7}
-    assert_eq!(cbor::from_slice::<Plain>(&bytes).unwrap(), Plain { a: 7 });
+    assert_eq!(cbor2::from_slice::<Plain>(&bytes).unwrap(), Plain { a: 7 });
 }
 
 #[test]
@@ -81,37 +81,37 @@ fn aliases_match_text_and_integer_keys() {
         n: String,
     }
 
-    let renamed = cbor::to_vec(&cbor::cbor!({ "name" => "x" }).unwrap()).unwrap();
-    assert_eq!(cbor::from_slice::<Named>(&renamed).unwrap().n, "x");
-    let aliased = cbor::to_vec(&cbor::cbor!({ "title" => "x" }).unwrap()).unwrap();
-    assert_eq!(cbor::from_slice::<Named>(&aliased).unwrap().n, "x");
+    let renamed = cbor2::to_vec(&cbor2::cbor!({ "name" => "x" }).unwrap()).unwrap();
+    assert_eq!(cbor2::from_slice::<Named>(&renamed).unwrap().n, "x");
+    let aliased = cbor2::to_vec(&cbor2::cbor!({ "title" => "x" }).unwrap()).unwrap();
+    assert_eq!(cbor2::from_slice::<Named>(&aliased).unwrap().n, "x");
 
     // An integer-keyed field with a textual alias accepts both forms.
-    let mixed = cbor::cbor!({
+    let mixed = cbor2::cbor!({
         1 => 2,
         "alg" => -7,
         -1 => 1,
-        -2 => cbor::Value::Bytes(vec![0x11, 0x22, 0x33, 0x44]),
+        -2 => cbor2::Value::Bytes(vec![0x11, 0x22, 0x33, 0x44]),
     })
     .unwrap();
-    let bytes = cbor::to_vec(&mixed).unwrap();
-    assert_eq!(cbor::from_slice::<CoseKey>(&bytes).unwrap(), sample());
+    let bytes = cbor2::to_vec(&mixed).unwrap();
+    assert_eq!(cbor2::from_slice::<CoseKey>(&bytes).unwrap(), sample());
     assert_eq!(mixed.deserialized::<CoseKey>().unwrap(), sample());
 }
 
 #[test]
 fn unknown_integer_keys_are_ignored() {
-    let extra = cbor::cbor!({
+    let extra = cbor2::cbor!({
         1 => 2,
         3 => -7,
         -1 => 1,
-        -2 => cbor::Value::Bytes(vec![0x11, 0x22, 0x33, 0x44]),
+        -2 => cbor2::Value::Bytes(vec![0x11, 0x22, 0x33, 0x44]),
         99 => ["ignored", {"deep" => null}],
         -99 => "also ignored",
     })
     .unwrap();
-    let bytes = cbor::to_vec(&extra).unwrap();
-    assert_eq!(cbor::from_slice::<CoseKey>(&bytes).unwrap(), sample());
+    let bytes = cbor2::to_vec(&extra).unwrap();
+    assert_eq!(cbor2::from_slice::<CoseKey>(&bytes).unwrap(), sample());
 }
 
 #[test]
@@ -182,8 +182,8 @@ fn only_canonical_marked_decimals_become_integer_keys() {
     );
 
     // The streaming serializer agrees with the Value serializer.
-    let direct = cbor::to_vec(&oddballs()).unwrap();
-    assert_eq!(direct, cbor::to_vec(&value).unwrap());
+    let direct = cbor2::to_vec(&oddballs()).unwrap();
+    assert_eq!(direct, cbor2::to_vec(&value).unwrap());
 }
 
 #[test]
@@ -196,11 +196,11 @@ fn struct_variants_use_integer_keys_too() {
         },
     }
 
-    let bytes = cbor::to_vec(&Message::Signed { payload: 7 }).unwrap();
+    let bytes = cbor2::to_vec(&Message::Signed { payload: 7 }).unwrap();
     // {"Signed": {1: 7}}
     assert_eq!(hex::encode(&bytes), "a1665369676e6564a10107");
     assert_eq!(
-        cbor::from_slice::<Message>(&bytes).unwrap(),
+        cbor2::from_slice::<Message>(&bytes).unwrap(),
         Message::Signed { payload: 7 }
     );
     assert_eq!(
@@ -221,7 +221,7 @@ fn non_identifier_keys_are_rejected() {
     }
 
     // A float key cannot name a field, on either path.
-    let msg = cbor::from_slice::<F>(&hex::decode("a1f93c0001").unwrap())
+    let msg = cbor2::from_slice::<F>(&hex::decode("a1f93c0001").unwrap())
         .unwrap_err()
         .to_string();
     assert!(msg.contains("str, bytes or an integer"), "{msg}");
@@ -241,7 +241,7 @@ fn tagged_integer_keys_still_match() {
     }
 
     let bytes = hex::decode("a1c10107").unwrap(); // {1(1): 7}
-    assert_eq!(cbor::from_slice::<K>(&bytes).unwrap(), K { a: 7 });
+    assert_eq!(cbor2::from_slice::<K>(&bytes).unwrap(), K { a: 7 });
 
     let value = Value::Map(vec![(
         Value::Tag(9, Box::new(Value::from(1))),
@@ -282,11 +282,11 @@ fn integer_key_write_failures_propagate() {
 
     // The map header fits, the integer key does not.
     assert!(matches!(
-        cbor::to_writer(&Pos { a: 1 }, Limited(1)),
-        Err(cbor::ser::Error::Io(..))
+        cbor2::to_writer(&Pos { a: 1 }, Limited(1)),
+        Err(cbor2::ser::Error::Io(..))
     ));
     assert!(matches!(
-        cbor::to_writer(&Neg { a: 1 }, Limited(1)),
-        Err(cbor::ser::Error::Io(..))
+        cbor2::to_writer(&Neg { a: 1 }, Limited(1)),
+        Err(cbor2::ser::Error::Io(..))
     ));
 }

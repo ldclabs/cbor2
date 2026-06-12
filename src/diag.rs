@@ -34,7 +34,7 @@ use crate::value::Value;
 /// ```rust
 /// let bytes = hex::decode("bf61610161629f0203ffff").unwrap();
 /// assert_eq!(
-///     cbor::diagnostic(&bytes[..]).unwrap(),
+///     cbor2::diagnostic(&bytes[..]).unwrap(),
 ///     r#"{_ "a": 1, "b": [_ 2, 3]}"#
 /// );
 /// ```

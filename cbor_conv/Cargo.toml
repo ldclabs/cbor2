@@ -1,13 +1,10 @@
 [package]
 name = "cbor_conv"
-version = "0.3.0"  #:version
-authors = [
-    "Andrew Gallant <jamslam@gmail.com>",
-    "0xZensh <txr1883@gmail.com>",
-]
+version = "0.3.0"                                                               #:version
+authors = ["Andrew Gallant <jamslam@gmail.com>", "0xZensh <txr1883@gmail.com>"]
 description = "Command line tools for converting between CBOR and JSON."
-homepage = "https://github.com/ldclabs/rust-cbor"
-repository = "https://github.com/ldclabs/rust-cbor"
+homepage = "https://github.com/ldclabs/cbor2"
+repository = "https://github.com/ldclabs/cbor2"
 readme = "README.md"
 keywords = ["cbor", "json", "binary", "format", "encoding"]
 license = "Unlicense OR MIT"
@@ -29,5 +26,5 @@ test = false
 bench = false
 
 [dependencies]
-cbor = { path = "..", version = "0.5" }
+cbor2 = { path = "..", version = "0.5" }
 serde_json = "1.0"

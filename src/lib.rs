@@ -28,8 +28,8 @@ let photo = Photo {
     tags: vec!["morning".into(), "gradient".into()],
 };
 
-let bytes = cbor::to_vec(&photo).unwrap();
-let back: Photo = cbor::from_slice(&bytes).unwrap();
+let bytes = cbor2::to_vec(&photo).unwrap();
+let back: Photo = cbor2::from_slice(&bytes).unwrap();
 assert_eq!(photo, back);
 ```
 
@@ -40,7 +40,7 @@ When the shape of the data is not known in advance, decode into a
 builds `Value`s with a JSON-like syntax:
 
 ```rust
-use cbor::{cbor, Value};
+use cbor2::{cbor, Value};
 
 let value = cbor!({
     "code" => 415,
@@ -48,8 +48,8 @@ let value = cbor!({
     "tags" => ["legacy", 1.5],
 }).unwrap();
 
-let bytes = cbor::to_vec(&value).unwrap();
-let back: Value = cbor::from_slice(&bytes).unwrap();
+let bytes = cbor2::to_vec(&value).unwrap();
+let back: Value = cbor2::from_slice(&bytes).unwrap();
 assert_eq!(value, back);
 ```
 
@@ -62,13 +62,13 @@ CBOR data items can be wrapped in semantic [tags](tag) (RFC 8949 §3.4). The
 wrapper types in the [`tag`] module capture and emit tags through serde:
 
 ```rust
-use cbor::tag::RequireExact;
+use cbor2::tag::RequireExact;
 
 // Tag 32: a URI.
 type Uri = RequireExact<String, 32>;
 
 let uri: Uri = RequireExact("https://example.com".into());
-let bytes = cbor::to_vec(&uri).unwrap();
+let bytes = cbor2::to_vec(&uri).unwrap();
 assert_eq!(bytes[0], 0xd8); // tag(32)
 ```
 
@@ -76,7 +76,7 @@ assert_eq!(bytes[0], 0xd8); // tag(32)
 
 Protocols like COSE (RFC 9052) key their maps with integers, which
 serde's string-only field names cannot express. With the `derive`
-feature, the [`#[cbor::int_keys]`](int_keys) attribute macro maps struct
+feature, the [`#[cbor2::int_keys]`](int_keys) attribute macro maps struct
 fields to integer keys explicitly — a textual `#[serde(rename = "1")]`
 stays a *text* key, so there is no ambiguity between the two:
 
@@ -84,7 +84,7 @@ stays a *text* key, so there is no ambiguity between the two:
 # #[cfg(feature = "derive")] {
 use serde::{Deserialize, Serialize};
 
-#[cbor::int_keys]
+#[cbor2::int_keys]
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 struct CoseKey {
     #[cbor(key = 1)]
@@ -95,9 +95,9 @@ struct CoseKey {
 }
 
 let key = CoseKey { kty: 2, alg: -7 };
-let bytes = cbor::to_vec(&key).unwrap();
+let bytes = cbor2::to_vec(&key).unwrap();
 assert_eq!(hex::encode(&bytes), "a201020326"); // {1: 2, 3: -7}
-assert_eq!(cbor::from_slice::<CoseKey>(&bytes).unwrap(), key);
+assert_eq!(cbor2::from_slice::<CoseKey>(&bytes).unwrap(), key);
 # }
 ```
 
@@ -116,11 +116,11 @@ serializable value. Neither allocates heap memory.
 
 ```rust
 let value = ("hello", vec![1u8, 2, 3]);
-let bytes = cbor::to_vec(&value).unwrap();
+let bytes = cbor2::to_vec(&value).unwrap();
 
-assert_eq!(cbor::serialized_size(&value).unwrap(), bytes.len() as u64);
-assert!(cbor::validate(&bytes[..]).is_ok());
-assert!(cbor::validate(&bytes[..bytes.len() - 1]).is_err()); // truncated
+assert_eq!(cbor2::serialized_size(&value).unwrap(), bytes.len() as u64);
+assert!(cbor2::validate(&bytes[..]).is_ok());
+assert!(cbor2::validate(&bytes[..bytes.len() - 1]).is_err()); // truncated
 ```
 
 # Diagnostic notation
@@ -135,11 +135,11 @@ show what a [`Value`] cannot represent: indefinite-length markers,
 ```rust
 let bytes = hex::decode("bf61610161629f0203ffff").unwrap();
 assert_eq!(
-    cbor::diagnostic(&bytes[..]).unwrap(),
+    cbor2::diagnostic(&bytes[..]).unwrap(),
     r#"{_ "a": 1, "b": [_ 2, 3]}"#
 );
 
-let value = cbor::cbor!({ "k" => [1, -2.5, null] }).unwrap();
+let value = cbor2::cbor!({ "k" => [1, -2.5, null] }).unwrap();
 assert_eq!(value.to_string(), r#"{"k": [1, -2.5, null]}"#);
 ```
 
@@ -157,8 +157,8 @@ use std::collections::HashMap;
 // HashMap iteration order is random, but the encoding is stable.
 let map: HashMap<&str, i32> = [("z", 1), ("aa", 2), ("b", 3)].into();
 
-let bytes = cbor::to_canonical_vec(&map).unwrap();
-assert_eq!(bytes, cbor::to_canonical_vec(&map).unwrap());
+let bytes = cbor2::to_canonical_vec(&map).unwrap();
+assert_eq!(bytes, cbor2::to_canonical_vec(&map).unwrap());
 assert_eq!(hex::encode(&bytes), "a3616203617a01626161 02".replace(' ', ""));
 ```
 
@@ -167,16 +167,16 @@ RFC 7049 §3.9 (kept as RFC 8949 §4.2.3), where shorter encoded keys sort
 first. Pass [`KeyOrder::LengthFirst`] to the `*_with` variants for that:
 
 ```rust
-use cbor::KeyOrder;
+use cbor2::KeyOrder;
 
 let map: std::collections::HashMap<i64, bool> = [(100, true), (-1, false)].into();
 
 // Bytewise (RFC 8949 §4.2.1): 100 (0x1864) sorts before -1 (0x20).
-let core = cbor::to_canonical_vec(&map).unwrap();
+let core = cbor2::to_canonical_vec(&map).unwrap();
 assert_eq!(hex::encode(&core), "a2 1864f5 20f4".replace(' ', ""));
 
 // Length-first (RFC 7049 §3.9): -1 sorts before 100.
-let legacy = cbor::to_canonical_vec_with(&map, KeyOrder::LengthFirst).unwrap();
+let legacy = cbor2::to_canonical_vec_with(&map, KeyOrder::LengthFirst).unwrap();
 assert_eq!(hex::encode(&legacy), "a2 20f4 1864f5".replace(' ', ""));
 ```
 
@@ -204,9 +204,11 @@ This implementation is wire-compatible with
 
 # History
 
-`cbor` 0.4 and earlier (by Andrew Gallant) were built on the long-deprecated
-`rustc-serialize` framework and predate both serde 1.0 and RFC 8949. Version
-0.5 is a from-scratch rewrite; none of the old API survives.
+This crate descends from `cbor` by Andrew Gallant, whose 0.4 and earlier
+releases were built on the long-deprecated `rustc-serialize` framework and
+predate both serde 1.0 and RFC 8949. Version 0.5 is a from-scratch rewrite
+published under the `cbor2` name — the original crates.io name stays with
+the legacy release — and none of the old API survives.
 */
 
 #![deny(missing_docs)]
@@ -235,7 +237,7 @@ pub use crate::value::{KeyOrder, Value};
 /// with `#[cbor(key = <integer>)]`; see the [crate-level
 /// documentation](crate#integer-map-keys-cose) for an example.
 #[cfg(feature = "derive")]
-pub use cbor_derive::int_keys;
+pub use cbor2_derive::int_keys;
 
 /// Builds a [`Value`] from JSON-like syntax.
 ///
@@ -244,7 +246,7 @@ pub use cbor_derive::int_keys;
 /// arrays. The macro returns `Result<Value, value::Error>`.
 ///
 /// ```rust
-/// use cbor::cbor;
+/// use cbor2::cbor;
 ///
 /// let value = cbor!({
 ///     "code" => 415,

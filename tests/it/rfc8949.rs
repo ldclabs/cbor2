@@ -4,7 +4,7 @@
 //! item. Vectors that are in the preferred serialization are also encoded
 //! back and compared byte for byte.
 
-use cbor::{cbor, Value};
+use cbor2::{cbor, Value};
 
 struct Vector {
     hex: &'static str,
@@ -215,7 +215,7 @@ fn vectors() -> Vec<Vector> {
 fn decode() {
     for vector in vectors() {
         let bytes = hex::decode(vector.hex).unwrap();
-        let decoded: Value = cbor::from_slice(&bytes).unwrap();
+        let decoded: Value = cbor2::from_slice(&bytes).unwrap();
         assert_eq!(decoded, vector.value, "decoding {}", vector.hex);
     }
 }
@@ -223,7 +223,7 @@ fn decode() {
 #[test]
 fn encode_preferred() {
     for vector in vectors().into_iter().filter(|x| x.preferred) {
-        let bytes = cbor::to_vec(&vector.value).unwrap();
+        let bytes = cbor2::to_vec(&vector.value).unwrap();
         assert_eq!(
             hex::encode(&bytes),
             vector.hex,
@@ -237,20 +237,20 @@ fn encode_preferred() {
 fn nan() {
     for hex in ["f97e00", "fa7fc00000", "fb7ff8000000000000"] {
         let bytes = hex::decode(hex).unwrap();
-        let decoded: Value = cbor::from_slice(&bytes).unwrap();
+        let decoded: Value = cbor2::from_slice(&bytes).unwrap();
         assert!(matches!(decoded, Value::Float(x) if x.is_nan()), "{hex}");
     }
 
     // NaN encodes to the preferred (smallest) form.
     assert_eq!(
-        cbor::to_vec(&f64::NAN).unwrap(),
+        cbor2::to_vec(&f64::NAN).unwrap(),
         hex::decode("f97e00").unwrap()
     );
 }
 
 #[test]
 fn undefined_decodes_as_null() {
-    let decoded: Value = cbor::from_slice(&[0xf7]).unwrap();
+    let decoded: Value = cbor2::from_slice(&[0xf7]).unwrap();
     assert_eq!(decoded, Value::Null);
 }
 
@@ -260,12 +260,12 @@ fn simple_values() {
     // has no representation for them)...
     for hex in ["f0", "f818", "f8ff"] {
         let bytes = hex::decode(hex).unwrap();
-        assert!(cbor::from_slice::<Value>(&bytes).is_err(), "{hex}");
+        assert!(cbor2::from_slice::<Value>(&bytes).is_err(), "{hex}");
     }
 
     // ...and two-byte encodings of values below 32 are not well-formed.
     for x in 0u8..32 {
-        let err = cbor::from_slice::<Value>(&[0xf8, x]).unwrap_err();
-        assert!(matches!(err, cbor::de::Error::Syntax(0)), "f8{x:02x}");
+        let err = cbor2::from_slice::<Value>(&[0xf8, x]).unwrap_err();
+        assert!(matches!(err, cbor2::de::Error::Syntax(0)), "f8{x:02x}");
     }
 }

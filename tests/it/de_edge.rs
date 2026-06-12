@@ -2,12 +2,12 @@
 
 use std::collections::HashMap;
 
-use cbor::de::Error;
-use cbor::Value;
+use cbor2::de::Error;
+use cbor2::Value;
 use serde::Deserialize;
 
 fn de<T: serde::de::DeserializeOwned>(hex: &str) -> Result<T, Error> {
-    cbor::from_slice(&hex::decode(hex).unwrap())
+    cbor2::from_slice(&hex::decode(hex).unwrap())
 }
 
 #[derive(Debug, PartialEq, Deserialize)]
@@ -170,10 +170,10 @@ fn enum_forms() {
     assert!(de::<Enum>("a164556e697405").is_err());
 
     // The bare-text form only encodes unit variants.
-    let text = |name: &str| cbor::to_vec(&name).unwrap();
-    assert!(cbor::from_slice::<Enum>(&text("Newtype")).is_err());
-    assert!(cbor::from_slice::<Enum>(&text("Tuple")).is_err());
-    assert!(cbor::from_slice::<Enum>(&text("Struct")).is_err());
+    let text = |name: &str| cbor2::to_vec(&name).unwrap();
+    assert!(cbor2::from_slice::<Enum>(&text("Newtype")).is_err());
+    assert!(cbor2::from_slice::<Enum>(&text("Tuple")).is_err());
+    assert!(cbor2::from_slice::<Enum>(&text("Struct")).is_err());
 
     // Indefinite-length maps do not encode enums.
     assert!(de::<Enum>("bf674e657774797065182aff").is_err());
@@ -184,7 +184,7 @@ fn enum_forms() {
 #[test]
 fn stream_iterator_errors() {
     // A syntax error at an item boundary surfaces as an error, not EOF.
-    let mut iter = cbor::de::Deserializer::from_reader(&[0x01, 0x1c][..]).into_iter::<u32>();
+    let mut iter = cbor2::de::Deserializer::from_reader(&[0x01, 0x1c][..]).into_iter::<u32>();
     assert_eq!(iter.next().unwrap().unwrap(), 1);
     assert!(matches!(iter.next().unwrap(), Err(Error::Syntax(1))));
 }
@@ -202,7 +202,7 @@ fn deeply_tagged_input_hits_the_recursion_limit() {
     // Unknown tags recurse in deserialize_any; a tag bomb must error out.
     let bomb = vec![0xc1u8; 65536];
     assert!(matches!(
-        cbor::from_slice::<Value>(&bomb),
+        cbor2::from_slice::<Value>(&bomb),
         Err(Error::RecursionLimitExceeded)
     ));
 }
@@ -308,7 +308,7 @@ fn empty_input_fails_everywhere() {
     assert!(de::<()>("").is_err());
     assert!(de::<Option<u8>>("").is_err());
     assert!(de::<Enum>("").is_err());
-    assert!(de::<cbor::tag::AllowAny<u8>>("").is_err());
+    assert!(de::<cbor2::tag::AllowAny<u8>>("").is_err());
     assert!(de::<Value>("").is_err());
 }
 
@@ -360,7 +360,7 @@ fn nested_element_errors_propagate() {
     assert!(de::<Enum>("a1655475706c65820161").is_err()); // {"Tuple": [1, "a"]}
     assert!(de::<Enum>("a166537472756374a1617861").is_err()); // {"Struct": {"x": "a"}}
     assert!(de::<Option<u64>>("f5").is_err()); // Some(true)
-    assert!(de::<cbor::tag::AllowAny<u64>>("c1f5").is_err()); // 1(true)
+    assert!(de::<cbor2::tag::AllowAny<u64>>("c1f5").is_err()); // 1(true)
 }
 
 #[test]

@@ -39,7 +39,7 @@ impl Value {
     /// [`KeyOrder::Bytewise`].
     ///
     /// ```rust
-    /// use cbor::{cbor, Value};
+    /// use cbor2::{cbor, Value};
     ///
     /// let mut value = cbor!({ "z" => 1, "aa" => 2 }).unwrap();
     /// value.canonicalize().unwrap();
@@ -71,7 +71,7 @@ impl Value {
     ///   §4.2.2).
     ///
     /// ```rust
-    /// use cbor::{cbor, KeyOrder, Value};
+    /// use cbor2::{cbor, KeyOrder, Value};
     ///
     /// let mut value = cbor!({ "aa" => 2, 100 => 1, -1 => 0 }).unwrap();
     /// value.canonicalize_with(KeyOrder::LengthFirst).unwrap();

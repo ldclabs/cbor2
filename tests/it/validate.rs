@@ -4,13 +4,13 @@ use serde::Serialize;
 
 fn ok(hex: &str) {
     let bytes = hex::decode(hex).unwrap();
-    assert!(cbor::validate(&bytes[..]).is_ok(), "{hex} must validate");
+    assert!(cbor2::validate(&bytes[..]).is_ok(), "{hex} must validate");
 }
 
 fn bad(hex: &str) {
     let bytes = hex::decode(hex).unwrap();
     assert!(
-        cbor::validate(&bytes[..]).is_err(),
+        cbor2::validate(&bytes[..]).is_err(),
         "{hex} must be rejected"
     );
 }
@@ -18,8 +18,8 @@ fn bad(hex: &str) {
 #[test]
 fn everything_we_encode_validates() {
     fn check<T: ?Sized + Serialize>(value: &T) {
-        let bytes = cbor::to_vec(value).unwrap();
-        assert!(cbor::validate(&bytes[..]).is_ok());
+        let bytes = cbor2::to_vec(value).unwrap();
+        assert!(cbor2::validate(&bytes[..]).is_ok());
     }
 
     check(&true);
@@ -35,8 +35,8 @@ fn everything_we_encode_validates() {
     check(&Option::<u8>::None);
     check(&(0..100).collect::<Vec<u64>>());
     check(&std::collections::BTreeMap::from([("k", 1u8), ("v", 2)]));
-    check(&cbor::tag::AllowAny(Some(99), "tagged"));
-    check(&cbor::cbor!({ "a" => [1, {"b" => null}], 2 => true }).unwrap());
+    check(&cbor2::tag::AllowAny(Some(99), "tagged"));
+    check(&cbor2::cbor!({ "a" => [1, {"b" => null}], 2 => true }).unwrap());
 }
 
 #[test]
@@ -128,23 +128,23 @@ fn nesting_is_depth_limited() {
     let mut array_bomb = vec![0x81u8; 65536];
     *array_bomb.last_mut().unwrap() = 0x01;
     assert!(matches!(
-        cbor::validate(&array_bomb[..]),
-        Err(cbor::de::Error::RecursionLimitExceeded)
+        cbor2::validate(&array_bomb[..]),
+        Err(cbor2::de::Error::RecursionLimitExceeded)
     ));
 
     let mut tag_bomb = vec![0xc1u8; 65536];
     *tag_bomb.last_mut().unwrap() = 0x01;
     assert!(matches!(
-        cbor::validate(&tag_bomb[..]),
-        Err(cbor::de::Error::RecursionLimitExceeded)
+        cbor2::validate(&tag_bomb[..]),
+        Err(cbor2::de::Error::RecursionLimitExceeded)
     ));
 
     // Mixed indefinite nesting is limited too.
     let mut mixed = vec![0x9fu8; 65536];
     *mixed.last_mut().unwrap() = 0x01;
     assert!(matches!(
-        cbor::validate(&mixed[..]),
-        Err(cbor::de::Error::RecursionLimitExceeded)
+        cbor2::validate(&mixed[..]),
+        Err(cbor2::de::Error::RecursionLimitExceeded)
     ));
 }
 
@@ -155,8 +155,8 @@ fn utf8_across_chunk_boundaries() {
     for prefix_len in [4094usize, 4095, 4096] {
         let mut text = "a".repeat(prefix_len);
         text.push_str("水水");
-        let bytes = cbor::to_vec(&text).unwrap();
-        assert!(cbor::validate(&bytes[..]).is_ok(), "prefix {prefix_len}");
+        let bytes = cbor2::to_vec(&text).unwrap();
+        assert!(cbor2::validate(&bytes[..]).is_ok(), "prefix {prefix_len}");
     }
 
     // An invalid byte after the chunk boundary is still caught...
@@ -164,14 +164,14 @@ fn utf8_across_chunk_boundaries() {
     body[4500] = 0xff;
     let mut bytes = vec![0x7a, 0x00, 0x00, 0x13, 0x88]; // text(5000)
     bytes.extend_from_slice(&body);
-    assert!(cbor::validate(&bytes[..]).is_err());
+    assert!(cbor2::validate(&bytes[..]).is_err());
 
     // ...and so is an incomplete character at the very end of the body.
     let mut bytes = vec![0x7a, 0x00, 0x00, 0x13, 0x88];
     let mut body = vec![0x61u8; 4999];
     body.push(0xc3); // first byte of a two-byte character
     bytes.extend_from_slice(&body);
-    assert!(cbor::validate(&bytes[..]).is_err());
+    assert!(cbor2::validate(&bytes[..]).is_err());
 }
 
 #[test]
@@ -188,14 +188,14 @@ fn io_errors_propagate() {
 
     // A failure while reading the item is an I/O error...
     assert!(matches!(
-        cbor::validate(FailReader),
-        Err(cbor::de::Error::Io(..))
+        cbor2::validate(FailReader),
+        Err(cbor2::de::Error::Io(..))
     ));
 
     // ...and so is a failure while probing for trailing data.
     let reader = (&[0x01u8][..]).chain(FailReader);
     assert!(matches!(
-        cbor::validate(reader),
-        Err(cbor::de::Error::Io(..))
+        cbor2::validate(reader),
+        Err(cbor2::de::Error::Io(..))
     ));
 }

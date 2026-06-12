@@ -1,11 +1,11 @@
-//! End-to-end tests for the `#[cbor::int_keys]` attribute macro
+//! End-to-end tests for the `#[cbor2::int_keys]` attribute macro
 //! (`derive` feature).
 
-use cbor::Value;
+use cbor2::Value;
 use serde::{Deserialize, Serialize};
 
 // A COSE_Key-shaped structure (RFC 9052 §7): all map keys are integers.
-#[cbor::int_keys]
+#[cbor2::int_keys]
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct CoseKey {
     #[cbor(key = 1)]
@@ -34,22 +34,22 @@ fn sample() -> CoseKey {
 #[test]
 fn cose_key_round_trip() {
     // {1: 2, 3: -7, -1: 1, -2: h'11223344', "note": null}
-    let bytes = cbor::to_vec(&sample()).unwrap();
+    let bytes = cbor2::to_vec(&sample()).unwrap();
     assert_eq!(
         hex::encode(&bytes),
         "a5010203262001214411223344646e6f7465f6"
     );
-    assert_eq!(cbor::from_slice::<CoseKey>(&bytes).unwrap(), sample());
+    assert_eq!(cbor2::from_slice::<CoseKey>(&bytes).unwrap(), sample());
 
     // Through Value, with the textual alias accepted alongside.
     let value = Value::serialized(&sample()).unwrap();
     assert_eq!(value.deserialized::<CoseKey>().unwrap(), sample());
 
-    let aliased = cbor::cbor!({
+    let aliased = cbor2::cbor!({
         1 => 2,
         "alg" => -7,
         -1 => 1,
-        -2 => cbor::Value::Bytes(vec![0x11, 0x22, 0x33, 0x44]),
+        -2 => cbor2::Value::Bytes(vec![0x11, 0x22, 0x33, 0x44]),
         "note" => null,
     })
     .unwrap();
@@ -58,7 +58,7 @@ fn cose_key_round_trip() {
 
 #[test]
 fn enums_and_generics_work_too() {
-    #[cbor::int_keys]
+    #[cbor2::int_keys]
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     enum Message {
         Signed {
@@ -69,7 +69,7 @@ fn enums_and_generics_work_too() {
         Unit,
     }
 
-    let bytes = cbor::to_vec(&Message::Signed {
+    let bytes = cbor2::to_vec(&Message::Signed {
         payload: 7,
         label: true,
     })
@@ -77,18 +77,18 @@ fn enums_and_generics_work_too() {
     // {"Signed": {1: 7, "label": true}}
     assert_eq!(hex::encode(&bytes), "a1665369676e6564a20107656c6162656cf5");
     assert_eq!(
-        cbor::from_slice::<Message>(&bytes).unwrap(),
+        cbor2::from_slice::<Message>(&bytes).unwrap(),
         Message::Signed {
             payload: 7,
             label: true
         }
     );
-    assert_eq!(cbor::to_vec(&Message::Unit).unwrap(), b"\x64Unit");
+    assert_eq!(cbor2::to_vec(&Message::Unit).unwrap(), b"\x64Unit");
 }
 
 #[test]
 fn full_key_range() {
-    #[cbor::int_keys]
+    #[cbor2::int_keys]
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     struct Edges {
         #[cbor(key = 0)]
@@ -104,11 +104,11 @@ fn full_key_range() {
         hi: 1,
         lo: 2,
     };
-    let bytes = cbor::to_vec(&edges).unwrap();
+    let bytes = cbor2::to_vec(&edges).unwrap();
     // {0: 0, 18446744073709551615: 1, -18446744073709551616: 2}
     assert_eq!(
         hex::encode(&bytes),
         "a300001bffffffffffffffff013bffffffffffffffff02"
     );
-    assert_eq!(cbor::from_slice::<Edges>(&bytes).unwrap(), edges);
+    assert_eq!(cbor2::from_slice::<Edges>(&bytes).unwrap(), edges);
 }
