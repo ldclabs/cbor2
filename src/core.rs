@@ -13,6 +13,30 @@
 //! Most users should prefer the serde interface in the crate root or the
 //! dynamic [`Value`](crate::Value) type; this module is for applications
 //! that need precise control over the wire format.
+//!
+//! # Example
+//!
+//! Build and then inspect an indefinite-length byte string. The helper
+//! methods keep the body handling explicit while still validating segmented
+//! string structure for you:
+//!
+//! ```rust
+//! use cbor2::core::{Decoder, Encoder, Header};
+//!
+//! let mut encoded = Vec::new();
+//! let mut enc = Encoder::from(&mut encoded);
+//! enc.push(Header::Bytes(None)).unwrap();
+//! enc.bytes(&[0xde, 0xad]).unwrap();
+//! enc.bytes(&[0xbe, 0xef]).unwrap();
+//! enc.push(Header::Break).unwrap();
+//!
+//! let mut dec = Decoder::from(&encoded[..]);
+//! let Header::Bytes(len) = dec.pull().unwrap() else { unreachable!() };
+//!
+//! let mut body = Vec::new();
+//! dec.bytes_body(len, &mut body).unwrap();
+//! assert_eq!(body, [0xde, 0xad, 0xbe, 0xef]);
+//! ```
 
 use std::io::{Read, Write};
 
@@ -188,7 +212,10 @@ impl Header {
 /// An encoder for serializing CBOR items.
 ///
 /// All output is written through to the wrapped writer; consider providing
-/// a buffered writer for performance.
+/// a buffered writer for performance. [`Encoder`] only writes headers and
+/// raw bodies; it does not track container balance, so callers are
+/// responsible for writing the right number of array/map elements and the
+/// final [`Header::Break`] for indefinite-length items.
 pub struct Encoder<W>(W);
 
 impl<W: Write> From<W> for Encoder<W> {
@@ -200,6 +227,11 @@ impl<W: Write> From<W> for Encoder<W> {
 
 impl<W: Write> Encoder<W> {
     /// Writes a single header to the output.
+    ///
+    /// The shortest well-formed argument width is chosen automatically.
+    /// Floating-point values are encoded as `f16`, `f32` or `f64`, using the
+    /// shortest lossless width; NaN is emitted as the canonical half-width
+    /// quiet NaN when it round-trips exactly.
     pub fn push(&mut self, header: Header) -> std::io::Result<()> {
         let (major, arg) = header.into_parts();
 
@@ -239,12 +271,20 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Writes a definite-length byte string (header and body).
+    ///
+    /// When writing an indefinite-length byte string, first call
+    /// [`push`](Self::push) with [`Header::Bytes`]`(None)`, then call this
+    /// method for each definite-length segment, and finally push
+    /// [`Header::Break`].
     pub fn bytes(&mut self, value: &[u8]) -> std::io::Result<()> {
         self.push(Header::Bytes(Some(value.len())))?;
         self.0.write_all(value)
     }
 
     /// Writes a definite-length text string (header and body).
+    ///
+    /// When used as a segment inside [`Header::Text`]`(None)`, this writes one
+    /// well-formed UTF-8 text segment.
     pub fn text(&mut self, value: &str) -> std::io::Result<()> {
         self.push(Header::Text(Some(value.len())))?;
         self.0.write_all(value.as_bytes())
@@ -273,7 +313,9 @@ const CHUNK: usize = 16 * 1024;
 /// A decoder for parsing CBOR items.
 ///
 /// Input is read directly from the wrapped reader one item at a time;
-/// consider providing a buffered reader for performance.
+/// consider providing a buffered reader for performance. After a string
+/// header, callers must read the corresponding body before pulling the next
+/// header.
 pub struct Decoder<R> {
     reader: R,
     offset: usize,
@@ -295,6 +337,11 @@ impl<R: Read> From<R> for Decoder<R> {
 
 impl<R: Read> Decoder<R> {
     /// Pulls the next header from the input.
+    ///
+    /// For byte and text strings this returns the string header only; read
+    /// the body with [`bytes_body`](Self::bytes_body),
+    /// [`text_body`](Self::text_body) or [`read_exact`](Self::read_exact)
+    /// before continuing.
     pub fn pull(&mut self) -> Result<Header, Error> {
         if let Some((header, end)) = self.pushback.take() {
             self.mark = self.offset;
@@ -405,6 +452,11 @@ impl<R: Read> Decoder<R> {
     }
 
     /// Reads exactly `data.len()` bytes of an item body from the input.
+    ///
+    /// Use this after pulling a definite-length [`Header::Bytes`] or
+    /// [`Header::Text`] when you want to own body validation. The higher
+    /// level [`bytes_body`](Self::bytes_body) and
+    /// [`text_body`](Self::text_body) helpers also handle segmented strings.
     pub fn read_exact(&mut self, data: &mut [u8]) -> std::io::Result<()> {
         debug_assert!(self.pushback.is_none());
         self.reader.read_exact(data)?;

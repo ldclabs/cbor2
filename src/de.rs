@@ -184,6 +184,19 @@ impl<R: Read> Deserializer<R> {
     /// The iterator yields decoded items until the input is exhausted; a
     /// clean end of input terminates the iterator, while anything else
     /// (including a truncated item) yields an error.
+    ///
+    /// ```rust
+    /// let mut stream = Vec::new();
+    /// cbor2::to_writer(&1u8, &mut stream).unwrap();
+    /// cbor2::to_writer(&"two", &mut stream).unwrap();
+    ///
+    /// let values: Vec<cbor2::Value> = cbor2::de::Deserializer::from_reader(&stream[..])
+    ///     .into_iter()
+    ///     .collect::<Result<_, _>>()
+    ///     .unwrap();
+    ///
+    /// assert_eq!(values, vec![cbor2::Value::from(1), cbor2::Value::from("two")]);
+    /// ```
     // Named for symmetry with `serde_json::Deserializer::into_iter`.
     #[allow(clippy::should_implement_trait)]
     pub fn into_iter<T: de::DeserializeOwned>(self) -> Iter<T, R> {
@@ -1082,6 +1095,16 @@ fn check_utf8_body<R: Read>(decoder: &mut Decoder<R>, len: usize) -> Result<(), 
 ///
 /// For repeated small reads consider wrapping the reader in a
 /// [`std::io::BufReader`].
+///
+/// This reads one leading CBOR item and leaves any following bytes unread.
+/// Use [`validate`] when an input must contain exactly one well-formed item,
+/// or [`Deserializer::into_iter`] to decode a CBOR sequence.
+///
+/// ```rust
+/// let bytes = cbor2::to_vec(&("ok", 200u16)).unwrap();
+/// let value: (String, u16) = cbor2::from_reader(&bytes[..]).unwrap();
+/// assert_eq!(value, ("ok".to_string(), 200));
+/// ```
 #[inline]
 pub fn from_reader<T: de::DeserializeOwned, R: Read>(reader: R) -> Result<T, Error> {
     let mut deserializer = Deserializer::from_reader(reader);
@@ -1089,6 +1112,18 @@ pub fn from_reader<T: de::DeserializeOwned, R: Read>(reader: R) -> Result<T, Err
 }
 
 /// Deserializes a value from a byte slice of CBOR.
+///
+/// This decodes the first complete CBOR item in `slice`. It does not report
+/// trailing data; call [`validate`] first if trailing bytes should be an
+/// error.
+///
+/// ```rust
+/// let mut bytes = cbor2::to_vec(&1u8).unwrap();
+/// bytes.extend(cbor2::to_vec(&2u8).unwrap());
+///
+/// assert_eq!(cbor2::from_slice::<u8>(&bytes).unwrap(), 1);
+/// assert!(cbor2::validate(&bytes[..]).is_err());
+/// ```
 #[inline]
 pub fn from_slice<T: de::DeserializeOwned>(slice: &[u8]) -> Result<T, Error> {
     from_reader(slice)

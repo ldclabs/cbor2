@@ -33,6 +33,54 @@ let back: Photo = cbor2::from_slice(&bytes).unwrap();
 assert_eq!(photo, back);
 ```
 
+`from_slice` and `from_reader` deserialize one leading CBOR item. Use
+[`validate`] first when a byte buffer must contain exactly one item, or use
+[`de::Deserializer::into_iter`] for a CBOR sequence.
+
+# Byte strings and `serde_bytes`
+
+Serde's default data model treats `Vec<u8>` and `&[u8]` as sequences, so
+they serialize as CBOR arrays, not byte strings. Use
+[`serde_bytes`](https://docs.rs/serde_bytes/latest/serde_bytes/) when the
+wire type should be major type 2.
+
+```rust
+let bytes = vec![1u8, 2, 3, 4];
+
+// Bare Vec<u8>: [1, 2, 3, 4]
+assert_eq!(hex::encode(cbor2::to_vec(&bytes).unwrap()), "8401020304");
+
+// serde_bytes::ByteBuf: h'01020304'
+let bytes = serde_bytes::ByteBuf::from(bytes);
+assert_eq!(hex::encode(cbor2::to_vec(&bytes).unwrap()), "4401020304");
+```
+
+For struct fields, use serde's field adapter:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct Packet {
+    #[serde(with = "serde_bytes")]
+    payload: Vec<u8>,
+}
+
+let packet = Packet { payload: vec![0xde, 0xad, 0xbe, 0xef] };
+assert_eq!(
+    hex::encode(cbor2::to_vec(&packet).unwrap()),
+    "a1677061796c6f616444deadbeef"
+);
+```
+
+When building dynamic data directly, [`Value::Bytes`] already represents a
+CBOR byte string:
+
+```rust
+let value = cbor2::Value::Bytes(vec![0xde, 0xad]);
+assert_eq!(hex::encode(cbor2::to_vec(&value).unwrap()), "42dead");
+```
+
 # Dynamic values
 
 When the shape of the data is not known in advance, decode into a
@@ -55,6 +103,42 @@ assert_eq!(value, back);
 
 `Value::serialized` and `Value::deserialized` convert between `Value` and
 any type implementing the serde traits.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+let value = cbor2::Value::serialized(&Point { x: -2, y: 5 }).unwrap();
+assert_eq!(value.to_string(), r#"{"x": -2, "y": 5}"#);
+
+let point: Point = value.deserialized().unwrap();
+assert_eq!(point, Point { x: -2, y: 5 });
+```
+
+# CBOR sequences
+
+CBOR sequences (RFC 8742) are streams of adjacent complete CBOR items.
+Write them by calling [`to_writer`] repeatedly, and read them with
+[`de::Deserializer::into_iter`]:
+
+```rust
+let mut stream = Vec::new();
+cbor2::to_writer(&"hello", &mut stream).unwrap();
+cbor2::to_writer(&42u64, &mut stream).unwrap();
+
+let items: Vec<cbor2::Value> = cbor2::de::Deserializer::from_reader(&stream[..])
+    .into_iter()
+    .collect::<Result<_, _>>()
+    .unwrap();
+
+assert_eq!(items, vec![cbor2::Value::from("hello"), cbor2::Value::from(42)]);
+assert!(cbor2::validate(&stream[..]).is_err()); // not exactly one item
+```
 
 # Tags
 
@@ -141,6 +225,36 @@ assert_eq!(
 
 let value = cbor2::cbor!({ "k" => [1, -2.5, null] }).unwrap();
 assert_eq!(value.to_string(), r#"{"k": [1, -2.5, null]}"#);
+```
+
+# Low-level headers
+
+The [`core`] module exposes the pull/push header codec for applications
+that need to preserve wire structure such as indefinite-length strings:
+
+```rust
+use cbor2::core::{Decoder, Encoder, Header};
+
+let mut bytes = Vec::new();
+let mut enc = Encoder::from(&mut bytes);
+enc.push(Header::Array(None)).unwrap();
+enc.text("chunked").unwrap();
+enc.bytes(&[0xde, 0xad]).unwrap();
+enc.push(Header::Break).unwrap();
+
+let mut dec = Decoder::from(&bytes[..]);
+assert_eq!(dec.pull().unwrap(), Header::Array(None));
+
+let Header::Text(len) = dec.pull().unwrap() else { unreachable!() };
+let mut text = String::new();
+dec.text_body(len, &mut text).unwrap();
+assert_eq!(text, "chunked");
+
+let Header::Bytes(len) = dec.pull().unwrap() else { unreachable!() };
+let mut body = Vec::new();
+dec.bytes_body(len, &mut body).unwrap();
+assert_eq!(body, vec![0xde, 0xad]);
+assert_eq!(dec.pull().unwrap(), Header::Break);
 ```
 
 # Deterministic encoding

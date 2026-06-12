@@ -99,6 +99,48 @@ assert_eq!(photo, back);
 
 `to_writer` and `from_reader` work with any `std::io::Write`/`Read`, and
 `Deserializer::into_iter` decodes a stream of concatenated items.
+`from_slice`/`from_reader` read one leading CBOR item; use `validate` when
+a buffer must contain exactly one item.
+
+### Byte strings and `serde_bytes`
+
+A common serde pitfall: bare `Vec<u8>` and `&[u8]` serialize as arrays of
+integers, not as CBOR byte strings. Use
+[`serde_bytes`](https://docs.rs/serde_bytes/latest/serde_bytes/) for binary
+payloads.
+
+```rust
+let bytes = vec![1u8, 2, 3, 4];
+
+// Bare Vec<u8>: [1, 2, 3, 4]
+assert_eq!(hex::encode(cbor2::to_vec(&bytes).unwrap()), "8401020304");
+
+// serde_bytes: h'01020304'
+let bytes = serde_bytes::ByteBuf::from(bytes);
+assert_eq!(hex::encode(cbor2::to_vec(&bytes).unwrap()), "4401020304");
+```
+
+For fields in derived structs, annotate byte buffers explicitly:
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct Packet {
+    #[serde(with = "serde_bytes")]
+    payload: Vec<u8>,
+}
+
+let packet = Packet { payload: vec![0xde, 0xad, 0xbe, 0xef] };
+assert_eq!(
+    hex::encode(cbor2::to_vec(&packet).unwrap()),
+    "a1677061796c6f616444deadbeef"
+);
+```
+
+If you build data with `Value`, use `Value::Bytes(...)` or the `From`
+implementations for byte slices/vectors; those already represent a CBOR
+byte string.
 
 ### Dynamic values
 
@@ -125,6 +167,34 @@ use cbor2::tag::RequireExact;
 let datetime = RequireExact::<String, 0>("2013-03-21T20:04:00Z".into());
 let bytes = cbor2::to_vec(&datetime).unwrap();
 assert_eq!(bytes[0], 0xc0);
+```
+
+### CBOR sequences
+
+```rust
+let mut stream = Vec::new();
+cbor2::to_writer(&"first", &mut stream).unwrap();
+cbor2::to_writer(&2u64, &mut stream).unwrap();
+
+let items: Vec<cbor2::Value> = cbor2::de::Deserializer::from_reader(&stream[..])
+    .into_iter()
+    .collect::<Result<_, _>>()
+    .unwrap();
+
+assert_eq!(items, vec![cbor2::Value::from("first"), cbor2::Value::from(2)]);
+assert!(cbor2::validate(&stream[..]).is_err()); // a sequence is not one item
+```
+
+### More examples
+
+Runnable examples live in `examples/`:
+
+```bash
+cargo run --example basic
+cargo run --example bytes
+cargo run --example sequence
+cargo run --example core_headers
+cargo run --features derive --example cose_int_keys
 ```
 
 ## Design decisions

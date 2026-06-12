@@ -651,6 +651,25 @@ impl<'de> de::VariantAccess<'de> for Deserializer<&Value> {
 
 impl Value {
     /// Deserializes this `Value` into any `T: Deserialize`.
+    ///
+    /// Tags are preserved for `cbor2::tag` wrappers and skipped in typed
+    /// positions where this crate's streaming deserializer also skips them.
+    /// Integer map keys use the same `#[cbor2::int_keys]` marker protocol as
+    /// byte-level decoding.
+    ///
+    /// ```rust
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Debug, PartialEq, Deserialize)]
+    /// struct Event {
+    ///     level: String,
+    ///     count: u64,
+    /// }
+    ///
+    /// let value = cbor2::cbor!({ "level" => "info", "count" => 2 }).unwrap();
+    /// let event: Event = value.deserialized().unwrap();
+    /// assert_eq!(event, Event { level: "info".into(), count: 2 });
+    /// ```
     #[inline]
     pub fn deserialized<'de, T: de::Deserialize<'de>>(&self) -> Result<T, Error> {
         T::deserialize(Deserializer(self))

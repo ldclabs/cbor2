@@ -31,5 +31,9 @@ serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 hex = "0.4"
 
+[[example]]
+name = "cose_int_keys"
+required-features = ["derive"]
+
 [package.metadata.docs.rs]
 all-features = true

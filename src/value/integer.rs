@@ -4,6 +4,17 @@
 /// major type 0 or 1 — that is, any value in the range `-2^64 ..= 2^64 - 1` —
 /// without resorting to big integer (tag 2/3) encoding. Construct one with
 /// `From`/`TryFrom` and extract the value with `TryFrom`/`From`.
+///
+/// ```rust
+/// use cbor2::value::Integer;
+///
+/// let small = Integer::from(-42i8);
+/// assert_eq!(i128::from(small), -42);
+/// assert_eq!(i16::try_from(small).unwrap(), -42);
+///
+/// assert!(Integer::try_from(2u128.pow(64) - 1).is_ok());
+/// assert!(Integer::try_from(2u128.pow(64)).is_err());
+/// ```
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Integer(i128);
 

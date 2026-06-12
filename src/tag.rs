@@ -20,6 +20,17 @@
 //! Note that these types are only meaningful with the CBOR serializer and
 //! deserializer from this crate; other formats will see the internal
 //! protocol.
+//!
+//! # Choosing a wrapper
+//!
+//! * [`RequireExact<V, TAG>`] is for protocol fields where one specific tag
+//!   is mandatory.
+//! * [`AllowExact<V, TAG>`] accepts old or lenient peers that omit a known
+//!   tag, but always emits the tag when serializing.
+//! * [`RequireAny<V>`] captures the numeric tag when a tag is mandatory but
+//!   not known statically.
+//! * [`AllowAny<V>`] is the most permissive form: it preserves a present tag
+//!   and also accepts untagged input.
 
 use serde::{de, forward_to_deserialize_any, ser, Deserialize, Serialize};
 
@@ -152,6 +163,17 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Internal<T> {
 ///
 /// The tag (if present) is captured during deserialization and emitted
 /// during serialization.
+///
+/// ```rust
+/// use cbor2::tag::AllowAny;
+///
+/// let tagged = hex::decode("c11a514b67b0").unwrap(); // 1(1363896240)
+/// let value: AllowAny<u64> = cbor2::from_slice(&tagged).unwrap();
+/// assert_eq!(value, AllowAny(Some(1), 1363896240));
+///
+/// let untagged: AllowAny<u64> = cbor2::from_slice(&cbor2::to_vec(&7u64).unwrap()).unwrap();
+/// assert_eq!(untagged, AllowAny(None, 7));
+/// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AllowAny<V>(pub Option<u64>, pub V);
 
@@ -178,6 +200,9 @@ impl<V: Serialize> Serialize for AllowAny<V> {
 /// Allows a specific tag, or no tag at all.
 ///
 /// The tag is always emitted during serialization.
+///
+/// This is useful for migrations where producers should emit a known tag but
+/// consumers must still accept older untagged payloads.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AllowExact<V, const TAG: u64>(pub V);
 
@@ -202,6 +227,8 @@ impl<V: Serialize, const TAG: u64> Serialize for AllowExact<V, TAG> {
 /// Requires a tag with any number to be present.
 ///
 /// The tag is always emitted during serialization.
+///
+/// Use this when the tag number is data, not a type-level constant.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequireAny<V>(pub u64, pub V);
 
@@ -225,6 +252,17 @@ impl<V: Serialize> Serialize for RequireAny<V> {
 /// Requires a specific tag to be present.
 ///
 /// The tag is always emitted during serialization.
+///
+/// ```rust
+/// use cbor2::tag::RequireExact;
+///
+/// type DateTime = RequireExact<String, 0>;
+///
+/// let datetime = RequireExact::<String, 0>("2013-03-21T20:04:00Z".into());
+/// let bytes = cbor2::to_vec(&datetime).unwrap();
+/// assert_eq!(hex::encode(&bytes), "c074323031332d30332d32315432303a30343a30305a");
+/// assert!(cbor2::from_slice::<DateTime>(&cbor2::to_vec(&"plain").unwrap()).is_err());
+/// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequireExact<V, const TAG: u64>(pub V);
 

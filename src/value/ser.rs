@@ -430,6 +430,26 @@ impl ser::SerializeStructVariant for Serializer<Named<Vec<(Value, Value)>>> {
 
 impl Value {
     /// Serializes any `T: Serialize` into a `Value`.
+    ///
+    /// This uses the same CBOR-oriented serde data model as [`to_vec`]:
+    /// structs become maps, enum unit variants become text strings, other
+    /// enum variants become single-entry maps, `u128`/`i128` may become
+    /// bignum tags, and `cbor2::tag` wrappers become [`Value::Tag`].
+    ///
+    /// [`to_vec`]: crate::to_vec
+    ///
+    /// ```rust
+    /// use serde::Serialize;
+    ///
+    /// #[derive(Serialize)]
+    /// struct Event<'a> {
+    ///     level: &'a str,
+    ///     count: u64,
+    /// }
+    ///
+    /// let value = cbor2::Value::serialized(&Event { level: "info", count: 2 }).unwrap();
+    /// assert_eq!(value.to_string(), r#"{"level": "info", "count": 2}"#);
+    /// ```
     #[inline]
     pub fn serialized<T: ?Sized + ser::Serialize>(value: &T) -> Result<Self, Error> {
         value.serialize(Serializer(()))

@@ -46,6 +46,12 @@ impl serde::ser::Error for Error {
 /// or hashed map type. This preserves the order of the pairs on the wire and
 /// makes no assumptions about key uniqueness; `collect()` the pairs into a
 /// map type of your choice if you need one.
+///
+/// `Value` intentionally models the serde-visible CBOR data model, not every
+/// byte-level spelling. For example, indefinite-length strings are decoded
+/// into the same variants as definite-length strings, while unknown tags
+/// remain as [`Value::Tag`] and oversized bignums stay as tagged byte
+/// strings.
 #[non_exhaustive]
 #[derive(Clone, PartialEq, PartialOrd)]
 pub enum Value {
