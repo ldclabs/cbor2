@@ -37,6 +37,17 @@ assert_eq!(photo, back);
 [`validate`] first when a byte buffer must contain exactly one item, or use
 [`de::Deserializer::into_iter`] for a CBOR sequence.
 
+# Command line tool
+
+The workspace also publishes `cbor2-cli`, which installs the `cbor`
+command for converting CBOR to and from JSON and for rendering diagnostic
+notation:
+
+```text
+brew install ldclabs/tap/cbor2-cli   # Homebrew, installs cbor
+cargo install cbor2-cli              # Cargo, installs cbor
+```
+
 # Byte strings and `serde_bytes`
 
 Serde's default data model treats `Vec<u8>` and `&[u8]` as sequences, so

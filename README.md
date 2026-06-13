@@ -23,6 +23,13 @@ Dual-licensed under MIT or the [UNLICENSE](http://unlicense.org).
 cbor2 = "1"
 ```
 
+For the `cbor` command line tool, install `cbor2-cli`:
+
+```bash
+brew install ldclabs/tap/cbor2-cli   # Homebrew, installs `cbor`
+cargo install cbor2-cli              # Cargo, installs `cbor`
+```
+
 ```rust
 use serde::{Deserialize, Serialize};
 
@@ -385,14 +392,14 @@ The rewrite follows the design of (and is wire-compatible with)
 ## Command line tool
 
 The workspace ships a `cbor` command line tool in
-[`cbor2-cli`](cbor2-cli/README.md) (`cargo install cbor2-cli`). Bare
-`cbor` shows any CBOR — from a file, stdin, a hex string or a base64
-string — as diagnostic notation (RFC 8949 §8); `decode` converts to
-pretty JSON (or pretty diagnostic with `--diag`) and `encode` converts
-JSON to CBOR:
+[`cbor2-cli`](cbor2-cli/README.md). Bare `cbor` shows any CBOR — from a
+file, stdin, a hex string or a base64 string — as diagnostic notation
+(RFC 8949 §8); `decode` converts to pretty JSON (or pretty diagnostic
+with `--diag`) and `encode` converts JSON to CBOR:
 
 ```bash
-cargo install cbor2-cli   # installs the `cbor` binary
+brew install ldclabs/tap/cbor2-cli   # Homebrew
+cargo install cbor2-cli              # Cargo
 ```
 
 ```bash

@@ -6,6 +6,13 @@
 //! `--diag` — pretty-printed diagnostic notation; `encode` converts JSON
 //! values into CBOR items. Data errors exit with status 1, usage errors
 //! with status 2.
+//!
+//! Install with Homebrew or Cargo:
+//!
+//! ```text
+//! brew install ldclabs/tap/cbor2-cli   # installs cbor
+//! cargo install cbor2-cli              # installs cbor
+//! ```
 
 use std::env;
 use std::fmt::Write as _;

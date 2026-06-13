@@ -1,6 +1,6 @@
 [package]
 name = "cbor2-cli"
-version = "1.0.1"
+version = "1.0.2"
 authors = ["0xZensh <txr1883@gmail.com>"]
 description = "The cbor command line tool: convert CBOR to and from JSON and render diagnostic notation."
 homepage = "https://github.com/ldclabs/cbor2"

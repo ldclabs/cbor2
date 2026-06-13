@@ -282,6 +282,17 @@ fn deserialized_collections() {
             b: "x".into()
         }
     );
+    let byte_keyed = Value::Map(vec![
+        (Value::Bytes(b"a".to_vec()), Value::from(1)),
+        (Value::Bytes(b"b".to_vec()), Value::from("x")),
+    ]);
+    assert_eq!(
+        byte_keyed.deserialized::<Plain>().unwrap(),
+        Plain {
+            a: 1,
+            b: "x".into()
+        }
+    );
     let simple = cbor!({"k" => 1}).unwrap();
     assert_eq!(
         simple.deserialized::<BTreeMap<String, u8>>().unwrap(),

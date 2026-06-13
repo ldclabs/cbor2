@@ -34,6 +34,18 @@ pub fn derive_cbor(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
 fn expand(item: TokenStream) -> syn::Result<TokenStream> {
     let input: syn::DeriveInput = syn::parse2(item)?;
 
+    if let Some(lifetime) = input
+        .generics
+        .lifetimes()
+        .find(|def| def.lifetime.ident == "de")
+    {
+        return Err(syn::Error::new(
+            lifetime.lifetime.span(),
+            "#[derive(Cbor)] cannot support a lifetime named 'de because serde's \
+             Deserialize derive reserves that name; rename the lifetime",
+        ));
+    }
+
     let tag = container_tag(&input.attrs)?;
     let serde = scan_serde(&input.attrs);
     if let Some(span) = serde.rename.map(|(_, span)| span).or(serde.split_rename) {
@@ -175,19 +187,20 @@ fn generate(input: &syn::DeriveInput, tag: Option<u64>, entries: &[Entry]) -> To
     }
     let (ser_impl_generics, ..) = ser_generics.split_for_impl();
 
+    let de_lifetime = fresh_de_lifetime(&input.generics);
     let mut de_generics = input.generics.clone();
     for param in de_generics.type_params_mut() {
         param
             .bounds
-            .push(syn::parse_quote!(::serde::Deserialize<'de>));
+            .push(syn::parse_quote!(::serde::Deserialize<#de_lifetime>));
     }
-    let mut de_lifetime: syn::LifetimeParam = syn::parse_quote!('de);
-    de_lifetime
+    let mut de_lifetime_param = syn::LifetimeParam::new(de_lifetime.clone());
+    de_lifetime_param
         .bounds
         .extend(input.generics.lifetimes().map(|def| def.lifetime.clone()));
     de_generics
         .params
-        .insert(0, syn::GenericParam::Lifetime(de_lifetime));
+        .insert(0, syn::GenericParam::Lifetime(de_lifetime_param));
     let (de_impl_generics, ..) = de_generics.split_for_impl();
 
     // The `cbor2::Cbor` trait exposes the declared protocol details.
@@ -217,10 +230,10 @@ fn generate(input: &syn::DeriveInput, tag: Option<u64>, entries: &[Entry]) -> To
             }
 
             #[automatically_derived]
-            impl #de_impl_generics ::serde::Deserialize<'de> for #ident #ty_generics #where_clause {
+            impl #de_impl_generics ::serde::Deserialize<#de_lifetime> for #ident #ty_generics #where_clause {
                 fn deserialize<__D>(deserializer: __D) -> ::core::result::Result<Self, __D::Error>
                 where
-                    __D: ::serde::Deserializer<'de>,
+                    __D: ::serde::Deserializer<#de_lifetime>,
                 {
                     #shadow_ident::deserialize(deserializer)
                 }
@@ -233,6 +246,17 @@ fn generate(input: &syn::DeriveInput, tag: Option<u64>, entries: &[Entry]) -> To
             }
         };
     }
+}
+
+// Picks an internal deserializer lifetime that cannot collide with the
+// user's generics. User code may legitimately name a lifetime `'de`.
+fn fresh_de_lifetime(generics: &syn::Generics) -> syn::Lifetime {
+    let mut name = String::from("__de");
+    while generics.lifetimes().any(|def| def.lifetime.ident == name) {
+        name.push('_');
+    }
+
+    syn::Lifetime::new(&format!("'{name}"), proc_macro2::Span::call_site())
 }
 
 // The attributes that carry over to the shadow: serde configuration and
@@ -561,7 +585,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("impl < 'de > :: serde :: Deserialize < 'de > for ProtectedHeader"),
+            out.contains("impl < '__de > :: serde :: Deserialize < '__de > for ProtectedHeader"),
             "{out}"
         );
         // The #[cbor(...)] attributes stay off the shadow.
@@ -674,7 +698,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("impl < 'de , T : Clone + :: serde :: Deserialize < 'de > >"),
+            out.contains("impl < '__de , T : Clone + :: serde :: Deserialize < '__de > >"),
             "{out}"
         );
         // The trait impl carries the original generics, without serde bounds.
@@ -682,6 +706,35 @@ mod tests {
             out.contains("impl < T : Clone > :: cbor2 :: Cbor for Wrap < T >"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn avoids_deserialize_lifetime_collisions() {
+        let out = expanded(quote! {
+            struct Borrowed<'a, '__de> {
+                #[cbor(key = 1)]
+                value: &'a str,
+                other: &'__de str,
+            }
+        });
+
+        assert!(
+            out.contains(
+                "impl < '__de_ : 'a + '__de , 'a , '__de > :: serde :: Deserialize < '__de_ > for Borrowed < 'a , '__de >"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn rejects_user_lifetime_named_de() {
+        let msg = error(quote! {
+            struct Borrowed<'de> {
+                value: &'de str,
+            }
+        });
+
+        assert!(msg.contains("lifetime named 'de"), "{msg}");
     }
 
     #[test]

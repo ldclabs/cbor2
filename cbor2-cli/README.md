@@ -8,6 +8,12 @@ The `cbor` command line tool for CBOR
 cargo install cbor2-cli   # installs the `cbor` binary
 ```
 
+Or install it from the ldclabs Homebrew tap:
+
+```bash
+brew install ldclabs/tap/cbor2-cli   # installs the `cbor` binary
+```
+
 ```text
 Usage: cbor [COMMAND] [INPUT]
 

@@ -468,6 +468,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
 
         match value {
             Value::Text(x) => visitor.visit_str(x),
+            Value::Bytes(x) => visitor.visit_bytes(x),
             // Integer keys match struct fields through the key table of a
             // marked struct (handled in `StructAccess`); in any other
             // identifier position they take a placeholder form that

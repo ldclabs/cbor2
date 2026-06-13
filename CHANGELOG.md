@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.2] - 2026-06-13
+
+### Fixed
+
+* `#[derive(Cbor)]` now uses a fresh internal deserializer lifetime to avoid collisions with user-defined lifetimes, and reports a clear error for the serde-reserved `'de` lifetime name.
+* Borrowing deserialization entry points now handle segmented text strings, segmented byte strings and integer arrays consistently with the owning string/byte-buffer paths.
+* `Value`-backed deserialization accepts byte-string field identifiers, matching the streaming deserializer behavior for CBOR map keys.
+
+### Added
+
+* Release automation now builds `cbor` binaries for Linux and macOS targets, publishes GitHub release assets with checksums, and updates the `ldclabs/homebrew-tap` formula for `cbor2-cli`.
+* Documented Homebrew installation for the `cbor` command in the crate, CLI and workspace READMEs.
+
+### Changed
+
+* Bumped `cbor2`, `cbor2-cli` and `cbor2-derive` to `1.0.2`.
+
 ## [1.0.1] - 2026-06-13
 
 ### Added

@@ -558,13 +558,35 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
                     }
                 }
 
+                Header::Text(None) => {
+                    let mut buffer = String::new();
+                    self.decoder.text_body(None, &mut buffer)?;
+                    let mut chars = buffer.chars();
+                    match (chars.next(), chars.next()) {
+                        (Some(c), None) => visitor.visit_char(c),
+                        _ => Err(header.expected("char")),
+                    }
+                }
+
                 _ => Err(header.expected("char")),
             };
         }
     }
 
     fn deserialize_str<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        self.deserialize_string(visitor)
+        loop {
+            return match self.decoder.pull()? {
+                Header::Tag(..) => continue,
+
+                Header::Text(len) => {
+                    let mut buffer = String::new();
+                    self.decoder.text_body(len, &mut buffer)?;
+                    visitor.visit_str(&buffer)
+                }
+
+                header => Err(header.expected("string")),
+            };
+        }
     }
 
     fn deserialize_string<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
@@ -584,7 +606,22 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
     }
 
     fn deserialize_bytes<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        self.deserialize_byte_buf(visitor)
+        loop {
+            return match self.decoder.pull()? {
+                Header::Tag(..) => continue,
+
+                Header::Bytes(len) => {
+                    self.scratch.clear();
+                    self.decoder.bytes_body(len, &mut self.scratch)?;
+                    visitor.visit_bytes(&self.scratch)
+                }
+
+                // Be liberal: accept an array of integers as bytes.
+                Header::Array(len) => self.recurse(|me| visitor.visit_seq(Access(me, len))),
+
+                header => Err(header.expected("bytes")),
+            };
+        }
     }
 
     fn deserialize_byte_buf<V: de::Visitor<'de>>(
@@ -698,9 +735,15 @@ impl<'de, R: Read> de::Deserializer<'de> for &mut Deserializer<R> {
                     }
                 }
 
-                Header::Bytes(Some(len)) => {
+                Header::Text(None) => {
+                    let mut buffer = String::new();
+                    self.decoder.text_body(None, &mut buffer)?;
+                    visitor.visit_str(&buffer)
+                }
+
+                Header::Bytes(len) => {
                     self.scratch.clear();
-                    self.decoder.bytes_body(Some(len), &mut self.scratch)?;
+                    self.decoder.bytes_body(len, &mut self.scratch)?;
                     visitor.visit_bytes(&self.scratch)
                 }
 

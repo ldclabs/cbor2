@@ -66,6 +66,26 @@ fn json_just_works() {
 }
 
 #[derive(Debug, PartialEq, Cbor)]
+struct LifetimeNames<'a, '__de> {
+    #[cbor(key = 1)]
+    value: u8,
+
+    #[serde(skip)]
+    marker: core::marker::PhantomData<(&'a (), &'__de ())>,
+}
+
+#[test]
+fn derive_avoids_internal_lifetime_name_collisions() {
+    let value = LifetimeNames {
+        value: 7,
+        marker: core::marker::PhantomData,
+    };
+
+    let bytes = cbor2::to_vec(&value).unwrap();
+    assert_eq!(hex::encode(&bytes), "a10107");
+}
+
+#[derive(Debug, PartialEq, Cbor)]
 #[cbor(tag = 123)]
 struct ProtectedHeader {
     #[cbor(key = 1)]

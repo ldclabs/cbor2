@@ -78,8 +78,10 @@ fn tags_are_skipped_in_typed_positions() {
 #[test]
 fn chars() {
     assert_eq!(de::<char>("63e6b0b4").unwrap(), '水');
+    assert_eq!(de::<char>("7f6161ff").unwrap(), 'a');
     // Two characters do not make a char, and neither do zero.
     assert!(de::<char>("626162").is_err());
+    assert!(de::<char>("7f61616162ff").is_err());
     assert!(de::<char>("60").is_err());
     // Invalid UTF-8 inside a short text item is a syntax error.
     assert!(matches!(de::<char>("62fffe"), Err(Error::Syntax(0))));
@@ -149,6 +151,9 @@ fn identifiers() {
 
     // Struct fields may arrive as byte strings...
     assert_eq!(de::<F>("a1416101").unwrap(), F { a: 1 });
+    // ...including segmented strings.
+    assert_eq!(de::<F>("a17f6161ff01").unwrap(), F { a: 1 });
+    assert_eq!(de::<F>("a15f4161ff01").unwrap(), F { a: 1 });
     // ...or behind a tag.
     assert_eq!(de::<F>("a1c1616101").unwrap(), F { a: 1 });
     // Invalid UTF-8 in a field name is a syntax error.
@@ -221,21 +226,31 @@ fn options_and_units() {
 // Custom probes that call the borrowing entry points (`deserialize_str`,
 // `deserialize_bytes`) directly; derived code only uses the owning forms.
 #[derive(Debug, PartialEq)]
-struct StrProbe(String);
+enum StrVisit {
+    Str(String),
+    String(String),
+}
+
+#[derive(Debug, PartialEq)]
+struct StrProbe(StrVisit);
 
 impl<'de> Deserialize<'de> for StrProbe {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct V;
 
         impl serde::de::Visitor<'_> for V {
-            type Value = String;
+            type Value = StrVisit;
 
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "a string")
             }
 
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<String, E> {
-                Ok(v.to_owned())
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<StrVisit, E> {
+                Ok(StrVisit::Str(v.to_owned()))
+            }
+
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<StrVisit, E> {
+                Ok(StrVisit::String(v))
             }
         }
 
@@ -244,21 +259,45 @@ impl<'de> Deserialize<'de> for StrProbe {
 }
 
 #[derive(Debug, PartialEq)]
-struct BytesProbe(Vec<u8>);
+enum BytesVisit {
+    Bytes(Vec<u8>),
+    ByteBuf(Vec<u8>),
+    Seq(Vec<u8>),
+}
+
+#[derive(Debug, PartialEq)]
+struct BytesProbe(BytesVisit);
 
 impl<'de> Deserialize<'de> for BytesProbe {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct V;
 
-        impl serde::de::Visitor<'_> for V {
-            type Value = Vec<u8>;
+        impl<'a> serde::de::Visitor<'a> for V {
+            type Value = BytesVisit;
 
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "bytes")
             }
 
-            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Vec<u8>, E> {
-                Ok(v.to_vec())
+            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<BytesVisit, E> {
+                Ok(BytesVisit::Bytes(v.to_vec()))
+            }
+
+            fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<BytesVisit, E> {
+                Ok(BytesVisit::ByteBuf(v))
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'a>>(
+                self,
+                mut seq: A,
+            ) -> Result<BytesVisit, A::Error> {
+                let mut bytes = Vec::new();
+
+                while let Some(byte) = seq.next_element()? {
+                    bytes.push(byte);
+                }
+
+                Ok(BytesVisit::Seq(bytes))
             }
         }
 
@@ -268,8 +307,18 @@ impl<'de> Deserialize<'de> for BytesProbe {
 
 #[test]
 fn borrowing_entry_points() {
-    assert_eq!(de::<StrProbe>("6161").unwrap(), StrProbe("a".into()));
-    assert_eq!(de::<BytesProbe>("4101").unwrap(), BytesProbe(vec![1]));
+    assert_eq!(
+        de::<StrProbe>("6161").unwrap(),
+        StrProbe(StrVisit::Str("a".into()))
+    );
+    assert_eq!(
+        de::<BytesProbe>("4101").unwrap(),
+        BytesProbe(BytesVisit::Bytes(vec![1]))
+    );
+    assert_eq!(
+        de::<BytesProbe>("8101").unwrap(),
+        BytesProbe(BytesVisit::Seq(vec![1]))
+    );
 }
 
 #[test]
