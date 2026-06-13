@@ -75,9 +75,9 @@ fn appendix_a_diagnostic_column() {
         ("6161", "\"a\""),
         ("6449455446", "\"IETF\""),
         ("62225c", "\"\\\"\\\\\""),
-        ("62c3bc", "\"\\u00fc\""),
-        ("63e6b0b4", "\"\\u6c34\""),
-        ("64f0908591", "\"\\ud800\\udd51\""),
+        ("62c3bc", "\"\u{00fc}\""),
+        ("63e6b0b4", "\"\u{6c34}\""),
+        ("64f0908591", "\"\u{10151}\""),
         ("80", "[]"),
         ("83010203", "[1, 2, 3]"),
         ("8301820203820405", "[1, [2, 3], [4, 5]]"),
@@ -181,7 +181,7 @@ fn beyond_the_appendix() {
     let bytes = cbor2::to_vec(&text).unwrap();
     assert_eq!(
         cbor2::diagnostic(&bytes[..]).unwrap(),
-        format!("\"{}\\u6c34\\u6c34\"", "a".repeat(4095))
+        format!("\"{}水水\"", "a".repeat(4095))
     );
 }
 
@@ -255,7 +255,7 @@ fn value_display_is_diagnostic_notation() {
     assert_eq!(Value::Float(f64::NAN).to_string(), "NaN");
     assert_eq!(Value::Float(f64::NEG_INFINITY).to_string(), "-Infinity");
     assert_eq!(Value::Float(-1.0e300).to_string(), "-1.0e+300");
-    assert_eq!(Value::from("a\"水").to_string(), "\"a\\\"\\u6c34\"");
+    assert_eq!(Value::from("a\"水").to_string(), "\"a\\\"水\"");
     assert_eq!(Value::Bool(false).to_string(), "false");
     assert_eq!(Value::Bool(true).to_string(), "true");
     assert_eq!(Value::Null.to_string(), "null");
@@ -333,7 +333,7 @@ fn float_formatting_boundaries() {
 fn value_debug_is_indented_diagnostic_notation() {
     // Scalars (including bignum tags) stay on one line.
     assert_eq!(format!("{:?}", Value::from(1)), "1");
-    assert_eq!(format!("{:?}", Value::from("水")), "\"\\u6c34\"");
+    assert_eq!(format!("{:?}", Value::from("水")), "\"水\"");
     assert_eq!(format!("{:?}", Value::Float(1.5)), "1.5");
     assert_eq!(format!("{:?}", Value::Bool(true)), "true");
     assert_eq!(format!("{:?}", Value::Null), "null");

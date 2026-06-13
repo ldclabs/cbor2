@@ -25,9 +25,9 @@ use crate::value::Value;
 /// bignums (tags 2 and 3) are written as plain integers, exactly as in
 /// RFC 8949 Appendix A.
 ///
-/// The output is pure ASCII: non-ASCII text is escaped with `\uXXXX`
-/// (using surrogate pairs beyond the basic plane), in the style of the
-/// Appendix A examples. Like [`validate`](crate::validate), this checks
+/// Printable non-ASCII characters (e.g. CJK, emoji) are emitted
+/// directly for readability; only control characters are escaped with
+/// `\uXXXX`. Like [`validate`](crate::validate), this checks
 /// the input for well-formedness as it goes, requires the input to end
 /// after the item, and bounds nesting by
 /// [`DEFAULT_RECURSION_LIMIT`].
@@ -335,9 +335,9 @@ fn text_segment<R: Read>(
     Ok(())
 }
 
-// Escapes text in the style of RFC 8949 Appendix A: like JSON, with all
-// non-ASCII characters written as `\uXXXX` (surrogate pairs beyond the
-// basic plane) so that the output is pure ASCII.
+// Escapes special and control characters in diagnostic text strings.
+// Printable non-ASCII characters (e.g. CJK, emoji) are passed through
+// directly for readability; only control characters use `\uXXXX`.
 pub(crate) fn escape_into(out: &mut String, s: &str) {
     for c in s.chars() {
         match c {
@@ -348,13 +348,13 @@ pub(crate) fn escape_into(out: &mut String, s: &str) {
             '\n' => out.push_str("\\n"),
             '\u{0c}' => out.push_str("\\f"),
             '\r' => out.push_str("\\r"),
-            ' '..='~' => out.push(c),
-            _ => {
+            _ if c.is_control() => {
                 let mut units = [0u16; 2];
                 for unit in c.encode_utf16(&mut units) {
                     let _ = write!(out, "\\u{unit:04x}");
                 }
             }
+            _ => out.push(c),
         }
     }
 }

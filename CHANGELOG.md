@@ -1,6 +1,13 @@
 # Changelog
 
-## 1.0.0 (2026-06-13)
+## [1.0.1] - 2026-06-13
+
+### Changed
+
+* Diagnostic notation now emits printable non-ASCII text directly for readability, while still escaping control characters and special string syntax.
+* The `cbor` CLI display path now renders decoded `Value` items with the same diagnostic notation formatting used by the library.
+
+## [1.0.0] - 2026-06-13
 
 The first stable release, completing the rewrite that shipped as 0.5.0.
 

@@ -14,7 +14,7 @@ use std::io::{self, BufReader, Cursor, Read, Write};
 use std::path::Path;
 use std::process;
 
-use cbor2::{RawValue, Value};
+use cbor2::Value;
 
 const USAGE: &str = "\
 Usage: cbor [COMMAND] [INPUT]
@@ -181,8 +181,8 @@ fn show(input: Box<dyn Read>) -> Result<(), Error> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
-    for item in cbor2::de::Deserializer::from_reader(input).into_iter::<RawValue>() {
-        writeln!(stdout, "{}", item?)?;
+    for item in cbor2::de::Deserializer::from_reader(input).into_iter::<Value>() {
+        writeln!(stdout, "{:?}", item?)?;
     }
 
     Ok(stdout.flush()?)
