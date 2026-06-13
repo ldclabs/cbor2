@@ -272,8 +272,9 @@ assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
   `std::io::Read`/`std::io::Write` and adds the `HashMap` conversions.
   Implies `alloc`.
 * **`alloc`** — everything that needs a heap, without `std`: [`Value`],
-  [`to_vec`]/[`from_slice`]/[`from_reader`], [`RawValue`], [`diagnostic`],
-  the deterministic encoders and the [`cbor!`] macro. Readers and writers
+  [`to_vec`]/[`from_slice`]/[`from_reader`], [`RawValue`],
+  [`diagnostic`]/[`diagnostic_pretty`], the deterministic encoders and
+  the [`cbor!`] macro. Readers and writers
   are byte slices, `Vec<u8>`, or custom [`io`] trait implementations.
 * **neither** — a `#![no_std]` core for constrained targets: streaming
   serialization with [`to_writer`]/[`to_slice`]/[`serialized_size`],
@@ -284,18 +285,23 @@ assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
 
 # Diagnostic notation
 
-[`diagnostic`] renders raw CBOR as the human-readable text form of
-RFC 8949 §8 — handy for logs and debugging. Working on the wire, it can
-show what a [`Value`] cannot represent: indefinite-length markers,
-`undefined`, and unassigned simple values. `Value` implements
-[`Display`](std::fmt::Display) with the same notation, and
-[`Debug`](std::fmt::Debug) pretty-prints it with two-space indentation.
+[`diagnostic`] renders raw CBOR as the compact human-readable text form
+of RFC 8949 §8; [`diagnostic_pretty`] does the same with two-space
+indentation. Both work on the wire and preserve what a [`Value`] cannot
+represent: indefinite-length markers, `undefined`, and unassigned simple
+values. `Value` implements [`Display`](std::fmt::Display) with the same
+compact notation, and [`Debug`](std::fmt::Debug) pretty-prints it with
+indentation.
 
 ```rust
 let bytes = hex::decode("bf61610161629f0203ffff").unwrap();
 assert_eq!(
     cbor2::diagnostic(&bytes[..]).unwrap(),
     r#"{_ "a": 1, "b": [_ 2, 3]}"#
+);
+assert_eq!(
+    cbor2::diagnostic_pretty(&bytes[..]).unwrap(),
+    "{_\n  \"a\": 1,\n  \"b\": [_\n    2,\n    3\n  ]\n}"
 );
 
 let value = cbor2::cbor!({ "k": [1, -2.5, null] }).unwrap();
@@ -425,7 +431,7 @@ pub use crate::de::validate;
 #[doc(inline)]
 pub use crate::de::{from_reader, from_slice};
 #[cfg(feature = "alloc")]
-pub use crate::diag::diagnostic;
+pub use crate::diag::{diagnostic, diagnostic_pretty};
 #[cfg(feature = "alloc")]
 pub use crate::raw::RawValue;
 #[doc(inline)]

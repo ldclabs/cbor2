@@ -2,10 +2,14 @@
 
 ## [1.0.1] - 2026-06-13
 
+### Added
+
+* `diagnostic_pretty` renders raw CBOR diagnostic notation with two-space indentation while preserving wire-level details such as indefinite-length markers.
+
 ### Changed
 
 * Diagnostic notation now emits printable non-ASCII text directly for readability, while still escaping control characters and special string syntax.
-* The `cbor` CLI display path now renders decoded `Value` items with the same diagnostic notation formatting used by the library.
+* The `cbor` CLI display path now uses wire-level pretty diagnostic notation, preserving indefinite-length markers for bare display and `decode --diag`.
 
 ## [1.0.0] - 2026-06-13
 

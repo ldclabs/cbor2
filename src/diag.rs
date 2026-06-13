@@ -42,15 +42,39 @@ use crate::value::Value;
 pub fn diagnostic<R: Read>(reader: R) -> Result<String, Error> {
     let mut decoder = Decoder::from(reader);
     let mut out = String::new();
-    item(&mut decoder, &mut out, DEFAULT_RECURSION_LIMIT)?;
+    item(&mut decoder, &mut out, DEFAULT_RECURSION_LIMIT, None)?;
     expect_eof(&mut decoder)?;
     Ok(out)
 }
 
-fn item<R: Read>(decoder: &mut Decoder<R>, out: &mut String, depth: usize) -> Result<(), Error> {
+/// Like [`diagnostic`], but pretty-prints arrays and maps with two-space
+/// indentation, one element per line.
+///
+/// ```rust
+/// let bytes = hex::decode("bf61610161629f0203ffff").unwrap();
+/// assert_eq!(
+///     cbor2::diagnostic_pretty(&bytes[..]).unwrap(),
+///     "{_\n  \"a\": 1,\n  \"b\": [_\n    2,\n    3\n  ]\n}"
+/// );
+/// ```
+pub fn diagnostic_pretty<R: Read>(reader: R) -> Result<String, Error> {
+    let mut decoder = Decoder::from(reader);
+    let mut out = String::new();
+    item(&mut decoder, &mut out, DEFAULT_RECURSION_LIMIT, Some(0))?;
+    expect_eof(&mut decoder)?;
+    Ok(out)
+}
+
+// `indent`: `None` = compact, `Some(level)` = pretty with current depth.
+fn item<R: Read>(
+    decoder: &mut Decoder<R>,
+    out: &mut String,
+    depth: usize,
+    indent: Option<usize>,
+) -> Result<(), Error> {
     let offset = decoder.offset();
     let header = decoder.pull()?;
-    item_header(decoder, header, out, offset, depth)
+    item_header(decoder, header, out, offset, depth, indent)
 }
 
 fn item_header<R: Read>(
@@ -59,6 +83,7 @@ fn item_header<R: Read>(
     out: &mut String,
     offset: usize,
     depth: usize,
+    indent: Option<usize>,
 ) -> Result<(), Error> {
     if depth == 0 {
         return Err(Error::RecursionLimitExceeded);
@@ -116,7 +141,7 @@ fn item_header<R: Read>(
                 }
                 header => {
                     let _ = write!(out, "{t}(");
-                    item_header(decoder, header, out, offset, depth - 1)?;
+                    item_header(decoder, header, out, offset, depth - 1, indent)?;
                     out.push(')');
                     Ok(())
                 }
@@ -125,7 +150,7 @@ fn item_header<R: Read>(
 
         Header::Tag(t) => {
             let _ = write!(out, "{t}(");
-            item(decoder, out, depth - 1)?;
+            item(decoder, out, depth - 1, indent)?;
             out.push(')');
             Ok(())
         }
@@ -180,19 +205,41 @@ fn item_header<R: Read>(
             }
         },
 
-        Header::Array(len) => match len {
-            Some(len) => {
+        Header::Array(len) => match (len, indent) {
+            (Some(0), _) | (None, None) if len == Some(0) => {
+                out.push_str("[]");
+                Ok(())
+            }
+            (Some(len), None) => {
                 out.push('[');
                 for i in 0..len {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    item(decoder, out, depth - 1)?;
+                    item(decoder, out, depth - 1, None)?;
                 }
                 out.push(']');
                 Ok(())
             }
-            None => {
+            (Some(len), Some(ind)) => {
+                if len == 0 {
+                    out.push_str("[]");
+                    return Ok(());
+                }
+                out.push_str("[\n");
+                for i in 0..len {
+                    if i > 0 {
+                        out.push_str(",\n");
+                    }
+                    push_indent(out, ind + 1);
+                    item(decoder, out, depth - 1, Some(ind + 1))?;
+                }
+                out.push('\n');
+                push_indent(out, ind);
+                out.push(']');
+                Ok(())
+            }
+            (None, None) => {
                 out.push_str("[_ ");
                 let mut first = true;
                 loop {
@@ -207,28 +254,76 @@ fn item_header<R: Read>(
                                 out.push_str(", ");
                             }
                             first = false;
-                            item_header(decoder, header, out, offset, depth - 1)?;
+                            item_header(decoder, header, out, offset, depth - 1, None)?;
+                        }
+                    }
+                }
+            }
+            (None, Some(ind)) => {
+                let mut first = true;
+                loop {
+                    let offset = decoder.offset();
+                    match decoder.pull()? {
+                        Header::Break => {
+                            if first {
+                                out.push_str("[_]");
+                            } else {
+                                out.push('\n');
+                                push_indent(out, ind);
+                                out.push(']');
+                            }
+                            return Ok(());
+                        }
+                        header => {
+                            if first {
+                                out.push_str("[_\n");
+                            } else {
+                                out.push_str(",\n");
+                            }
+                            first = false;
+                            push_indent(out, ind + 1);
+                            item_header(decoder, header, out, offset, depth - 1, Some(ind + 1))?;
                         }
                     }
                 }
             }
         },
 
-        Header::Map(len) => match len {
-            Some(len) => {
+        Header::Map(len) => match (len, indent) {
+            (Some(len), None) => {
                 out.push('{');
                 for i in 0..len {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    item(decoder, out, depth - 1)?; // key
+                    item(decoder, out, depth - 1, None)?;
                     out.push_str(": ");
-                    item(decoder, out, depth - 1)?; // value
+                    item(decoder, out, depth - 1, None)?;
                 }
                 out.push('}');
                 Ok(())
             }
-            None => {
+            (Some(len), Some(ind)) => {
+                if len == 0 {
+                    out.push_str("{}");
+                    return Ok(());
+                }
+                out.push_str("{\n");
+                for i in 0..len {
+                    if i > 0 {
+                        out.push_str(",\n");
+                    }
+                    push_indent(out, ind + 1);
+                    item(decoder, out, depth - 1, Some(ind + 1))?;
+                    out.push_str(": ");
+                    item(decoder, out, depth - 1, Some(ind + 1))?;
+                }
+                out.push('\n');
+                push_indent(out, ind);
+                out.push('}');
+                Ok(())
+            }
+            (None, None) => {
                 out.push_str("{_ ");
                 let mut first = true;
                 loop {
@@ -243,17 +338,56 @@ fn item_header<R: Read>(
                                 out.push_str(", ");
                             }
                             first = false;
-                            item_header(decoder, header, out, offset, depth - 1)?; // key
+                            item_header(decoder, header, out, offset, depth - 1, None)?;
                             out.push_str(": ");
-
-                            // A break in place of a value leaves a dangling
-                            // key, which is not well-formed (RFC 8949
-                            // §5.3.1).
                             let offset = decoder.offset();
                             match decoder.pull()? {
                                 Header::Break => return Err(Error::Syntax(offset)),
                                 header => {
-                                    item_header(decoder, header, out, offset, depth - 1)?;
+                                    item_header(decoder, header, out, offset, depth - 1, None)?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            (None, Some(ind)) => {
+                let mut first = true;
+                loop {
+                    let offset = decoder.offset();
+                    match decoder.pull()? {
+                        Header::Break => {
+                            if first {
+                                out.push_str("{_}");
+                            } else {
+                                out.push('\n');
+                                push_indent(out, ind);
+                                out.push('}');
+                            }
+                            return Ok(());
+                        }
+                        header => {
+                            if first {
+                                out.push_str("{_\n");
+                            } else {
+                                out.push_str(",\n");
+                            }
+                            first = false;
+                            push_indent(out, ind + 1);
+                            item_header(decoder, header, out, offset, depth - 1, Some(ind + 1))?;
+                            out.push_str(": ");
+                            let offset = decoder.offset();
+                            match decoder.pull()? {
+                                Header::Break => return Err(Error::Syntax(offset)),
+                                header => {
+                                    item_header(
+                                        decoder,
+                                        header,
+                                        out,
+                                        offset,
+                                        depth - 1,
+                                        Some(ind + 1),
+                                    )?;
                                 }
                             }
                         }

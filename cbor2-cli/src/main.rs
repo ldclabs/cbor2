@@ -14,7 +14,7 @@ use std::io::{self, BufReader, Cursor, Read, Write};
 use std::path::Path;
 use std::process;
 
-use cbor2::Value;
+use cbor2::{RawValue, Value};
 
 const USAGE: &str = "\
 Usage: cbor [COMMAND] [INPUT]
@@ -167,42 +167,37 @@ fn open_json_input(arg: Option<&str>) -> Box<dyn Read> {
 
 type Error = Box<dyn std::error::Error>;
 
-// Writes each CBOR item as one line of diagnostic notation (RFC 8949
-// §8).
-//
-// Every item is captured as its exact wire bytes before rendering, so
-// the output preserves what a decoded value cannot represent: indefinite
-// lengths appear with the `_` marker (`[_ ...]`, `{_ ...}`, segmented
-// strings as `(_ ...)`), `undefined` and unassigned simple values appear
-// as themselves, and bignums (tags 2 and 3) print as plain integers. The
-// output is pure ASCII, matching the diagnostic column of RFC 8949
-// Appendix A.
+// Pretty-prints each CBOR item in diagnostic notation, preserving wire
+// details: indefinite-length `_` markers, `undefined`, unassigned simple
+// values and bignums as plain integers.
 fn show(input: Box<dyn Read>) -> Result<(), Error> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
-    for item in cbor2::de::Deserializer::from_reader(input).into_iter::<Value>() {
-        writeln!(stdout, "{:?}", item?)?;
+    for item in cbor2::de::Deserializer::from_reader(input).into_iter::<RawValue>() {
+        let diag = cbor2::diagnostic_pretty(item?.as_ref())?;
+        writeln!(stdout, "{diag}")?;
     }
 
     Ok(stdout.flush()?)
 }
 
-// Decodes each CBOR item into the data model and pretty-prints it as
-// JSON or — with `diag` — as indented diagnostic notation. Unlike
-// `show`, this re-spells the item: indefinite lengths and non-preferred
-// encodings are not preserved.
+// Decodes each CBOR item and pretty-prints it as JSON or — with
+// `diag` — as indented diagnostic notation. The `diag` path works on
+// wire bytes and preserves indefinite-length markers; the JSON path
+// re-spells through `Value`.
 fn decode(input: Box<dyn Read>, diag: bool) -> Result<(), Error> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
-    for item in cbor2::de::Deserializer::from_reader(input).into_iter::<Value>() {
-        let value = item?;
-        if diag {
-            // `Debug` for `Value` is the indented diagnostic form.
-            writeln!(stdout, "{value:?}")?;
-        } else {
-            serde_json::to_writer_pretty(&mut stdout, &to_json(value))?;
+    if diag {
+        for item in cbor2::de::Deserializer::from_reader(input).into_iter::<RawValue>() {
+            let text = cbor2::diagnostic_pretty(item?.as_ref())?;
+            writeln!(stdout, "{text}")?;
+        }
+    } else {
+        for item in cbor2::de::Deserializer::from_reader(input).into_iter::<Value>() {
+            serde_json::to_writer_pretty(&mut stdout, &to_json(item?))?;
             stdout.write_all(b"\n")?;
         }
     }

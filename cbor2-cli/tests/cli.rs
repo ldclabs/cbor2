@@ -37,9 +37,12 @@ fn ok(args: &[&str], input: &[u8]) -> Vec<u8> {
 
 #[test]
 fn show_preserves_wire_details() {
-    // Indefinite-length items keep their `_` markers; one line per item.
+    // Indefinite-length items keep their `_` markers, pretty-printed.
     let out = ok(&[], &hex("bf61610161629f0203ffff"));
-    assert_eq!(out, b"{_ \"a\": 1, \"b\": [_ 2, 3]}\n");
+    assert_eq!(
+        out,
+        b"{_\n  \"a\": 1,\n  \"b\": [_\n    2,\n    3\n  ]\n}\n"
+    );
 
     let out = ok(&[], &hex("f7c074323031332d30332d32315432303a30343a30305a"));
     assert_eq!(out, b"undefined\n0(\"2013-03-21T20:04:00Z\")\n");
@@ -52,14 +55,15 @@ fn show_preserves_wire_details() {
 #[test]
 fn show_accepts_hex_and_base64_arguments() {
     // Plain, 0x-prefixed and whitespace-littered hex.
-    assert_eq!(ok(&["a201020326"], b""), b"{1: 2, 3: -7}\n");
-    assert_eq!(ok(&["0xA201020326"], b""), b"{1: 2, 3: -7}\n");
-    assert_eq!(ok(&["a2 0102 0326"], b""), b"{1: 2, 3: -7}\n");
+    assert_eq!(ok(&["a201020326"], b""), b"{\n  1: 2,\n  3: -7\n}\n");
+    assert_eq!(ok(&["0xA201020326"], b""), b"{\n  1: 2,\n  3: -7\n}\n");
+    assert_eq!(ok(&["a2 0102 0326"], b""), b"{\n  1: 2,\n  3: -7\n}\n");
 
     // Base64 — padded or not — and base64url. {"a": 1} is "oWFhAQ==";
     // bytes(3) fbefbe is "Q_vvvg" url-safe.
-    assert_eq!(ok(&["oWFhAQ=="], b""), b"{\"a\": 1}\n");
-    assert_eq!(ok(&["oWFhAQ"], b""), b"{\"a\": 1}\n");
+    assert_eq!(ok(&["oWFhAQ=="], b""), b"{\n  \"a\": 1\n}\n");
+    assert_eq!(ok(&["oWFhAQ"], b""), b"{\n  \"a\": 1\n}\n");
+
     assert_eq!(ok(&["Q_vvvg"], b""), b"h'fbefbe'\n");
 
     // Hex wins when a string parses as both: "0102" is the sequence
@@ -98,10 +102,9 @@ fn decode_diag_pretty_prints_diagnostic_notation() {
     let out = ok(&["decode", "-d", "01"], b"");
     assert_eq!(out, b"1\n");
 
-    // Decoding re-spells: the indefinite-length map loses its marker
-    // (compare the bare `cbor` form, which keeps it).
+    // The wire-level path preserves indefinite-length markers.
     let out = ok(&["decode", "-d", "bf0101ff"], b"");
-    assert_eq!(out, b"{\n  1: 1\n}\n");
+    assert_eq!(out, b"{_\n  1: 1\n}\n");
 }
 
 #[test]
@@ -122,7 +125,7 @@ fn commands_chain_into_a_round_trip() {
     let shown = ok(&[], &cbor);
     assert_eq!(
         shown,
-        b"{\"name\": \"example\", \"ok\": true, \"tags\": [1, 2.5]}\n"
+        b"{\n  \"name\": \"example\",\n  \"ok\": true,\n  \"tags\": [\n    1,\n    2.5\n  ]\n}\n"
     );
 
     let back = ok(&["decode"], &cbor);
@@ -139,7 +142,7 @@ fn reads_from_a_file_argument() {
     std::fs::write(&path, hex("8401020304")).unwrap();
 
     let out = ok(&[path.to_str().unwrap()], b"");
-    assert_eq!(out, b"[1, 2, 3, 4]\n");
+    assert_eq!(out, b"[\n  1,\n  2,\n  3,\n  4\n]\n");
     let out = ok(&["decode", path.to_str().unwrap()], b"");
     assert_eq!(out, b"[\n  1,\n  2,\n  3,\n  4\n]\n");
 
