@@ -1,7 +1,37 @@
-//! The derive macro behind `cbor2::Cbor`.
+//! Derive support for protocol-shaped CBOR with `cbor2`.
 //!
-//! See the documentation in the `cbor2` crate; this crate is an
-//! implementation detail and is not meant to be used directly.
+//! This crate provides the implementation behind `#[derive(cbor2::Cbor)]`.
+//! Users normally enable it through the `derive` feature of the `cbor2`
+//! crate:
+//!
+//! ```toml
+//! [dependencies]
+//! cbor2 = { version = "1", features = ["derive"] }
+//! serde_bytes = "0.11" # only needed for binary fields like the example below
+//! ```
+//!
+//! The derive generates `serde::Serialize` and `serde::Deserialize` impls
+//! for CBOR protocols that need integer map keys and semantic tags, such as
+//! COSE (RFC 9052). It also implements `cbor2::Cbor`, exposing the declared
+//! keys and tag as runtime metadata. The original Rust field names stay
+//! intact for JSON and other serde formats.
+//!
+//! ```ignore
+//! use cbor2::Cbor;
+//!
+//! #[derive(Debug, PartialEq, Cbor)]
+//! #[cbor(tag = 18)]
+//! struct CoseHeader {
+//!     #[cbor(key = 1)]
+//!     alg: i8,
+//!     #[cbor(key = 4)]
+//!     #[serde(with = "serde_bytes")]
+//!     kid: Vec<u8>,
+//! }
+//!
+//! assert_eq!(CoseHeader::KEYS, &[("alg", 1), ("kid", 4)]);
+//! assert_eq!(CoseHeader::TAG, Some(18));
+//! ```
 
 use core::fmt::Write as _;
 

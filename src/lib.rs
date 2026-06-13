@@ -1,11 +1,18 @@
 /*!
-This crate provides an implementation of [RFC
+This crate provides a full-featured implementation of [RFC
 8949](https://www.rfc-editor.org/rfc/rfc8949) — the Concise Binary Object
 Representation (CBOR) — built on [serde](https://serde.rs).
 
 CBOR adopts and modestly builds on the *data model* used by JSON, except the
 encoding is in binary form. Its primary goals include a balance of
 implementation size, message size and extensibility.
+
+Feature coverage includes ordinary serde encode/decode, RFC 8949 preferred
+serialization, deterministic/canonical encoders, a dynamic [`Value`] type,
+validated [`RawValue`] pass-through bytes, semantic tags, bignums, COSE-style
+integer map keys and tags through [`#[derive(Cbor)]`](derive@Cbor), CBOR
+sequences, diagnostic notation, exact-one-item [`validate`], allocation-free
+serialization helpers and `no_std` modes.
 
 # Quick start
 

@@ -1,18 +1,30 @@
 # cbor2
 
-A serde implementation of [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949)
-— the Concise Binary Object Representation (CBOR) — for Rust.
+Full-featured [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949) CBOR for
+Rust: serde round trips, canonical/deterministic encoding, `Value`/`RawValue`,
+semantic tags, COSE integer keys, validation, diagnostic notation and
+`no_std`.
 
 [![CI](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml/badge.svg)](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/cbor2.svg)](https://crates.io/crates/cbor2)
 [![docs.rs](https://docs.rs/cbor2/badge.svg)](https://docs.rs/cbor2)
 
-CBOR adopts and modestly builds on the *data model* used by JSON, except the
-encoding is in binary form. Its primary goals include a balance of
-implementation size, message size and extensibility. `cbor2` brings it to
-any `serde::Serialize`/`Deserialize` type, on `std` and `no_std` targets
-alike, with a dynamic `Value` type, deterministic encoding, tag support and
-first-class COSE ergonomics on top.
+`cbor2` is for applications that need a complete CBOR toolkit, not just a
+basic serializer. It works with ordinary `serde::Serialize`/`Deserialize`
+types, preserves protocol details when the wire shape matters, and scales
+from `std` services down to constrained `no_std` targets.
+
+## Why cbor2
+
+| Need | Built in |
+| ---- | -------- |
+| Serde encode/decode | `to_vec`, `to_writer`, `from_slice`, `from_reader` and direct support for derived serde types. |
+| Stable protocol bytes | RFC 8949 preferred serialization plus deterministic/canonical encoders and selectable map key ordering. |
+| Protocol CBOR | Semantic tags, bignums, integer map keys and COSE-style tags with `#[derive(cbor2::Cbor)]`. |
+| Dynamic or unknown data | `Value`, the `cbor!` macro and `RawValue` for validated pass-through bytes. |
+| Safe input handling | Exact-one-item `validate`, CBOR sequence iteration, recursion limits and guarded allocation sizes. |
+| Debugging and inspection | RFC 8949 diagnostic notation, pretty diagnostics and the companion `cbor` CLI. |
+| Embedded targets | `no_std + alloc` for the full heap-backed API, or no allocation for serialization, validation and the core header codec. |
 
 Dual-licensed under MIT or the [UNLICENSE](http://unlicense.org).
 

@@ -1,8 +1,9 @@
 # cbor2-cli
 
-The `cbor` command line tool for CBOR
-([RFC 8949](https://www.rfc-editor.org/rfc/rfc8949)), built on the
-[`cbor2`](https://crates.io/crates/cbor2) crate:
+Inspect, convert and debug CBOR
+([RFC 8949](https://www.rfc-editor.org/rfc/rfc8949)) from the terminal. This
+crate installs the `cbor` command, built on
+[`cbor2`](https://crates.io/crates/cbor2).
 
 ```bash
 cargo install cbor2-cli   # installs the `cbor` binary
@@ -23,6 +24,17 @@ Commands:
           pretty-printed diagnostic notation with --diag
   encode  Convert JSON values to CBOR items
 ```
+
+## Why cbor2-cli
+
+| Need | Command support |
+| ---- | --------------- |
+| Inspect pasted CBOR | Run `cbor <hex-or-base64>` to render RFC 8949 diagnostic notation. |
+| Preserve wire details | Bare `cbor` captures each item as raw bytes, so indefinite lengths, segmented strings, `undefined` and simple values remain visible. |
+| Decode for JSON tools | `cbor decode` pretty-prints CBOR as JSON, one document per item. |
+| Encode fixtures | `cbor encode` turns JSON values into CBOR bytes and supports JSON value streams. |
+| Work with sequences | Multiple JSON values become a CBOR sequence; CBOR sequences decode item by item. |
+| Script reliably | Data errors exit with status 1, usage errors with status 2. |
 
 `INPUT` is a file path, a hex string (optionally `0x`-prefixed), a
 base64/base64url string, or `-` for stdin; stdin is the default. An
