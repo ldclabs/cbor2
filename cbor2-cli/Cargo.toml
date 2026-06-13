@@ -1,0 +1,24 @@
+[package]
+name = "cbor2-cli"
+version = "1.0.0"
+authors = ["0xZensh <txr1883@gmail.com>"]
+description = "The cbor command line tool: convert CBOR to and from JSON and render diagnostic notation."
+homepage = "https://github.com/ldclabs/cbor2"
+repository = "https://github.com/ldclabs/cbor2"
+readme = "README.md"
+keywords = ["cbor", "json", "diagnostic", "cli", "encoding"]
+categories = ["command-line-utilities", "encoding"]
+license = "Unlicense OR MIT"
+edition = "2021"
+rust-version = "1.85"
+
+[[bin]]
+path = "./src/main.rs"
+name = "cbor"
+doc = false
+test = false
+bench = false
+
+[dependencies]
+cbor2 = { path = "..", version = "1" }
+serde_json = "1"

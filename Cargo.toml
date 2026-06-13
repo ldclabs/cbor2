@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "cbor2-derive", "cbor_conv"]
+members = [".", "cbor2-derive", "cbor2-cli"]
 
 [package]
 name = "cbor2"

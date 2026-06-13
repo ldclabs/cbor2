@@ -41,6 +41,17 @@ The first stable release, completing the rewrite that shipped as 0.5.0.
   `keys(&self) -> BTreeMap<String, i128>` convenience method with
   `alloc`.
 
+* The tools package, renamed from `cbor_conv` to `cbor2-cli` (published
+  for the first time, also as 1.0.0), now ships a single `cbor` command
+  line tool. Bare `cbor` shows each CBOR item as one line of diagnostic
+  notation (RFC 8949 §8) with full wire fidelity — indefinite-length
+  markers, `undefined`, bignums as plain integers; `cbor decode`
+  pretty-prints items as JSON or, with `--diag`, as indented diagnostic
+  notation; `cbor encode` converts JSON values to CBOR (replacing the
+  old `json2cbor`/`cbor2json` binaries). The CBOR-reading commands take
+  their input from stdin, a file, a hex string or a base64/base64url
+  string, and everything is covered by end-to-end tests.
+
 ### Changed
 
 * The serde `Serializer`/`Deserializer` now run over the `cbor2::io`

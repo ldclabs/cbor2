@@ -382,12 +382,24 @@ legacy 0.4 release — and 1.0 stabilizes it. None of the 0.4 API survives.
 The rewrite follows the design of (and is wire-compatible with)
 [ciborium](https://github.com/enarx/ciborium) — many thanks to its authors.
 
-## Command line tools
+## Command line tool
 
-The workspace ships two small converters in `cbor_conv`:
+The workspace ships a `cbor` command line tool in
+[`cbor2-cli`](cbor2-cli/README.md) (`cargo install cbor2-cli`). Bare
+`cbor` shows any CBOR — from a file, stdin, a hex string or a base64
+string — as diagnostic notation (RFC 8949 §8); `decode` converts to
+pretty JSON (or pretty diagnostic with `--diag`) and `encode` converts
+JSON to CBOR:
 
 ```bash
-$ echo '{"name": "example", "ok": true}' | json2cbor | cbor2json
+cargo install cbor2-cli   # installs the `cbor` binary
+```
+
+```bash
+$ cbor bf61610161629f0203ffff
+{_ "a": 1, "b": [_ 2, 3]}
+
+$ echo '{"name": "example", "ok": true}' | cbor encode | cbor decode
 {
   "name": "example",
   "ok": true
