@@ -10,7 +10,7 @@
 //! | cbor2          | [`cbor2::to_slice`]                         |
 //! | ciborium       | `into_writer` over `&mut [u8]`             |
 //! | serde_cbor     | `Serializer` over `ser::SliceWrite`        |
-//! | serde_cbor_2   | `Serializer` over `ser::SliceWrite`        |
+//! | cbor4ii        | `to_writer` over `&mut [u8]` (needs std)   |
 //! | minicbor       | `encode` over `encode::write::Cursor`      |
 //!
 //! The output buffer is allocated once during setup and reused; nothing on
@@ -18,8 +18,8 @@
 //!
 //! ## Reading (cbor2 and minicbor only)
 //!
-//! Deserialization is where the designs diverge sharply. The three serde
-//! deserializers — cbor2, ciborium and serde_cbor(_2) — all need a heap
+//! Deserialization is where the designs diverge sharply. The four serde
+//! deserializers — cbor2, ciborium, serde_cbor and cbor4ii — all need a heap
 //! scratch buffer and therefore **cannot deserialize without `alloc` at
 //! all**. What cbor2 *does* offer without a heap is `cbor2::validate`, which
 //! walks the bytes and proves well-formedness without materializing a value;
@@ -66,13 +66,15 @@ fn bench_encode(c: &mut Criterion) {
                     ser.into_inner().bytes_written()
                 })
             });
-            g.bench_function("serde_cbor_2", |b| {
+            g.bench_function("cbor4ii", |b| {
                 let mut buf = vec![0u8; CAP];
                 b.iter(|| {
-                    let mut ser =
-                        serde_cbor_2::Serializer::new(serde_cbor_2::ser::SliceWrite::new(&mut buf));
-                    black_box(&data).serialize(&mut ser).unwrap();
-                    ser.into_inner().bytes_written()
+                    // cbor4ii has no public no_std slice serializer, but its
+                    // `to_writer` over a `&mut [u8]` (std::io::Write) encodes
+                    // into the fixed buffer without allocating.
+                    let mut slice: &mut [u8] = &mut buf[..];
+                    cbor4ii::serde::to_writer(&mut slice, black_box(&data)).unwrap();
+                    CAP - slice.len()
                 })
             });
             g.bench_function("minicbor", |b| {

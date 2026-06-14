@@ -38,7 +38,7 @@ cbor2 = { path = "..", features = ["derive"] }
 # Comparison crates, pinned to the versions requested for the comparison.
 ciborium = "=0.2.2"
 serde_cbor = "=0.11.2"
-serde_cbor_2 = "=0.13.0"
+cbor4ii = { version = "=1.2.2", features = ["serde1", "use_std"] }
 minicbor = { version = "=2.2.2", features = ["alloc", "derive"] }
 
 # Shared fixtures.

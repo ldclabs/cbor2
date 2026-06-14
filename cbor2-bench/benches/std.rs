@@ -48,11 +48,11 @@ fn bench_encode(c: &mut Criterion) {
                     black_box(buf.len())
                 })
             });
-            g.bench_function("serde_cbor_2", |b| {
+            g.bench_function("cbor4ii", |b| {
                 let mut buf = Vec::new();
                 b.iter(|| {
                     buf.clear();
-                    serde_cbor_2::to_writer(&mut buf, black_box(&data)).unwrap();
+                    cbor4ii::serde::to_writer(&mut buf, black_box(&data)).unwrap();
                     black_box(buf.len())
                 })
             });
@@ -90,23 +90,34 @@ fn bench_decode(c: &mut Criterion) {
         ($name:literal, $ty:ty, $mty:ty, $serde:expr, $mini:expr) => {{
             let value = $serde;
             let mini = $mini;
-            let bytes = cbor2::to_vec(&value).unwrap();
-            let bytes_mini = minicbor::to_vec(&mini).unwrap();
+            // Each decoder reads bytes it produced itself: crates differ in
+            // preferred encoding (e.g. cbor2 narrows floats to f32, which
+            // cbor4ii's decoder rejects for an f64 field), so a shared buffer
+            // is not portable.
+            let b_cbor2 = cbor2::to_vec(&value).unwrap();
+            let b_ciborium = {
+                let mut v = Vec::new();
+                ciborium::into_writer(&value, &mut v).unwrap();
+                v
+            };
+            let b_serde = serde_cbor::to_vec(&value).unwrap();
+            let b_cbor4ii = cbor4ii::serde::to_vec(Vec::new(), &value).unwrap();
+            let b_mini = minicbor::to_vec(&mini).unwrap();
             let mut g = c.benchmark_group($name);
             g.bench_function("cbor2", |x| {
-                x.iter(|| cbor2::from_reader::<$ty, _>(black_box(&bytes[..])).unwrap())
+                x.iter(|| cbor2::from_reader::<$ty, _>(black_box(&b_cbor2[..])).unwrap())
             });
             g.bench_function("ciborium", |x| {
-                x.iter(|| ciborium::from_reader::<$ty, _>(black_box(&bytes[..])).unwrap())
+                x.iter(|| ciborium::from_reader::<$ty, _>(black_box(&b_ciborium[..])).unwrap())
             });
             g.bench_function("serde_cbor", |x| {
-                x.iter(|| serde_cbor::from_reader::<$ty, _>(black_box(&bytes[..])).unwrap())
+                x.iter(|| serde_cbor::from_reader::<$ty, _>(black_box(&b_serde[..])).unwrap())
             });
-            g.bench_function("serde_cbor_2", |x| {
-                x.iter(|| serde_cbor_2::from_reader::<$ty, _>(black_box(&bytes[..])).unwrap())
+            g.bench_function("cbor4ii", |x| {
+                x.iter(|| cbor4ii::serde::from_reader::<$ty, _>(black_box(&b_cbor4ii[..])).unwrap())
             });
             g.bench_function("minicbor", |x| {
-                x.iter(|| minicbor::decode::<$mty>(black_box(&bytes_mini)).unwrap())
+                x.iter(|| minicbor::decode::<$mty>(black_box(&b_mini)).unwrap())
             });
             g.finish();
         }};

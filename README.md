@@ -34,37 +34,37 @@ Dual-licensed under MIT or the [UNLICENSE](http://unlicense.org).
 ## Comparison with other CBOR crates
 
 The [`cbor2-bench`](cbor2-bench/README.md) workspace measures cbor2 against
-`ciborium 0.2`, `serde_cbor 0.11`, `serde_cbor_2 0.13` and `minicbor 2.2` on
-both features and speed. It is a *detached* workspace, so none of those crates
-enter this library's dependency graph, CI or MSRV.
+`ciborium 0.2`, `serde_cbor 0.11`, `cbor4ii 1.2` and `minicbor 2.2` on both
+features and speed. It is a *detached* workspace, so none of those crates enter
+this library's dependency graph, CI or MSRV.
 
 ### Feature comparison
 
-| capability                             | cbor2 | ciborium | serde_cbor | serde_cbor_2 | minicbor |
-| -------------------------------------- | :---: | :------: | :--------: | :----------: | :------: |
-| serde-native `Serialize`/`Deserialize` |   ✅   |    ✅     |     ✅      |      ✅       |    ❌¹    |
-| `no_std` + `alloc`                     |   ✅   |    ✅     |     ✅      |      ✅       |    ✅     |
-| zero-alloc encode (fixed buffer)       |   ✅   |    ✅     |     ✅      |      ✅       |    ✅     |
-| typed decode without `alloc`           |  ❌²   |    ❌     |     ❌      |      ❌       |    ✅     |
-| borrow `&str`/`&[u8]` from the input   |   ✅   |    ❌     |     ✅      |      ✅       |    ✅     |
-| deterministic / canonical encoding³    |   ✅   |    ❌     |     ❌      |      ❌       |    ❌     |
-| dynamic `Value` type                   |   ✅   |    ✅     |     ✅      |      ✅       |    ❌     |
-| raw pass-through value (`RawValue`)    |   ✅   |    ❌     |     ❌      |      ❌       |    ❌     |
-| semantic tags                          |   ✅   |    ✅     |     ✅      |      ✅       |    ✅     |
-| integer map keys for structs (COSE)    |   ✅   |    ❌     |     ❌      |      ❌       |    ✅     |
-| diagnostic notation (RFC 8949 §8)      |   ✅   |    ❌     |     ❌      |      ❌       |    ✅     |
-| async item I/O (futures / tokio)       |   ✅   |    ❌     |     ❌      |      ❌       |    ❌     |
-| validate / exact size without decoding |   ✅   |    ❌     |     ❌      |      ❌       |    ◑⁴    |
+| capability                             | cbor2 | ciborium | serde_cbor | cbor4ii | minicbor |
+| -------------------------------------- | :---: | :------: | :--------: | :-----: | :------: |
+| serde-native `Serialize`/`Deserialize` |   ✅   |    ✅     |     ✅      |    ✅    |    ❌¹    |
+| `no_std` + `alloc`                     |   ✅   |    ✅     |     ✅      |    ✅    |    ✅     |
+| zero-alloc encode (fixed buffer)       |   ✅   |    ✅     |     ✅      |   ✅⁵    |    ✅     |
+| typed decode without `alloc`           |  ❌²   |    ❌     |     ❌      |   ❌²    |    ✅     |
+| borrow `&str`/`&[u8]` from the input   |   ✅   |    ❌     |     ✅      |    ✅    |    ✅     |
+| deterministic / canonical encoding³    |   ✅   |    ❌     |     ❌      |    ❌    |    ❌     |
+| dynamic `Value` type                   |   ✅   |    ✅     |     ✅      |    ✅    |    ❌     |
+| raw pass-through value (`RawValue`)    |   ✅   |    ❌     |     ❌      |   ✅⁶    |    ❌     |
+| semantic tags                          |   ✅   |    ✅     |     ✅      |    ✅    |    ✅     |
+| integer map keys for structs (COSE)    |   ✅   |    ❌     |     ❌      |    ❌    |    ✅     |
+| diagnostic notation (RFC 8949 §8)      |   ✅   |    ❌     |     ❌      |    ❌    |    ✅     |
+| async item I/O (futures / tokio)       |   ✅   |    ❌     |     ❌      |    ❌    |    ❌     |
+| validate / exact size without decoding |   ✅   |    ❌     |     ❌      |    ❌    |    ◑⁴    |
 
 ¹ minicbor uses its own `#[derive(Encode, Decode)]`; serde is a separate
-`minicbor-serde` crate. ² No serde-based CBOR crate deserializes without a
-heap — but cbor2's low-level [`core::Decoder`](https://docs.rs/cbor2/latest/cbor2/core/struct.Decoder.html)
-still decodes manually with zero allocation. ³ Sorted map keys, RFC 8949
-§4.2.1; most crates emit preferred shortest-form numbers, but only cbor2 ships
-a full canonical encoder. ⁴ minicbor's `Decoder::skip` validates structure but
-there is no exact-size primitive.
+`minicbor-serde` crate.
+² No serde-based CBOR crate deserializes without a heap — but cbor2's low-level [`core::Decoder`](https://docs.rs/cbor2/latest/cbor2/core/struct.Decoder.html) (and cbor4ii's low-level `Decode`) still decode manually with zero allocation.
+³ Sorted map keys, RFC 8949 §4.2.1; most crates emit preferred shortest-form numbers (cbor4ii keeps floats at 64-bit), but only cbor2 ships a full canonical encoder.
+⁴ minicbor's `Decoder::skip` validates structure but there is no exact-size primitive.
+⁵ cbor4ii has no public `no_std` slice serializer; it fills a fixed buffer through `to_writer` over `&mut [u8]`, which needs `std`.
+⁶ cbor4ii's `RawValue` is a core-level borrowed type, not serde-integrated.
 
-`serde_cbor` is unmaintained; `serde_cbor_2` is a community fork of it.
+`serde_cbor` is unmaintained; the others are maintained.
 
 ### Benchmarks
 
@@ -73,26 +73,25 @@ Median time per operation on an Apple M1 Pro, the `no_std + alloc` path
 `no_std + no_alloc` tables, payload definitions and methodology are in
 [`cbor2-bench`](cbor2-bench/README.md#results).
 
-| op / payload       | cbor2   | ciborium | serde_cbor | serde_cbor_2 | minicbor |
-| ------------------ | ------- | -------- | ---------- | ------------ | -------- |
-| `encode/int_array` | 2.78 µs | 6.48 µs  | 1.67 µs    | 1.68 µs      | 3.32 µs  |
-| `encode/log_batch` | 13.3 µs | 16.1 µs  | 9.79 µs    | 9.66 µs      | 4.66 µs  |
-| `encode/blob`      | 104 ns  | 131 ns   | 127 ns     | 129 ns       | 130 ns   |
-| `decode/int_array` | 5.51 µs | 11.5 µs  | 3.66 µs    | 3.29 µs      | 5.24 µs  |
-| `decode/log_batch` | 39.4 µs | 67.7 µs  | 33.5 µs    | 34.2 µs      | 22.7 µs  |
-| `decode/blob`      | 111 ns  | 246 ns   | 96.4 ns    | 97.4 ns      | 103 ns   |
+| op / payload       | cbor2   | ciborium | serde_cbor | cbor4ii | minicbor |
+| ------------------ | ------- | -------- | ---------- | ------- | -------- |
+| `encode/int_array` | 2.79 µs | 6.59 µs  | 1.67 µs    | 2.92 µs | 3.29 µs  |
+| `encode/log_batch` | 13.3 µs | 16.1 µs  | 9.54 µs    | 6.09 µs | 4.56 µs  |
+| `encode/blob`      | 102 ns  | 131 ns   | 133 ns     | 127 ns  | 130 ns   |
+| `decode/int_array` | 5.34 µs | 11.0 µs  | 3.24 µs    | 3.43 µs | 5.23 µs  |
+| `decode/log_batch` | 38.5 µs | 66.3 µs  | 34.0 µs    | 36.8 µs | 21.8 µs  |
+| `decode/blob`      | 97.5 ns | 224 ns   | 88.5 ns    | 90.1 ns | 91.1 ns  |
 
 `int_array` (1024 × `u64`) and `blob` (a 4 KiB byte string) are byte-identical
 across all five crates, so those rows are exact apples-to-apples; `log_batch`
 (128 structured records) uses each crate's idiomatic encoding (minicbor's
-integer-keyed arrays run ~37% smaller than the serde crates' text-keyed maps).
-On **encoding** cbor2 is the fastest on the byte string and beats ciborium
-everywhere; it trades the lead with `serde_cbor` on integers and maps depending
-on the path — in this `alloc` (fresh-`Vec`) path `serde_cbor` edges ahead on
-maps, but cbor2 takes the lead once the output buffer is reused (`std`) or
-fixed (`no_std + no_alloc`); see the full tables. On **decoding** it is
-competitive, while minicbor's compact, borrowing design still leads on
-structured data. In `no_std + no_alloc`, cbor2 also offers zero-alloc
+integer-keyed arrays run ~37% smaller, and cbor4ii keeps floats at 64-bit).
+cbor2 is competitive across the board and **uniquely strong in `no_std +
+no_alloc`** — it has the fastest fixed-buffer encode of the serde crates and
+the only `serialized_size`/`validate` primitives. On `std`/`alloc` structured
+throughput **cbor4ii is the standout** (and minicbor's borrowing decoder leads
+structured decode); cbor2 trades the encode lead with them by scenario — see
+the full tables. In `no_std + no_alloc`, cbor2 also offers zero-alloc
 *encoding* ([`to_slice`]), *validation* ([`validate`]) and exact *sizing*
 ([`serialized_size`]).
 

@@ -30,7 +30,7 @@ def fmt(v):
     return v if v else "—"
 
 
-CRATES = ["cbor2", "ciborium", "serde_cbor", "serde_cbor_2", "minicbor"]
+CRATES = ["cbor2", "ciborium", "serde_cbor", "cbor4ii", "minicbor"]
 PAYLOADS = ["int_array", "log_batch", "blob"]
 
 

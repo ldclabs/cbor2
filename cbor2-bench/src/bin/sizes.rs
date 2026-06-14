@@ -50,10 +50,10 @@ fn main() {
         serde_cbor::to_vec(&blob_serde).unwrap().len(),
     );
     row(
-        "serde_cbor_2",
-        serde_cbor_2::to_vec(&ints).unwrap().len(),
-        serde_cbor_2::to_vec(&logs).unwrap().len(),
-        serde_cbor_2::to_vec(&blob_serde).unwrap().len(),
+        "cbor4ii",
+        cbor4ii::serde::to_vec(Vec::new(), &ints).unwrap().len(),
+        cbor4ii::serde::to_vec(Vec::new(), &logs).unwrap().len(),
+        cbor4ii::serde::to_vec(Vec::new(), &blob_serde).unwrap().len(),
     );
     row(
         "minicbor",

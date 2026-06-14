@@ -54,13 +54,13 @@ name = "cbor2-bench"
 version = "0.1.0"
 dependencies = [
  "cbor2",
+ "cbor4ii",
  "ciborium",
  "criterion",
  "minicbor",
  "serde",
  "serde_bytes",
  "serde_cbor",
- "serde_cbor_2",
 ]
 
 [[package]]
@@ -70,6 +70,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "cbor4ii"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "faed1a83001dc2c9201451030cc317e35bef36c84d3781d7c5bb9f343c397da8"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -483,16 +492,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bef2ebfde456fb76bbcf9f59315333decc4fda0b2b44b420243c11e0f5ec1f5"
 dependencies = [
  "half 1.8.3",
- "serde",
-]
-
-[[package]]
-name = "serde_cbor_2"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34aec2709de9078e077090abd848e967abab63c9fb3fdb5d4799ad359d8d482c"
-dependencies = [
- "half 2.7.1",
  "serde",
 ]
 

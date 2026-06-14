@@ -23,8 +23,8 @@
 * Added Simplified Chinese READMEs for `cbor2`, `cbor2-cli` and
   `cbor2-derive`, with language switch links from the English READMEs.
 * Added a detached `cbor2-bench` workspace comparing cbor2 with
-  `ciborium`, `serde_cbor`, `serde_cbor_2` and `minicbor`, plus README
-  benchmark tables for `std`, `no_std + alloc` and `no_std + no_alloc` paths.
+  `ciborium`, `serde_cbor`, `cbor4ii` and `minicbor`, plus README benchmark
+  tables for `std`, `no_std + alloc` and `no_std + no_alloc` paths.
 
 ### Changed
 
