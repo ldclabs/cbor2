@@ -29,6 +29,73 @@
 
 以 MIT 或 [UNLICENSE](http://unlicense.org) 双重许可。
 
+## 与其他 CBOR crate 的对比
+
+[`cbor2-bench`](cbor2-bench/README.md) 工作区从功能与速度两方面，把 cbor2 与
+`ciborium 0.2`、`serde_cbor 0.11`、`serde_cbor_2 0.13`、`minicbor 2.2` 做了
+对比。它是一个*独立*工作区，因此这些 crate 不会进入本库的依赖图、CI 或 MSRV。
+
+### 功能对比
+
+| 能力                                 | cbor2 | ciborium | serde_cbor | serde_cbor_2 | minicbor |
+| ------------------------------------ | :---: | :------: | :--------: | :----------: | :------: |
+| serde 原生 `Serialize`/`Deserialize` |   ✅   |    ✅     |     ✅      |      ✅       |    ❌¹    |
+| `no_std` + `alloc`                   |   ✅   |    ✅     |     ✅      |      ✅       |    ✅     |
+| 零分配编码（定长缓冲）               |   ✅   |    ✅     |     ✅      |      ✅       |    ✅     |
+| 无 `alloc` 的类型化解码              |  ❌²   |    ❌     |     ❌      |      ❌       |    ✅     |
+| 从输入借用 `&str`/`&[u8]`            |   ✅   |    ❌     |     ✅      |      ✅       |    ✅     |
+| 确定性 / 规范化编码³                 |   ✅   |    ❌     |     ❌      |      ❌       |    ❌     |
+| 动态 `Value` 类型                    |   ✅   |    ✅     |     ✅      |      ✅       |    ❌     |
+| 原始透传值（`RawValue`）             |   ✅   |    ❌     |     ❌      |      ❌       |    ❌     |
+| 语义标签（tags）                     |   ✅   |    ✅     |     ✅      |      ✅       |    ✅     |
+| 结构体整数 map 键（COSE）            |   ✅   |    ❌     |     ❌      |      ❌       |    ✅     |
+| 诊断记法（RFC 8949 §8）              |   ✅   |    ❌     |     ❌      |      ❌       |    ✅     |
+| 异步逐项 I/O（futures / tokio）      |   ✅   |    ❌     |     ❌      |      ❌       |    ❌     |
+| 不解码即可校验 / 算尺寸              |   ✅   |    ❌     |     ❌      |      ❌       |    ◑⁴    |
+
+¹ minicbor 用自带的 `#[derive(Encode, Decode)]`；serde 支持在独立的
+`minicbor-serde` crate 里。² 没有任何基于 serde 的 CBOR crate 能在无堆下
+反序列化 —— 但 cbor2 的低层 [`core::Decoder`](https://docs.rs/cbor2/latest/cbor2/core/struct.Decoder.html)
+仍可零分配手动解码。³ 即对 map 键排序，RFC 8949 §4.2.1；多数 crate 都会用
+最短形式编码数字，但只有 cbor2 提供完整的规范化编码器。⁴ minicbor 的
+`Decoder::skip` 能校验结构，但没有精确尺寸计算原语。
+
+`serde_cbor` 已停止维护；`serde_cbor_2` 是它的社区分支。
+
+### 性能基准
+
+下表为 Apple M1 Pro 上每次操作的中位耗时，`no_std + alloc` 路径
+（`to_vec` / `from_slice`），越小越好。完整的 `std` 与 `no_std + no_alloc`
+表格、负载定义与方法学见 [`cbor2-bench`](cbor2-bench/README.md#results)。
+
+| 操作 / 负载        | cbor2   | ciborium | serde_cbor | serde_cbor_2 | minicbor |
+| ------------------ | ------- | -------- | ---------- | ------------ | -------- |
+| `encode/int_array` | 2.78 µs | 6.48 µs  | 1.67 µs    | 1.68 µs      | 3.32 µs  |
+| `encode/log_batch` | 13.3 µs | 16.1 µs  | 9.79 µs    | 9.66 µs      | 4.66 µs  |
+| `encode/blob`      | 104 ns  | 131 ns   | 127 ns     | 129 ns       | 130 ns   |
+| `decode/int_array` | 5.51 µs | 11.5 µs  | 3.66 µs    | 3.29 µs      | 5.24 µs  |
+| `decode/log_batch` | 39.4 µs | 67.7 µs  | 33.5 µs    | 34.2 µs      | 22.7 µs  |
+| `decode/blob`      | 111 ns  | 246 ns   | 96.4 ns    | 97.4 ns      | 103 ns   |
+
+`int_array`（1024 × `u64`）与 `blob`（4 KiB 字节串）在五个 crate 间字节完全
+一致，是严格 apples-to-apples；`log_batch`（128 条结构化记录）用各 crate 的
+惯用编码（minicbor 的整数键数组比 serde crate 的文本键 map 小约 37%）。在
+**编码**上，cbor2 在字节串负载上最快、且在所有负载上都快于 ciborium；在整数
+与 map 上与 `serde_cbor` 互有胜负、取决于路径 —— 在本表的 `alloc`（每次新建
+`Vec`）路径下 `serde_cbor` 在 map 上略快，但一旦输出缓冲被复用（`std`）或定长
+（`no_std + no_alloc`），cbor2 在 map 上反超，详见完整表格。在**解码**上同样
+有竞争力，而 minicbor 紧凑的借用式设计在结构化数据上仍领先。在
+`no_std + no_alloc` 下，cbor2 还提供零分配的*编码*（[`to_slice`]）、*校验*
+（[`validate`]）和精确*尺寸计算*（[`serialized_size`]）。
+
+```bash
+cd cbor2-bench && cargo bench
+```
+
+[`to_slice`]: https://docs.rs/cbor2/latest/cbor2/fn.to_slice.html
+[`validate`]: https://docs.rs/cbor2/latest/cbor2/fn.validate.html
+[`serialized_size`]: https://docs.rs/cbor2/latest/cbor2/fn.serialized_size.html
+
 ## 快速开始
 
 ```toml

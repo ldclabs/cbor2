@@ -218,6 +218,21 @@ pub trait Source: sealed::Sealed {
     #[doc(hidden)]
     fn pull(&mut self) -> Result<Header, crate::core::Error>;
     #[doc(hidden)]
+    #[inline]
+    fn integer(&mut self) -> Option<Result<(bool, u64), Error>> {
+        None
+    }
+    #[doc(hidden)]
+    #[inline]
+    fn bool(&mut self) -> Option<Result<bool, Error>> {
+        None
+    }
+    #[doc(hidden)]
+    #[inline]
+    fn float(&mut self) -> Option<Result<f64, Error>> {
+        None
+    }
+    #[doc(hidden)]
     fn push(&mut self, header: Header);
     #[doc(hidden)]
     fn offset(&self) -> usize;
@@ -317,7 +332,22 @@ impl sealed::Sealed for SliceSource<'_> {}
 impl Source for SliceSource<'_> {
     #[inline]
     fn pull(&mut self) -> Result<Header, crate::core::Error> {
-        self.0.pull()
+        self.0.pull_slice()
+    }
+
+    #[inline]
+    fn integer(&mut self) -> Option<Result<(bool, u64), Error>> {
+        self.0.integer_slice().map(|res| res.map_err(Error::from))
+    }
+
+    #[inline]
+    fn bool(&mut self) -> Option<Result<bool, Error>> {
+        self.0.bool_slice().map(Ok)
+    }
+
+    #[inline]
+    fn float(&mut self) -> Option<Result<f64, Error>> {
+        self.0.float_slice().map(|res| res.map_err(Error::from))
     }
 
     #[inline]
@@ -587,6 +617,33 @@ impl<S: Source> Deserializer<S> {
         }
     }
 
+    fn unsigned_u64(&mut self) -> Result<u64, Error> {
+        loop {
+            if let Some(res) = self.source.integer() {
+                let (negative, value) = res?;
+                return match negative {
+                    false => Ok(value),
+                    true => Err(de::Error::custom("unexpected negative integer")),
+                };
+            }
+
+            return match self.source.pull()? {
+                Header::Positive(x) => Ok(x),
+                Header::Tag(tag::BIGPOS) => {
+                    let bytes = self.bignum()?;
+                    big_to_u128(&bytes)
+                        .and_then(|x| u64::try_from(x).ok())
+                        .ok_or_else(|| de::Error::custom("integer too large"))
+                }
+                Header::Tag(tag::BIGNEG) | Header::Negative(..) => {
+                    Err(de::Error::custom("unexpected negative integer"))
+                }
+                Header::Tag(..) => continue,
+                header => Err(header.expected("integer")),
+            };
+        }
+    }
+
     fn signed(&mut self) -> Result<i128, Error> {
         let raw = match self.number()? {
             Num::Pos(x) => return Ok(x.into()),
@@ -604,6 +661,50 @@ impl<S: Source> Deserializer<S> {
         match i128::try_from(raw) {
             Ok(x) => Ok(x ^ !0),
             Err(..) => Err(de::Error::custom("integer too large")),
+        }
+    }
+
+    fn signed_i64(&mut self) -> Result<i64, Error> {
+        loop {
+            if let Some(res) = self.source.integer() {
+                let (negative, value) = res?;
+                return match negative {
+                    false => {
+                        i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
+                    }
+                    true => {
+                        let value = -1 - i128::from(value);
+                        i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
+                    }
+                };
+            }
+
+            return match self.source.pull()? {
+                Header::Positive(x) => {
+                    i64::try_from(x).map_err(|_| de::Error::custom("integer too large"))
+                }
+                Header::Negative(x) => {
+                    let value = -1 - i128::from(x);
+                    i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
+                }
+                Header::Tag(tag::BIGPOS) => {
+                    let bytes = self.bignum()?;
+                    big_to_u128(&bytes)
+                        .and_then(|x| i64::try_from(x).ok())
+                        .ok_or_else(|| de::Error::custom("integer too large"))
+                }
+                Header::Tag(tag::BIGNEG) => {
+                    let bytes = self.bignum()?;
+                    let raw = big_to_u128(&bytes)
+                        .ok_or_else(|| Error::semantic(None, "integer too large"))?;
+                    let value = -1
+                        - i128::try_from(raw)
+                            .map_err(|_| Error::semantic(None, "integer too large"))?;
+                    i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
+                }
+                Header::Tag(..) => continue,
+                header => Err(header.expected("integer")),
+            };
         }
     }
 }
@@ -688,6 +789,10 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
     #[inline]
     fn deserialize_bool<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
         loop {
+            if let Some(res) = self.source.bool() {
+                return visitor.visit_bool(res?);
+            }
+
             let offset = self.source.offset();
 
             return match self.source.pull()? {
@@ -707,6 +812,10 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
     #[inline]
     fn deserialize_f64<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
         loop {
+            if let Some(res) = self.source.float() {
+                return visitor.visit_f64(res?);
+            }
+
             return match self.source.pull()? {
                 Header::Tag(..) => continue,
                 Header::Float(x) => visitor.visit_f64(x),
@@ -728,10 +837,7 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
     }
 
     fn deserialize_i64<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        match self.signed()?.try_into() {
-            Ok(x) => visitor.visit_i64(x),
-            Err(..) => Err(de::Error::custom("integer too large")),
-        }
+        visitor.visit_i64(self.signed_i64()?)
     }
 
     fn deserialize_i128<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
@@ -751,10 +857,7 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
     }
 
     fn deserialize_u64<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        match self.unsigned()?.try_into() {
-            Ok(x) => visitor.visit_u64(x),
-            Err(..) => Err(de::Error::custom("integer too large")),
-        }
+        visitor.visit_u64(self.unsigned_u64()?)
     }
 
     fn deserialize_u128<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
@@ -841,9 +944,25 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
             return match self.source.pull()? {
                 Header::Tag(..) => continue,
 
-                Header::Text(len) => {
+                Header::Text(Some(len)) => {
+                    let offset = self.source.offset();
+                    match self.source.borrow_body(len) {
+                        Some(res) => {
+                            let s =
+                                core::str::from_utf8(res?).map_err(|_| Error::Syntax(offset))?;
+                            visitor.visit_borrowed_str(s)
+                        }
+                        None => {
+                            let mut buffer = String::new();
+                            self.source.text_body(Some(len), &mut buffer)?;
+                            visitor.visit_string(buffer)
+                        }
+                    }
+                }
+
+                Header::Text(None) => {
                     let mut buffer = String::new();
-                    self.source.text_body(len, &mut buffer)?;
+                    self.source.text_body(None, &mut buffer)?;
                     visitor.visit_string(buffer)
                 }
 

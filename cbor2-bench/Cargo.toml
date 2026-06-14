@@ -1,0 +1,67 @@
+# Standalone benchmark crate comparing cbor2 against the other actively used
+# Rust CBOR implementations. It is deliberately *detached* from the parent
+# cbor2 workspace (note the empty `[workspace]` table below) so that criterion
+# and the four comparison crates never enter the library's dependency graph,
+# its CI matrix, or its MSRV. Run it with:
+#
+#     cargo bench -p cbor2-bench            # from this directory
+#
+# or target one scenario:
+#
+#     cargo bench --bench alloc
+[package]
+name = "cbor2-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Unlicense OR MIT"
+description = "Comparative CBOR benchmarks for the cbor2 crate."
+
+# Detach from the parent workspace: its own root, its own Cargo.lock.
+[workspace]
+
+# The fixtures library and the `sizes` binary have no benchmarks, but a
+# plain `cargo bench` would still run them under libtest, which rejects
+# criterion's flags (e.g. `--noplot`). Opt them out so `cargo bench` drives
+# only the three `harness = false` benchmark targets below.
+[lib]
+bench = false
+
+[[bin]]
+name = "sizes"
+bench = false
+
+[dependencies]
+# The crate under test, with derive so the COSE-style fixtures compile.
+cbor2 = { path = "..", features = ["derive"] }
+
+# Comparison crates, pinned to the versions requested for the comparison.
+ciborium = "=0.2.2"
+serde_cbor = "=0.11.2"
+serde_cbor_2 = "=0.13.0"
+minicbor = { version = "=2.2.2", features = ["alloc", "derive"] }
+
+# Shared fixtures.
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Each scenario is its own benchmark target so they can be run in isolation.
+[[bench]]
+name = "std"
+harness = false
+
+[[bench]]
+name = "alloc"
+harness = false
+
+[[bench]]
+name = "no_alloc"
+harness = false
+
+# Optimize the comparison the way a release build would.
+[profile.bench]
+lto = "thin"
+codegen-units = 1

@@ -234,9 +234,13 @@ impl<W: Write> Serializer<W> {
     // Writes a struct field key: an integer for fields named in the
     // container's key table (COSE-style), text otherwise.
     fn push_field_key(&mut self, keys: &str, key: &'static str) -> Result<(), Error> {
+        if keys.is_empty() {
+            return Ok(self.0.text(key)?);
+        }
+
         match key_for_field(keys, key) {
-            Some(n) if n >= 0 => Ok(self.0.push(Header::Positive(n as u64))?),
-            Some(n) => Ok(self.0.push(Header::Negative(n as u64 ^ !0))?),
+            Some(n) if n >= 0 => Ok(self.0.positive(n as u64)?),
+            Some(n) => Ok(self.0.negative(n as u64 ^ !0)?),
             None => Ok(self.0.text(key)?),
         }
     }
@@ -256,10 +260,10 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_bool(self, v: bool) -> Result<(), Error> {
-        Ok(self.0.push(Header::Simple(match v {
+        Ok(self.0.simple(match v {
             false => simple::FALSE,
             true => simple::TRUE,
-        }))?)
+        })?)
     }
 
     #[inline]
@@ -279,10 +283,11 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_i64(self, v: i64) -> Result<(), Error> {
-        Ok(self.0.push(match v.is_negative() {
-            false => Header::Positive(v as u64),
-            true => Header::Negative(v as u64 ^ !0),
-        })?)
+        let _: () = match v.is_negative() {
+            false => self.0.positive(v as u64)?,
+            true => self.0.negative(v as u64 ^ !0)?,
+        };
+        Ok(())
     }
 
     #[inline]
@@ -293,16 +298,17 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         };
 
         if let Ok(x) = u64::try_from(raw) {
-            return Ok(self.0.push(match tag {
-                tag::BIGPOS => Header::Positive(x),
-                _ => Header::Negative(x),
-            })?);
+            let _: () = match tag {
+                tag::BIGPOS => self.0.positive(x)?,
+                _ => self.0.negative(x)?,
+            };
+            return Ok(());
         }
 
         let bytes = raw.to_be_bytes();
         let first = raw.leading_zeros() as usize / 8;
 
-        self.0.push(Header::Tag(tag))?;
+        self.0.tag(tag)?;
         Ok(self.0.bytes(&bytes[first..])?)
     }
 
@@ -323,7 +329,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_u64(self, v: u64) -> Result<(), Error> {
-        Ok(self.0.push(Header::Positive(v))?)
+        Ok(self.0.positive(v)?)
     }
 
     #[inline]
@@ -335,7 +341,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         let bytes = v.to_be_bytes();
         let first = v.leading_zeros() as usize / 8;
 
-        self.0.push(Header::Tag(tag::BIGPOS))?;
+        self.0.tag(tag::BIGPOS)?;
         Ok(self.0.bytes(&bytes[first..])?)
     }
 
@@ -346,7 +352,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_f64(self, v: f64) -> Result<(), Error> {
-        Ok(self.0.push(Header::Float(v))?)
+        Ok(self.0.float(v)?)
     }
 
     #[inline]
@@ -367,7 +373,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_none(self) -> Result<(), Error> {
-        Ok(self.0.push(Header::Simple(simple::NULL))?)
+        Ok(self.0.simple(simple::NULL)?)
     }
 
     #[inline]
@@ -383,7 +389,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
     #[inline]
     fn serialize_unit_struct(self, name: &'static str) -> Result<(), Error> {
         if let Some(StructMarker { tag: Some(tag), .. }) = parse_struct_marker(name) {
-            self.0.push(Header::Tag(tag))?;
+            self.0.tag(tag)?;
         }
         self.serialize_unit()
     }
@@ -414,7 +420,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         }
 
         if let Some(StructMarker { tag: Some(tag), .. }) = parse_struct_marker(name) {
-            self.0.push(Header::Tag(tag))?;
+            self.0.tag(tag)?;
         }
         value.serialize(self)
     }
@@ -428,7 +434,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         value: &U,
     ) -> Result<(), Error> {
         if name != crate::tag::NAME || variant != crate::tag::UNTAGGED {
-            self.0.push(Header::Map(Some(1)))?;
+            self.0.map(Some(1))?;
             self.serialize_str(variant)?;
         }
 
@@ -437,7 +443,10 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_seq(self, length: Option<usize>) -> Result<Self::SerializeSeq, Error> {
-        self.0.push(Header::Array(length))?;
+        if let Some(length) = length {
+            self.0.reserve(length.saturating_mul(4).saturating_add(9));
+        }
+        self.0.array(length)?;
         Ok(CollectionSerializer {
             encoder: self,
             ending: length.is_none(),
@@ -459,7 +468,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         length: usize,
     ) -> Result<Self::SerializeTupleStruct, Error> {
         if let Some(StructMarker { tag: Some(tag), .. }) = parse_struct_marker(name) {
-            self.0.push(Header::Tag(tag))?;
+            self.0.tag(tag)?;
         }
         self.serialize_seq(Some(length))
     }
@@ -482,9 +491,9 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             });
         }
 
-        self.0.push(Header::Map(Some(1)))?;
+        self.0.map(Some(1))?;
         self.serialize_str(variant)?;
-        self.0.push(Header::Array(Some(length)))?;
+        self.0.array(Some(length))?;
         Ok(CollectionSerializer {
             encoder: self,
             ending: false,
@@ -496,7 +505,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
 
     #[inline]
     fn serialize_map(self, length: Option<usize>) -> Result<Self::SerializeMap, Error> {
-        self.0.push(Header::Map(length))?;
+        self.0.map(length)?;
         Ok(CollectionSerializer {
             encoder: self,
             ending: length.is_none(),
@@ -518,13 +527,14 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             keys = marker.keys;
             shape = marker.shape;
             if let Some(tag) = marker.tag {
-                self.0.push(Header::Tag(tag))?;
+                self.0.tag(tag)?;
             }
         }
 
+        self.0.reserve(length.saturating_mul(16).saturating_add(9));
         match shape {
-            StructShape::Map => self.0.push(Header::Map(Some(length)))?,
-            StructShape::Array => self.0.push(Header::Array(Some(length)))?,
+            StructShape::Map => self.0.map(Some(length))?,
+            StructShape::Array => self.0.array(Some(length))?,
         }
         Ok(CollectionSerializer {
             encoder: self,
@@ -547,11 +557,11 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         let keys = marker.as_ref().map_or("", |marker| marker.keys);
         let shape = marker.map_or(StructShape::Map, |marker| marker.shape);
 
-        self.0.push(Header::Map(Some(1)))?;
+        self.0.map(Some(1))?;
         self.serialize_str(variant)?;
         match shape {
-            StructShape::Map => self.0.push(Header::Map(Some(length)))?,
-            StructShape::Array => self.0.push(Header::Array(Some(length)))?,
+            StructShape::Map => self.0.map(Some(length))?,
+            StructShape::Array => self.0.array(Some(length))?,
         }
         Ok(CollectionSerializer {
             encoder: self,
@@ -582,7 +592,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             return Err(Error::msg("Display implementation failed"));
         }
 
-        self.0.push(Header::Text(Some(counter.0)))?;
+        self.0.push_len(3, Some(counter.0))?;
 
         struct Body<'a, W> {
             encoder: &'a mut Encoder<W>,
@@ -712,7 +722,7 @@ impl<W: Write> ser::SerializeTupleVariant for CollectionSerializer<'_, W> {
         // itself; the second is serialized normally.
         self.tag = false;
         match value.serialize(crate::tag::TagNumberSerializer) {
-            Ok(x) => Ok(self.encoder.0.push(Header::Tag(x))?),
+            Ok(x) => Ok(self.encoder.0.tag(x)?),
             Err(..) => Err(Error::msg("expected tag")),
         }
     }
@@ -797,12 +807,71 @@ pub fn to_writer<T: ?Sized + ser::Serialize, W: Write>(value: &T, writer: W) -> 
     value.serialize(&mut serializer)
 }
 
+#[cfg(feature = "alloc")]
+struct VecWriter<'a>(&'a mut Vec<u8>);
+
+#[cfg(feature = "alloc")]
+impl Write for VecWriter<'_> {
+    #[inline]
+    fn write_all(&mut self, data: &[u8]) -> Result<(), crate::io::Error> {
+        self.0.extend_from_slice(data);
+        Ok(())
+    }
+
+    #[inline]
+    fn reserve(&mut self, additional: usize) {
+        self.0.reserve(additional);
+    }
+
+    #[inline]
+    fn flush(&mut self) -> Result<(), crate::io::Error> {
+        Ok(())
+    }
+}
+
+struct SliceWriter<'a> {
+    buffer: &'a mut [u8],
+    written: usize,
+}
+
+impl Write for SliceWriter<'_> {
+    #[inline]
+    fn write_all(&mut self, data: &[u8]) -> Result<(), crate::io::Error> {
+        if self.buffer.len() - self.written < data.len() {
+            return Err(crate::io::Error::from(crate::io::ErrorKind::WriteZero));
+        }
+
+        let end = self.written + data.len();
+        self.buffer[self.written..end].copy_from_slice(data);
+        self.written = end;
+        Ok(())
+    }
+
+    #[inline]
+    fn flush(&mut self) -> Result<(), crate::io::Error> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "std")]
+impl Write for &mut SliceWriter<'_> {
+    #[inline]
+    fn write_all(&mut self, data: &[u8]) -> Result<(), crate::io::Error> {
+        (**self).write_all(data)
+    }
+
+    #[inline]
+    fn flush(&mut self) -> Result<(), crate::io::Error> {
+        (**self).flush()
+    }
+}
+
 /// Serializes a value as CBOR into a new `Vec<u8>`.
 #[cfg(feature = "alloc")]
 #[inline]
 pub fn to_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<Vec<u8>, Error> {
     let mut buffer = Vec::new();
-    to_writer(value, &mut buffer)?;
+    to_writer(value, VecWriter(&mut buffer))?;
     Ok(buffer)
 }
 
@@ -824,10 +893,9 @@ pub fn to_slice<'a, T: ?Sized + ser::Serialize>(
     value: &T,
     buffer: &'a mut [u8],
 ) -> Result<&'a mut [u8], Error> {
-    let total = buffer.len();
-    let mut rest: &mut [u8] = buffer;
-    to_writer(value, &mut rest)?;
-    let written = total - rest.len();
+    let mut writer = SliceWriter { buffer, written: 0 };
+    to_writer(value, &mut writer)?;
+    let written = writer.written;
     Ok(&mut buffer[..written])
 }
 
@@ -936,7 +1004,7 @@ pub fn to_canonical_vec_with<T: ?Sized + ser::Serialize>(
     order: KeyOrder,
 ) -> Result<Vec<u8>, Error> {
     let mut buffer = Vec::new();
-    to_canonical_writer_with(value, &mut buffer, order)?;
+    to_canonical_writer_with(value, VecWriter(&mut buffer), order)?;
     Ok(buffer)
 }
 

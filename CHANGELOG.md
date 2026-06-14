@@ -22,9 +22,18 @@
   can be driven by multi-threaded executors such as `tokio::spawn`.
 * Added Simplified Chinese READMEs for `cbor2`, `cbor2-cli` and
   `cbor2-derive`, with language switch links from the English READMEs.
+* Added a detached `cbor2-bench` workspace comparing cbor2 with
+  `ciborium`, `serde_cbor`, `serde_cbor_2` and `minicbor`, plus README
+  benchmark tables for `std`, `no_std + alloc` and `no_std + no_alloc` paths.
 
 ### Changed
 
+* Faster header encoding: `core::Encoder::push` now writes a fixed-size
+  array per argument width instead of a runtime-length slice of a scratch
+  buffer, letting the writer lower each 1-9 byte header to direct stores
+  rather than a general `memcpy`. On the comparative benchmarks this cut
+  integer-array encoding by ~37% and structured-map encoding by ~24%, and
+  made `serialized_size` about 3× faster, with byte-identical output.
 * `de::Deserializer<R>` is now parameterized by its byte [`Source`] rather
   than the raw reader, mirroring `serde_json`: `from_reader` builds a
   `Deserializer<ReaderSource<R>>` (copying) and `from_slice` builds a

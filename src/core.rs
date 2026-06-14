@@ -160,60 +160,6 @@ pub enum Header {
     Map(Option<usize>),
 }
 
-// The encoded argument of a header: the low 5 bits of the prefix byte plus
-// 0, 1, 2, 4 or 8 following bytes.
-enum Arg {
-    This(u8),   // immediate (0..=23)
-    Next1(u8),  // additional information 24
-    Next2(u16), // additional information 25
-    Next4(u32), // additional information 26
-    Next8(u64), // additional information 27
-    Indefinite, // additional information 31
-}
-
-impl Header {
-    // Split a header into its major type and encoded argument.
-    fn into_parts(self) -> (u8, Arg) {
-        let int = |x: u64| match x {
-            x if x <= 23 => Arg::This(x as u8),
-            x if x <= u8::MAX as u64 => Arg::Next1(x as u8),
-            x if x <= u16::MAX as u64 => Arg::Next2(x as u16),
-            x if x <= u32::MAX as u64 => Arg::Next4(x as u32),
-            x => Arg::Next8(x),
-        };
-
-        let len = |x: Option<usize>| x.map(|n| int(n as u64)).unwrap_or(Arg::Indefinite);
-
-        match self {
-            Header::Positive(x) => (0, int(x)),
-            Header::Negative(x) => (1, int(x)),
-            Header::Bytes(x) => (2, len(x)),
-            Header::Text(x) => (3, len(x)),
-            Header::Array(x) => (4, len(x)),
-            Header::Map(x) => (5, len(x)),
-            Header::Tag(x) => (6, int(x)),
-            Header::Break => (7, Arg::Indefinite),
-
-            Header::Simple(x) => match x {
-                0..=23 => (7, Arg::This(x)),
-                x => (7, Arg::Next1(x)),
-            },
-
-            Header::Float(x) => match f64_to_f16(x) {
-                Some(n16) => (7, Arg::Next2(n16)),
-                None => {
-                    let n32 = x as f32;
-                    if (n32 as f64).to_bits() == x.to_bits() {
-                        (7, Arg::Next4(n32.to_bits()))
-                    } else {
-                        (7, Arg::Next8(x.to_bits()))
-                    }
-                }
-            },
-        }
-    }
-}
-
 /// An encoder for serializing CBOR items.
 ///
 /// All output is written through to the wrapped writer; consider providing
@@ -231,48 +177,123 @@ impl<W: Write> From<W> for Encoder<W> {
 }
 
 impl<W: Write> Encoder<W> {
+    #[inline]
+    pub(crate) fn reserve(&mut self, additional: usize) {
+        self.0.reserve(additional);
+    }
+
+    #[inline]
+    pub(crate) fn push_uint(&mut self, major: u8, value: u64) -> Result<(), crate::io::Error> {
+        let prefix = major << 5;
+        match value {
+            x if x <= 23 => self.0.write_all(&[prefix | x as u8]),
+            x if x <= u8::MAX as u64 => self.0.write_all(&[prefix | 24, x as u8]),
+            x if x <= u16::MAX as u64 => {
+                let b = (x as u16).to_be_bytes();
+                self.0.write_all(&[prefix | 25, b[0], b[1]])
+            }
+            x if x <= u32::MAX as u64 => {
+                let b = (x as u32).to_be_bytes();
+                self.0.write_all(&[prefix | 26, b[0], b[1], b[2], b[3]])
+            }
+            x => {
+                let b = x.to_be_bytes();
+                self.0
+                    .write_all(&[prefix | 27, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+            }
+        }
+    }
+
+    #[inline]
+    pub(crate) fn push_len(
+        &mut self,
+        major: u8,
+        len: Option<usize>,
+    ) -> Result<(), crate::io::Error> {
+        match len {
+            Some(len) => self.push_uint(major, len as u64),
+            None => self.0.write_all(&[(major << 5) | 31]),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn positive(&mut self, value: u64) -> Result<(), crate::io::Error> {
+        self.push_uint(0, value)
+    }
+
+    #[inline]
+    pub(crate) fn negative(&mut self, value: u64) -> Result<(), crate::io::Error> {
+        self.push_uint(1, value)
+    }
+
+    #[inline]
+    pub(crate) fn tag(&mut self, value: u64) -> Result<(), crate::io::Error> {
+        self.push_uint(6, value)
+    }
+
+    #[inline]
+    pub(crate) fn array(&mut self, len: Option<usize>) -> Result<(), crate::io::Error> {
+        self.push_len(4, len)
+    }
+
+    #[inline]
+    pub(crate) fn map(&mut self, len: Option<usize>) -> Result<(), crate::io::Error> {
+        self.push_len(5, len)
+    }
+
+    #[inline]
+    pub(crate) fn simple(&mut self, value: u8) -> Result<(), crate::io::Error> {
+        match value {
+            0..=23 => self.0.write_all(&[0xe0 | value]),
+            value => self.0.write_all(&[0xf8, value]),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn float(&mut self, value: f64) -> Result<(), crate::io::Error> {
+        if value.is_nan() {
+            if let Some(n16) = f64_to_f16(value) {
+                let b = n16.to_be_bytes();
+                return self.0.write_all(&[0xf9, b[0], b[1]]);
+            }
+        } else {
+            let n32 = value as f32;
+            if (n32 as f64).to_bits() == value.to_bits() {
+                if let Some(n16) = f64_to_f16(value) {
+                    let b = n16.to_be_bytes();
+                    return self.0.write_all(&[0xf9, b[0], b[1]]);
+                }
+
+                let b = n32.to_bits().to_be_bytes();
+                return self.0.write_all(&[0xfa, b[0], b[1], b[2], b[3]]);
+            }
+        }
+
+        let b = value.to_bits().to_be_bytes();
+        self.0
+            .write_all(&[0xfb, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+    }
+
     /// Writes a single header to the output.
     ///
     /// The shortest well-formed argument width is chosen automatically.
     /// Floating-point values are encoded as `f16`, `f32` or `f64`, using the
     /// shortest lossless width; NaN is emitted as the canonical half-width
     /// quiet NaN when it round-trips exactly.
+    #[inline]
     pub fn push(&mut self, header: Header) -> Result<(), crate::io::Error> {
-        let (major, arg) = header.into_parts();
-
-        let mut buffer = [0u8; 9];
-        let n = match arg {
-            Arg::This(x) => {
-                buffer[0] = major << 5 | x;
-                1
-            }
-            Arg::Indefinite => {
-                buffer[0] = major << 5 | 31;
-                1
-            }
-            Arg::Next1(x) => {
-                buffer[0] = major << 5 | 24;
-                buffer[1] = x;
-                2
-            }
-            Arg::Next2(x) => {
-                buffer[0] = major << 5 | 25;
-                buffer[1..3].copy_from_slice(&x.to_be_bytes());
-                3
-            }
-            Arg::Next4(x) => {
-                buffer[0] = major << 5 | 26;
-                buffer[1..5].copy_from_slice(&x.to_be_bytes());
-                5
-            }
-            Arg::Next8(x) => {
-                buffer[0] = major << 5 | 27;
-                buffer[1..9].copy_from_slice(&x.to_be_bytes());
-                9
-            }
-        };
-
-        self.0.write_all(&buffer[..n])
+        match header {
+            Header::Positive(x) => self.positive(x),
+            Header::Negative(x) => self.negative(x),
+            Header::Bytes(x) => self.push_len(2, x),
+            Header::Text(x) => self.push_len(3, x),
+            Header::Array(x) => self.array(x),
+            Header::Map(x) => self.map(x),
+            Header::Tag(x) => self.tag(x),
+            Header::Break => self.0.write_all(&[0xff]),
+            Header::Simple(x) => self.simple(x),
+            Header::Float(x) => self.float(x),
+        }
     }
 
     /// Writes a definite-length byte string (header and body).
@@ -281,8 +302,10 @@ impl<W: Write> Encoder<W> {
     /// [`push`](Self::push) with [`Header::Bytes`]`(None)`, then call this
     /// method for each definite-length segment, and finally push
     /// [`Header::Break`].
+    #[inline]
     pub fn bytes(&mut self, value: &[u8]) -> Result<(), crate::io::Error> {
-        self.push(Header::Bytes(Some(value.len())))?;
+        self.reserve(value.len().saturating_add(9));
+        self.push_len(2, Some(value.len()))?;
         self.0.write_all(value)
     }
 
@@ -290,8 +313,10 @@ impl<W: Write> Encoder<W> {
     ///
     /// When used as a segment inside [`Header::Text`]`(None)`, this writes one
     /// well-formed UTF-8 text segment.
+    #[inline]
     pub fn text(&mut self, value: &str) -> Result<(), crate::io::Error> {
-        self.push(Header::Text(Some(value.len())))?;
+        self.reserve(value.len().saturating_add(9));
+        self.push_len(3, Some(value.len()))?;
         self.0.write_all(value.as_bytes())
     }
 
@@ -352,6 +377,53 @@ impl<R: Read> From<R> for Decoder<R> {
     }
 }
 
+#[inline]
+fn decode_header(raw: &[u8; 9], arg: Option<u64>, start: usize) -> Result<Header, Error> {
+    let major = raw[0] >> 5;
+    let minor = raw[0] & 0b00011111;
+
+    // On 64-bit targets every u64 length fits in usize; on smaller
+    // targets an unrepresentable length is reported as a syntax error
+    // (nothing that large could be read anyway).
+    #[cfg(target_pointer_width = "64")]
+    let len = |arg: Option<u64>| Ok::<_, Error>(arg.map(|x| x as usize));
+
+    #[cfg(not(target_pointer_width = "64"))]
+    let len = |arg: Option<u64>| match arg {
+        Some(x) => usize::try_from(x)
+            .map(Some)
+            .map_err(|_| Error::Syntax(start)),
+        None => Ok(None),
+    };
+
+    Ok(match major {
+        0 => Header::Positive(arg.ok_or(Error::Syntax(start))?),
+        1 => Header::Negative(arg.ok_or(Error::Syntax(start))?),
+        2 => Header::Bytes(len(arg)?),
+        3 => Header::Text(len(arg)?),
+        4 => Header::Array(len(arg)?),
+        5 => Header::Map(len(arg)?),
+        6 => Header::Tag(arg.ok_or(Error::Syntax(start))?),
+        // `major` is a three-bit value, so the only remaining case is 7.
+        _ => match minor {
+            x @ 0..=23 => Header::Simple(x),
+            // RFC 8949 §3.3: a 0xf8 prefix followed by a byte less than
+            // 0x20 is not well-formed.
+            24 if raw[1] >= 32 => Header::Simple(raw[1]),
+            24 => return Err(Error::Syntax(start)),
+            25 => Header::Float(f16_to_f64(u16::from_be_bytes([raw[1], raw[2]]))),
+            26 => Header::Float(
+                f32::from_bits(u32::from_be_bytes([raw[1], raw[2], raw[3], raw[4]])) as f64,
+            ),
+            27 => Header::Float(f64::from_bits(u64::from_be_bytes([
+                raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7], raw[8],
+            ]))),
+            31 => Header::Break,
+            _ => return Err(Error::Syntax(start)),
+        },
+    })
+}
+
 impl<R: Read> Decoder<R> {
     /// Pulls the next header from the input.
     ///
@@ -369,35 +441,40 @@ impl<R: Read> Decoder<R> {
         let start = self.offset;
         self.mark = start;
 
-        let mut prefix = [0u8; 1];
-        self.read_exact(&mut prefix)?;
+        let mut raw = [0u8; 9];
+        self.read_exact(&mut raw[..1])?;
 
-        let major = prefix[0] >> 5;
-        let minor = prefix[0] & 0b00011111;
+        let minor = raw[0] & 0b00011111;
 
-        let arg = match minor {
-            x @ 0..=23 => Arg::This(x),
+        let (arg, raw_len) = match minor {
+            x @ 0..=23 => (Some(u64::from(x)), 1),
             24 => {
-                let mut b = [0u8; 1];
-                self.read_exact(&mut b)?;
-                Arg::Next1(b[0])
+                self.read_exact(&mut raw[1..2])?;
+                (Some(u64::from(raw[1])), 2)
             }
             25 => {
-                let mut b = [0u8; 2];
-                self.read_exact(&mut b)?;
-                Arg::Next2(u16::from_be_bytes(b))
+                self.read_exact(&mut raw[1..3])?;
+                (Some(u64::from(u16::from_be_bytes([raw[1], raw[2]]))), 3)
             }
             26 => {
-                let mut b = [0u8; 4];
-                self.read_exact(&mut b)?;
-                Arg::Next4(u32::from_be_bytes(b))
+                self.read_exact(&mut raw[1..5])?;
+                (
+                    Some(u64::from(u32::from_be_bytes([
+                        raw[1], raw[2], raw[3], raw[4],
+                    ]))),
+                    5,
+                )
             }
             27 => {
-                let mut b = [0u8; 8];
-                self.read_exact(&mut b)?;
-                Arg::Next8(u64::from_be_bytes(b))
+                self.read_exact(&mut raw[1..9])?;
+                (
+                    Some(u64::from_be_bytes([
+                        raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7], raw[8],
+                    ])),
+                    9,
+                )
             }
-            31 => Arg::Indefinite,
+            31 => (None, 1),
             _ => return Err(Error::Syntax(start)),
         };
 
@@ -406,73 +483,13 @@ impl<R: Read> Decoder<R> {
         // losslessly even for non-preferred encodings.
         #[cfg(feature = "alloc")]
         {
-            let (raw, raw_len) = &mut self.last_header;
-            raw[0] = prefix[0];
-            *raw_len = match arg {
-                Arg::This(..) | Arg::Indefinite => 1,
-                Arg::Next1(x) => {
-                    raw[1] = x;
-                    2
-                }
-                Arg::Next2(x) => {
-                    raw[1..3].copy_from_slice(&x.to_be_bytes());
-                    3
-                }
-                Arg::Next4(x) => {
-                    raw[1..5].copy_from_slice(&x.to_be_bytes());
-                    5
-                }
-                Arg::Next8(x) => {
-                    raw[1..9].copy_from_slice(&x.to_be_bytes());
-                    9
-                }
-            };
+            self.last_header.0 = raw;
+            self.last_header.1 = raw_len;
         }
+        #[cfg(not(feature = "alloc"))]
+        let _ = raw_len;
 
-        let int = |arg: Arg| match arg {
-            Arg::This(x) => Some(x as u64),
-            Arg::Next1(x) => Some(x as u64),
-            Arg::Next2(x) => Some(x as u64),
-            Arg::Next4(x) => Some(x as u64),
-            Arg::Next8(x) => Some(x),
-            Arg::Indefinite => None,
-        };
-
-        // On 64-bit targets every u64 length fits in usize; on smaller
-        // targets an unrepresentable length is reported as a syntax error
-        // (nothing that large could be read anyway).
-        #[cfg(target_pointer_width = "64")]
-        let len = |arg: Arg| Ok::<_, Error>(int(arg).map(|x| x as usize));
-
-        #[cfg(not(target_pointer_width = "64"))]
-        let len = |arg: Arg| match int(arg) {
-            Some(x) => usize::try_from(x)
-                .map(Some)
-                .map_err(|_| Error::Syntax(start)),
-            None => Ok(None),
-        };
-
-        Ok(match major {
-            0 => Header::Positive(int(arg).ok_or(Error::Syntax(start))?),
-            1 => Header::Negative(int(arg).ok_or(Error::Syntax(start))?),
-            2 => Header::Bytes(len(arg)?),
-            3 => Header::Text(len(arg)?),
-            4 => Header::Array(len(arg)?),
-            5 => Header::Map(len(arg)?),
-            6 => Header::Tag(int(arg).ok_or(Error::Syntax(start))?),
-            // `major` is a three-bit value, so the only remaining case is 7.
-            _ => match arg {
-                Arg::This(x) => Header::Simple(x),
-                // RFC 8949 §3.3: a 0xf8 prefix followed by a byte less than
-                // 0x20 is not well-formed.
-                Arg::Next1(x) if x >= 32 => Header::Simple(x),
-                Arg::Next1(..) => return Err(Error::Syntax(start)),
-                Arg::Next2(x) => Header::Float(f16_to_f64(x)),
-                Arg::Next4(x) => Header::Float(f32::from_bits(x) as f64),
-                Arg::Next8(x) => Header::Float(f64::from_bits(x)),
-                Arg::Indefinite => Header::Break,
-            },
-        })
+        decode_header(&raw, arg, start)
     }
 
     /// Pushes a header back into the decoder, to be returned by the next
@@ -582,6 +599,10 @@ impl<R: Read> Decoder<R> {
             let mut buffer = Vec::new();
             me.read_body(len, &mut buffer)?;
             match String::from_utf8(buffer) {
+                Ok(s) if out.is_empty() => {
+                    *out = s;
+                    Ok(())
+                }
                 Ok(s) => {
                     out.push_str(&s);
                     Ok(())
@@ -606,6 +627,255 @@ impl<R: Read> Decoder<R> {
 
 #[cfg(feature = "alloc")]
 impl<'de> Decoder<&'de [u8]> {
+    #[inline]
+    fn slice_eof_after_prefix(&mut self) -> Error {
+        if let Some(record) = &mut self.record {
+            record.push(self.reader[0]);
+        }
+        self.reader = &self.reader[1..];
+        self.offset += 1;
+        crate::io::Error::from(crate::io::ErrorKind::UnexpectedEof).into()
+    }
+
+    #[inline]
+    fn finish_slice_header(&mut self, raw: [u8; 9], raw_len: u8) {
+        self.last_header.0 = raw;
+        self.last_header.1 = raw_len;
+        if let Some(record) = &mut self.record {
+            record.extend_from_slice(&raw[..raw_len as usize]);
+        }
+        self.reader = &self.reader[raw_len as usize..];
+        self.offset += raw_len as usize;
+    }
+
+    /// Pulls a plain positive or negative integer from a byte slice.
+    pub(crate) fn integer_slice(&mut self) -> Option<Result<(bool, u64), Error>> {
+        if self.pushback.is_some() {
+            return None;
+        }
+
+        let start = self.offset;
+        let first = *self.reader.first()?;
+        let major = first >> 5;
+        if major > 1 {
+            return None;
+        }
+
+        self.mark = start;
+
+        let minor = first & 0b00011111;
+        let (value, raw_len) = match minor {
+            x @ 0..=23 => (u64::from(x), 1),
+            24 => {
+                if self.reader.len() < 2 {
+                    return Some(Err(self.slice_eof_after_prefix()));
+                }
+                (u64::from(self.reader[1]), 2)
+            }
+            25 => {
+                if self.reader.len() < 3 {
+                    return Some(Err(self.slice_eof_after_prefix()));
+                }
+                (
+                    u64::from(u16::from_be_bytes([self.reader[1], self.reader[2]])),
+                    3,
+                )
+            }
+            26 => {
+                if self.reader.len() < 5 {
+                    return Some(Err(self.slice_eof_after_prefix()));
+                }
+                (
+                    u64::from(u32::from_be_bytes([
+                        self.reader[1],
+                        self.reader[2],
+                        self.reader[3],
+                        self.reader[4],
+                    ])),
+                    5,
+                )
+            }
+            27 => {
+                if self.reader.len() < 9 {
+                    return Some(Err(self.slice_eof_after_prefix()));
+                }
+                (
+                    u64::from_be_bytes([
+                        self.reader[1],
+                        self.reader[2],
+                        self.reader[3],
+                        self.reader[4],
+                        self.reader[5],
+                        self.reader[6],
+                        self.reader[7],
+                        self.reader[8],
+                    ]),
+                    9,
+                )
+            }
+            _ => return Some(Err(Error::Syntax(start))),
+        };
+
+        self.reader = &self.reader[raw_len as usize..];
+        self.offset += raw_len as usize;
+        Some(Ok((major == 1, value)))
+    }
+
+    /// Pulls a plain boolean from a byte slice.
+    pub(crate) fn bool_slice(&mut self) -> Option<bool> {
+        if self.pushback.is_some() {
+            return None;
+        }
+
+        let value = match *self.reader.first()? {
+            0xf4 => false,
+            0xf5 => true,
+            _ => return None,
+        };
+
+        self.mark = self.offset;
+        self.reader = &self.reader[1..];
+        self.offset += 1;
+        Some(value)
+    }
+
+    /// Pulls a plain floating-point number from a byte slice.
+    pub(crate) fn float_slice(&mut self) -> Option<Result<f64, Error>> {
+        if self.pushback.is_some() {
+            return None;
+        }
+
+        let start = self.offset;
+        let first = *self.reader.first()?;
+        let (value, raw_len) = match first {
+            0xf9 => {
+                if self.reader.len() < 3 {
+                    return Some(Err(self.slice_eof_after_prefix()));
+                }
+                (
+                    f16_to_f64(u16::from_be_bytes([self.reader[1], self.reader[2]])),
+                    3,
+                )
+            }
+            0xfa => {
+                if self.reader.len() < 5 {
+                    return Some(Err(self.slice_eof_after_prefix()));
+                }
+                (
+                    f32::from_bits(u32::from_be_bytes([
+                        self.reader[1],
+                        self.reader[2],
+                        self.reader[3],
+                        self.reader[4],
+                    ])) as f64,
+                    5,
+                )
+            }
+            0xfb => {
+                if self.reader.len() < 9 {
+                    return Some(Err(self.slice_eof_after_prefix()));
+                }
+                (
+                    f64::from_bits(u64::from_be_bytes([
+                        self.reader[1],
+                        self.reader[2],
+                        self.reader[3],
+                        self.reader[4],
+                        self.reader[5],
+                        self.reader[6],
+                        self.reader[7],
+                        self.reader[8],
+                    ])),
+                    9,
+                )
+            }
+            _ => return None,
+        };
+
+        self.mark = start;
+        self.reader = &self.reader[raw_len..];
+        self.offset += raw_len;
+        Some(Ok(value))
+    }
+
+    /// Pulls a header from a byte slice without going through `Read`.
+    pub(crate) fn pull_slice(&mut self) -> Result<Header, Error> {
+        if let Some((header, end)) = self.pushback.take() {
+            self.mark = self.offset;
+            self.offset = end;
+            return Ok(header);
+        }
+
+        let start = self.offset;
+        self.mark = start;
+
+        if self.reader.is_empty() {
+            return Err(crate::io::Error::from(crate::io::ErrorKind::UnexpectedEof).into());
+        }
+
+        let mut raw = [0u8; 9];
+        raw[0] = self.reader[0];
+        let minor = raw[0] & 0b00011111;
+        let (arg, raw_len) = match minor {
+            x @ 0..=23 => (Some(u64::from(x)), 1),
+            24 => {
+                if self.reader.len() < 2 {
+                    return Err(self.slice_eof_after_prefix());
+                }
+                raw[1] = self.reader[1];
+                (Some(u64::from(raw[1])), 2)
+            }
+            25 => {
+                if self.reader.len() < 3 {
+                    return Err(self.slice_eof_after_prefix());
+                }
+                raw[1] = self.reader[1];
+                raw[2] = self.reader[2];
+                (Some(u64::from(u16::from_be_bytes([raw[1], raw[2]]))), 3)
+            }
+            26 => {
+                if self.reader.len() < 5 {
+                    return Err(self.slice_eof_after_prefix());
+                }
+                raw[1] = self.reader[1];
+                raw[2] = self.reader[2];
+                raw[3] = self.reader[3];
+                raw[4] = self.reader[4];
+                (
+                    Some(u64::from(u32::from_be_bytes([
+                        raw[1], raw[2], raw[3], raw[4],
+                    ]))),
+                    5,
+                )
+            }
+            27 => {
+                if self.reader.len() < 9 {
+                    return Err(self.slice_eof_after_prefix());
+                }
+                raw[1] = self.reader[1];
+                raw[2] = self.reader[2];
+                raw[3] = self.reader[3];
+                raw[4] = self.reader[4];
+                raw[5] = self.reader[5];
+                raw[6] = self.reader[6];
+                raw[7] = self.reader[7];
+                raw[8] = self.reader[8];
+                (
+                    Some(u64::from_be_bytes([
+                        raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7], raw[8],
+                    ])),
+                    9,
+                )
+            }
+            31 => (None, 1),
+            _ => return Err(Error::Syntax(start)),
+        };
+
+        self.finish_slice_header(raw, raw_len);
+
+        decode_header(&raw, arg, start)
+    }
+
     /// Borrows exactly `len` body bytes from the underlying slice.
     ///
     /// This is only valid immediately after pulling a definite-length bytes

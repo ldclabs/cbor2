@@ -40,6 +40,11 @@ pub trait Write {
     /// Writes all of `data`.
     fn write_all(&mut self, data: &[u8]) -> Result<(), Error>;
 
+    /// Reserves capacity for at least `additional` more bytes, if the
+    /// writer has a meaningful capacity concept.
+    #[inline]
+    fn reserve(&mut self, _additional: usize) {}
+
     /// Flushes any buffered output.
     fn flush(&mut self) -> Result<(), Error>;
 }
@@ -166,6 +171,11 @@ mod no_std {
         }
 
         #[inline]
+        fn reserve(&mut self, additional: usize) {
+            alloc::vec::Vec::reserve(self, additional);
+        }
+
+        #[inline]
         fn flush(&mut self) -> Result<(), Error> {
             Ok(())
         }
@@ -175,6 +185,11 @@ mod no_std {
         #[inline]
         fn write_all(&mut self, data: &[u8]) -> Result<(), Error> {
             (**self).write_all(data)
+        }
+
+        #[inline]
+        fn reserve(&mut self, additional: usize) {
+            (**self).reserve(additional);
         }
 
         #[inline]
