@@ -56,12 +56,16 @@ this library's dependency graph, CI or MSRV.
 | async item I/O (futures / tokio)       |   ✅   |    ❌     |     ❌      |    ❌    |    ❌     |
 | validate / exact size without decoding |   ✅   |    ❌     |     ❌      |    ❌    |    ◑⁴    |
 
-¹ minicbor uses its own `#[derive(Encode, Decode)]`; serde is a separate
-`minicbor-serde` crate.
+¹ minicbor uses its own `#[derive(Encode, Decode)]`; serde is a separate `minicbor-serde` crate.
+
 ² No serde-based CBOR crate deserializes without a heap — but cbor2's low-level [`core::Decoder`](https://docs.rs/cbor2/latest/cbor2/core/struct.Decoder.html) (and cbor4ii's low-level `Decode`) still decode manually with zero allocation.
+
 ³ Sorted map keys, RFC 8949 §4.2.1; most crates emit preferred shortest-form numbers (cbor4ii keeps floats at 64-bit), but only cbor2 ships a full canonical encoder.
+
 ⁴ minicbor's `Decoder::skip` validates structure but there is no exact-size primitive.
+
 ⁵ cbor4ii has no public `no_std` slice serializer; it fills a fixed buffer through `to_writer` over `&mut [u8]`, which needs `std`.
+
 ⁶ cbor4ii's `RawValue` is a core-level borrowed type, not serde-integrated.
 
 `serde_cbor` is unmaintained; the others are maintained.

@@ -53,14 +53,17 @@
 | 异步逐项 I/O（futures / tokio）      |   ✅   |    ❌     |     ❌      |    ❌    |    ❌     |
 | 不解码即可校验 / 算尺寸              |   ✅   |    ❌     |     ❌      |    ❌    |    ◑⁴    |
 
-¹ minicbor 用自带的 `#[derive(Encode, Decode)]`；serde 支持在独立的
-`minicbor-serde` crate 里。
+¹ minicbor 用自带的 `#[derive(Encode, Decode)]`；serde 支持在独立的 `minicbor-serde` crate 里。
+
 ² 没有任何基于 serde 的 CBOR crate 能在无堆下反序列化 —— 但 cbor2 的低层 [`core::Decoder`](https://docs.rs/cbor2/latest/cbor2/core/struct.Decoder.html)
 （以及 cbor4ii 的低层 `Decode`）仍可零分配手动解码。
-³ 即对 map 键排序，RFC 8949 §4.2.1；多数 crate 都会用最短形式编码数字（cbor4ii 的浮点固定为
-64 位），但只有 cbor2 提供完整的规范化编码器。
+
+³ 即对 map 键排序，RFC 8949 §4.2.1；多数 crate 都会用最短形式编码数字（cbor4ii 的浮点固定为 64 位），但只有 cbor2 提供完整的规范化编码器。
+
 ⁴ minicbor 的 `Decoder::skip` 能校验结构，但没有精确尺寸计算原语。
+
 ⁵ cbor4ii 没有公开的 `no_std` 切片序列化器；它通过 `to_writer` 写入 `&mut [u8]` 来填充定长缓冲，这需要 `std`。
+
 ⁶ cbor4ii 的 `RawValue` 是核心层的借用类型，并未与 serde 集成。
 
 `serde_cbor` 已停止维护；其余均在维护中。
