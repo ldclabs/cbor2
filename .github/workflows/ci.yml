@@ -22,8 +22,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
-      - run: cargo build --workspace --all-features
-      - run: cargo test --workspace --all-features
+      - run: cargo build --workspace --all-targets --all-features
+      - run: cargo test --workspace --all-targets --all-features
+
+  feature-tests:
+    name: feature tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            command: cargo test -p cbor2 --all-targets
+          - name: derive
+            command: cargo test -p cbor2 --all-targets --features derive
+          - name: futures
+            command: cargo test -p cbor2 --all-targets --features futures
+          - name: tokio
+            command: cargo test -p cbor2 --all-targets --features tokio
+          - name: futures+tokio
+            command: cargo test -p cbor2 --all-targets --features futures,tokio
+          - name: no-default-futures+tokio
+            command: cargo test -p cbor2 --lib --no-default-features --features futures,tokio
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: ${{ matrix.command }}
 
   no-std:
     name: no_std (${{ matrix.features }})

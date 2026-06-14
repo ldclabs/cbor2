@@ -321,6 +321,37 @@ fn borrowing_entry_points() {
     );
 }
 
+#[derive(Debug, PartialEq, Deserialize)]
+struct BorrowedFields<'a> {
+    #[serde(borrow)]
+    s: &'a str,
+    #[serde(borrow, with = "serde_bytes")]
+    b: &'a [u8],
+}
+
+#[test]
+fn from_slice_borrows_definite_text_and_bytes() {
+    // {"s": "hi", "b": h'dead'}
+    let bytes = hex::decode("a26173626869616242dead").unwrap();
+    let out: BorrowedFields<'_> = cbor2::from_slice(&bytes).unwrap();
+
+    assert_eq!(
+        out,
+        BorrowedFields {
+            s: "hi",
+            b: &[0xde, 0xad]
+        }
+    );
+    assert_eq!(out.s.as_ptr(), bytes[4..].as_ptr());
+    assert_eq!(out.b.as_ptr(), bytes[9..].as_ptr());
+
+    // Chunked strings are accepted for owned targets but cannot satisfy
+    // serde's borrowed visitors because the logical body is not contiguous.
+    let chunked = hex::decode("7f6161ff").unwrap();
+    assert_eq!(cbor2::from_slice::<String>(&chunked).unwrap(), "a");
+    assert!(cbor2::from_slice::<&str>(&chunked).is_err());
+}
+
 #[test]
 fn more_unexpected_descriptions() {
     // A negative integer where a float was expected.

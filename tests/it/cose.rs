@@ -190,6 +190,45 @@ fn tagged_tuple_structs_work_too() {
 }
 
 #[test]
+fn named_structs_can_use_cose_array_shape() {
+    #[derive(Debug, PartialEq, Cbor)]
+    #[cbor(tag = 18, array)]
+    struct Sign1 {
+        #[serde(with = "serde_bytes")]
+        protected: Vec<u8>,
+        unprotected: u8,
+        #[serde(with = "serde_bytes")]
+        payload: Vec<u8>,
+        #[serde(with = "serde_bytes")]
+        signature: Vec<u8>,
+    }
+
+    let msg = Sign1 {
+        protected: vec![0xa0],
+        unprotected: 0,
+        payload: vec![],
+        signature: vec![0xff],
+    };
+
+    assert_eq!(Sign1::KEYS, &[]);
+    assert_eq!(Sign1::TAG, Some(18));
+    const {
+        assert!(Sign1::ARRAY);
+    }
+
+    let bytes = cbor2::to_vec(&msg).unwrap();
+    assert_eq!(hex::encode(&bytes), "d28441a0004041ff");
+    assert_eq!(cbor2::from_slice::<Sign1>(&bytes).unwrap(), msg);
+
+    let json = serde_json::to_string(&msg).unwrap();
+    assert_eq!(
+        json,
+        r#"{"protected":[160],"unprotected":0,"payload":[],"signature":[255]}"#
+    );
+    assert_eq!(serde_json::from_str::<Sign1>(&json).unwrap(), msg);
+}
+
+#[test]
 fn enums_and_generics_work_too() {
     #[derive(Debug, PartialEq, Cbor)]
     enum Message {

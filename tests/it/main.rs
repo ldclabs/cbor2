@@ -4,6 +4,8 @@
 //! and lets the coverage of generic functions instantiated by the tests
 //! merge properly.
 
+#[cfg(all(feature = "alloc", feature = "std"))]
+mod async_io;
 mod canonical;
 #[cfg(feature = "derive")]
 mod cose;

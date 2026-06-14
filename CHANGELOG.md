@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+* `from_slice` now supports borrowed deserialization for definite-length
+  text and byte strings, including nested struct fields such as `&str` and
+  borrowed `serde_bytes` payloads. Segmented indefinite-length strings still
+  decode for owned targets but cannot be borrowed.
+* `#[derive(Cbor)]` supports `#[cbor(array)]` on named structs, encoding
+  fields as a compact CBOR array in declaration order while keeping field
+  names for JSON and other serde formats. `cbor2::Cbor` now exposes
+  `T::ARRAY`.
+* Added `cbor2::async_io` helpers for async byte streams: read one complete
+  CBOR item into a buffer, deserialize owned values from that item, or write
+  a serialized/validated item without attempting unsupported async serde.
+  The `futures` and `tokio` features add matching adapters for
+  `futures_io::AsyncRead`/`AsyncWrite` and
+  `tokio::io::AsyncRead`/`AsyncWrite`.
+
 ## [1.0.2] - 2026-06-13
 
 ### Fixed

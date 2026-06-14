@@ -16,17 +16,19 @@ serde_bytes = "0.11" # only needed for binary fields like the example below
 
 `serde` derives are excellent for the common data model, but some CBOR
 protocols need wire details that serde's attributes cannot express directly:
-integer map keys, semantic tags and COSE-style compact structures.
+integer map keys, field-order arrays, semantic tags and COSE-style compact
+structures.
 `#[derive(cbor2::Cbor)]` generates serde impls for that shape.
 
-| Need | Built in |
-| ---- | -------- |
-| Integer map keys | `#[cbor(key = 1)]` writes a real CBOR integer key, not the text key `"1"`. |
-| Semantic tags | `#[cbor(tag = 18)]` wraps the encoded item in a CBOR tag and requires it on decode. |
-| COSE ergonomics | Compact RFC 9052 structures can be declared directly on Rust structs and tuple structs. |
+| Need               | Built in                                                                                                    |
+| ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| Integer map keys   | `#[cbor(key = 1)]` writes a real CBOR integer key, not the text key `"1"`.                                  |
+| Field-order arrays | `#[cbor(array)]` encodes a named struct as a compact CBOR array while keeping Rust field names.             |
+| Semantic tags      | `#[cbor(tag = 18)]` wraps the encoded item in a CBOR tag and requires it on decode.                         |
+| COSE ergonomics    | Compact RFC 9052 structures can be declared directly on Rust structs and tuple structs.                     |
 | JSON compatibility | Field names and the type name stay untouched, so `serde_json` still uses the natural names and no CBOR tag. |
-| Runtime metadata | The generated `cbor2::Cbor` impl exposes `T::KEYS`, `T::TAG` and `value.keys()`. |
-| Serde attributes | Field-level attributes such as `default`, `skip`, `alias` and `with = "serde_bytes"` continue to work. |
+| Runtime metadata   | The generated `cbor2::Cbor` impl exposes `T::KEYS`, `T::TAG`, `T::ARRAY` and `value.keys()`.                |
+| Serde attributes   | Field-level attributes such as `default`, `skip`, `alias` and `with = "serde_bytes"` continue to work.      |
 
 ## Example
 
@@ -45,6 +47,26 @@ struct CoseHeader {
 
 assert_eq!(CoseHeader::KEYS, &[("alg", 1), ("kid", 4)]);
 assert_eq!(CoseHeader::TAG, Some(18));
+```
+
+For a COSE array-shaped message with named Rust fields:
+
+```rust
+use cbor2::Cbor;
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 18, array)]
+struct Sign1 {
+    #[serde(with = "serde_bytes")]
+    protected: Vec<u8>,
+    unprotected: u8,
+    #[serde(with = "serde_bytes")]
+    payload: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    signature: Vec<u8>,
+}
+
+assert!(Sign1::ARRAY);
 ```
 
 The macro generates `serde::Serialize`, `serde::Deserialize` and

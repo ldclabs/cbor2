@@ -10,14 +10,17 @@ implementation size, message size and extensibility.
 Feature coverage includes ordinary serde encode/decode, RFC 8949 preferred
 serialization, deterministic/canonical encoders, a dynamic [`Value`] type,
 validated [`RawValue`] pass-through bytes, semantic tags, bignums, COSE-style
-integer map keys and tags through [`#[derive(Cbor)]`](derive@Cbor), CBOR
-sequences, diagnostic notation, exact-one-item [`validate`], allocation-free
-serialization helpers and `no_std` modes.
+integer map keys, arrays and tags through `#[derive(Cbor)]`, CBOR
+sequences, async item I/O through [`async_io`], diagnostic notation,
+exact-one-item [`validate`], allocation-free serialization helpers and
+`no_std` modes.
 
 # Quick start
 
 Use [`to_vec`]/[`to_writer`] to encode any [`serde::Serialize`] type and
-[`from_slice`]/[`from_reader`] to decode any [`serde::Deserialize`] type:
+[`from_slice`]/[`from_reader`] to decode any [`serde::Deserialize`] type.
+`from_slice` can also borrow definite-length text and byte strings directly
+from the input buffer:
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -98,6 +101,27 @@ CBOR byte string:
 let value = cbor2::Value::Bytes(vec![0xde, 0xad]);
 assert_eq!(hex::encode(cbor2::to_vec(&value).unwrap()), "42dead");
 ```
+
+# Borrowed Slice Deserialization
+
+```rust
+use serde::Deserialize;
+
+#[derive(Debug, PartialEq, Deserialize)]
+struct Borrowed<'a> {
+    #[serde(borrow)]
+    label: &'a str,
+    #[serde(borrow, with = "serde_bytes")]
+    payload: &'a [u8],
+}
+
+let bytes = hex::decode("a2656c6162656c626869677061796c6f616442dead").unwrap();
+let value: Borrowed<'_> = cbor2::from_slice(&bytes).unwrap();
+assert_eq!(value, Borrowed { label: "hi", payload: &[0xde, 0xad] });
+```
+
+Indefinite-length strings are accepted for owned targets, but cannot be
+borrowed because their logical body is split across segments.
 
 # Dynamic values
 
@@ -190,6 +214,26 @@ assert_eq!(items, vec![cbor2::Value::from("hello"), cbor2::Value::from(42)]);
 assert!(cbor2::validate(&stream[..]).is_err()); // not exactly one item
 ```
 
+# Async Item I/O
+
+Serde itself is synchronous. The [`async_io`] module handles the async
+transport boundary by reading or writing one complete CBOR item; once an item
+is buffered, use the regular serde API:
+
+```rust
+# async fn example<R: cbor2::async_io::AsyncRead + ?Sized>(reader: &mut R) -> Result<(), cbor2::de::Error> {
+let item = cbor2::async_io::read_item(reader).await?;
+let value: cbor2::Value = cbor2::from_slice(&item)?;
+# let _ = value;
+# Ok(())
+# }
+```
+
+Enable the `futures` or `tokio` feature to call the matching
+`async_io::futures::*` or `async_io::tokio::*` helpers directly with
+`futures_io::AsyncRead`/`AsyncWrite` or `tokio::io::AsyncRead`/`AsyncWrite`
+types.
+
 # Tags
 
 CBOR data items can be wrapped in semantic [tags](tag) (RFC 8949 §3.4). The
@@ -206,11 +250,12 @@ let bytes = cbor2::to_vec(&uri).unwrap();
 assert_eq!(bytes[0], 0xd8); // tag(32)
 ```
 
-# Integer map keys and tags (COSE)
+# Integer Map Keys, Arrays and Tags (COSE)
 
-Protocols like COSE (RFC 9052) key their maps with integers and wrap
-their messages in tags, which serde's data model cannot express. With the
-`derive` feature, [`#[derive(Cbor)]`](derive@Cbor) declares both — a textual
+Protocols like COSE (RFC 9052) key their maps with integers, encode several
+messages as arrays and wrap messages in tags, which serde's data model cannot
+express on named structs. With the `derive` feature, `#[derive(Cbor)]`
+declares those details — a textual
 `#[serde(rename = "1")]` stays a *text* key, so there is no ambiguity
 between the two. The derive generates the `Serialize` and `Deserialize`
 impls itself, so serde's derives must not be repeated alongside it:
@@ -237,7 +282,7 @@ assert_eq!(cbor2::from_slice::<CoseSign>(&bytes).unwrap(), key);
 
 The tag is optional, and the serde attributes (`alias`, `default`,
 `skip`, `with`, ...) work as usual; map types like `HashMap<String, _>`
-are unaffected. The declared keys and tag stay inspectable at runtime
+are unaffected. The declared keys, array shape and tag stay inspectable at runtime
 through the [`Cbor`](trait@Cbor) trait, which the derive implements
 alongside the serde traits.
 
@@ -265,6 +310,37 @@ assert_eq!(serde_json::from_str::<CoseSign>(&json).unwrap(), key);
 # }
 ```
 
+For named Rust structs whose CBOR wire shape is an array, add
+`#[cbor(array)]`:
+
+```rust
+# #[cfg(feature = "derive")] {
+use cbor2::Cbor;
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 18, array)]
+struct Sign1 {
+    #[serde(with = "serde_bytes")]
+    protected: Vec<u8>,
+    unprotected: u8,
+    #[serde(with = "serde_bytes")]
+    payload: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    signature: Vec<u8>,
+}
+
+let msg = Sign1 {
+    protected: vec![0xa0],
+    unprotected: 0,
+    payload: vec![],
+    signature: vec![0xff],
+};
+
+assert_eq!(hex::encode(cbor2::to_vec(&msg).unwrap()), "d28441a0004041ff");
+assert!(Sign1::ARRAY);
+# }
+```
+
 # Allocation-free helpers
 
 Three helpers work without touching the heap: [`validate`] checks that an
@@ -287,8 +363,8 @@ assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
 # Crate features
 
 * **`std`** *(default)* — implements the [`io`] traits for every
-  `std::io::Read`/`std::io::Write` and adds the `HashMap` conversions.
-  Implies `alloc`.
+  `std::io::Read`/`std::io::Write`, adds [`async_io`] and adds the
+  `HashMap` conversions. Implies `alloc`.
 * **`alloc`** — everything that needs a heap, without `std`: [`Value`],
   [`to_vec`]/[`from_slice`]/[`from_reader`], [`RawValue`],
   [`diagnostic`]/[`diagnostic_pretty`], the deterministic encoders and
@@ -298,8 +374,12 @@ assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
   serialization with [`to_writer`]/[`to_slice`]/[`serialized_size`],
   [`validate`], the [`tag`] wrappers and the [`core`] header codec.
   Deserializing through serde requires `alloc`.
-* **`derive`** — the [`Cbor`](derive@Cbor) derive macro; works in all three modes
+* **`derive`** — the `#[derive(Cbor)]` macro; works in all three modes
   (deserialization again requiring `alloc`).
+* **`futures`** — adds `async_io::futures` adapters for
+  `futures_io::AsyncRead`/`futures_io::AsyncWrite`. Implies `std`.
+* **`tokio`** — adds `async_io::tokio` adapters for
+  `tokio::io::AsyncRead`/`tokio::io::AsyncWrite`. Implies `std`.
 
 # Diagnostic notation
 
@@ -431,6 +511,8 @@ the legacy release — and 1.0 stabilizes it; none of the old API survives.
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+#[cfg(all(feature = "alloc", feature = "std"))]
+pub mod async_io;
 pub mod core;
 pub mod de;
 #[cfg(feature = "alloc")]
@@ -471,10 +553,12 @@ pub mod __private {
     pub use alloc::vec;
 }
 /// Derives [`serde::Serialize`] and [`serde::Deserialize`] with CBOR
-/// protocol details: integer map keys and a CBOR tag (COSE, RFC 9052).
+/// protocol details: integer map keys, field-order arrays and a CBOR tag
+/// (COSE, RFC 9052).
 ///
-/// Annotate fields with `#[cbor(key = <integer>)]` and the container with
-/// `#[cbor(tag = <integer>)]`. Do **not** also derive serde's
+/// Annotate fields with `#[cbor(key = <integer>)]`, named structs with
+/// `#[cbor(array)]`, and the container with `#[cbor(tag = <integer>)]`.
+/// Do **not** also derive serde's
 /// `Serialize`/`Deserialize` — this macro generates both impls. Field
 /// names and the type name stay untouched, so the same type still
 /// serializes naturally to JSON and other formats. See the [crate-level
@@ -485,8 +569,8 @@ pub mod __private {
 #[cfg(feature = "derive")]
 pub use cbor2_derive::Cbor;
 
-/// The CBOR protocol details a [`#[derive(Cbor)]`](derive@Cbor) type
-/// declares: its integer map keys and its tag.
+/// The CBOR protocol details a `#[derive(Cbor)]` type
+/// declares: its integer map keys, array shape and tag.
 ///
 /// The derive implements this trait alongside `Serialize` and
 /// `Deserialize`, so the `#[cbor(...)]` attributes stay inspectable at
@@ -526,6 +610,12 @@ pub trait Cbor {
 
     /// The CBOR tag declared with `#[cbor(tag = <integer>)]`, if any.
     const TAG: Option<u64>;
+
+    /// Whether a named struct is encoded as a CBOR array in field order.
+    ///
+    /// This is `true` for `#[cbor(array)]`. Tuple structs are already arrays
+    /// in serde's data model and do not need this marker.
+    const ARRAY: bool = false;
 
     /// The [`KEYS`](Self::KEYS) table collected into a map.
     #[cfg(feature = "alloc")]

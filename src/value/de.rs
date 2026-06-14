@@ -5,6 +5,7 @@ use serde::de::{self, Deserializer as _};
 
 use super::{Error, Integer, Value};
 use crate::core::tag;
+use crate::ser::StructShape;
 use crate::tag::TagAccess;
 
 impl From<Integer> for de::Unexpected<'_> {
@@ -428,12 +429,14 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
             }
         }
 
-        match value {
-            Value::Map(x) => visitor.visit_map(StructAccess {
+        match (marker.shape, value) {
+            (StructShape::Map, Value::Map(x)) => visitor.visit_map(StructAccess {
                 iter: x.iter().peekable(),
                 keys: marker.keys,
             }),
-            _ => Err(de::Error::invalid_type(value.into(), &"map")),
+            (StructShape::Map, _) => Err(de::Error::invalid_type(value.into(), &"map")),
+            (StructShape::Array, Value::Array(x)) => visitor.visit_seq(Deserializer(x.iter())),
+            (StructShape::Array, _) => Err(de::Error::invalid_type(value.into(), &"array")),
         }
     }
 
@@ -556,7 +559,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
             Value::Tag(.., v) => Deserializer(v.as_ref()).deserialize_enum(name, variants, visitor),
             Value::Map(x) if x.len() == 1 => visitor.visit_enum(KeyedEnum {
                 pair: &x[0],
-                keys: crate::ser::parse_struct_marker(name).map_or("", |marker| marker.keys),
+                marker: crate::ser::parse_struct_marker(name),
             }),
             x @ Value::Text(..) => visitor.visit_enum(Deserializer(x)),
             _ => Err(de::Error::invalid_type(self.0.into(), &"map")),
@@ -724,7 +727,7 @@ impl<'a, 'de, T: Iterator<Item = &'a (Value, Value)>> de::MapAccess<'de> for Str
 // marked enum (empty otherwise) into its struct variants.
 struct KeyedEnum<'a> {
     pair: &'a (Value, Value),
-    keys: &'static str,
+    marker: Option<crate::ser::StructMarker<'static>>,
 }
 
 impl<'a, 'de> de::EnumAccess<'de> for KeyedEnum<'a> {
@@ -741,7 +744,7 @@ impl<'a, 'de> de::EnumAccess<'de> for KeyedEnum<'a> {
             key,
             KeyedVariant {
                 value: &self.pair.1,
-                keys: self.keys,
+                marker: self.marker,
             },
         ))
     }
@@ -749,7 +752,7 @@ impl<'a, 'de> de::EnumAccess<'de> for KeyedEnum<'a> {
 
 struct KeyedVariant<'a> {
     value: &'a Value,
-    keys: &'static str,
+    marker: Option<crate::ser::StructMarker<'static>>,
 }
 
 impl<'de> de::VariantAccess<'de> for KeyedVariant<'_> {
@@ -788,12 +791,18 @@ impl<'de> de::VariantAccess<'de> for KeyedVariant<'_> {
             value = v;
         }
 
-        match value {
-            Value::Map(x) => visitor.visit_map(StructAccess {
+        let shape = self
+            .marker
+            .as_ref()
+            .map_or(StructShape::Map, |marker| marker.shape);
+        match (shape, value) {
+            (StructShape::Map, Value::Map(x)) => visitor.visit_map(StructAccess {
                 iter: x.iter().peekable(),
-                keys: self.keys,
+                keys: self.marker.as_ref().map_or("", |marker| marker.keys),
             }),
-            _ => Err(de::Error::invalid_type(value.into(), &"map")),
+            (StructShape::Map, _) => Err(de::Error::invalid_type(value.into(), &"map")),
+            (StructShape::Array, Value::Array(x)) => visitor.visit_seq(Deserializer(x.iter())),
+            (StructShape::Array, _) => Err(de::Error::invalid_type(value.into(), &"array")),
         }
     }
 }

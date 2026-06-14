@@ -157,6 +157,56 @@ fn marked_tags_wrap_and_are_required() {
 }
 
 #[test]
+fn marked_named_structs_can_encode_as_arrays() {
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[serde(rename = "@@CBOR@@18@@@@array@@Sign1")]
+    struct Sign1 {
+        protected: serde_bytes::ByteBuf,
+        unprotected: u8,
+        payload: serde_bytes::ByteBuf,
+        signature: serde_bytes::ByteBuf,
+    }
+
+    let msg = Sign1 {
+        protected: serde_bytes::ByteBuf::from(vec![0xa0]),
+        unprotected: 0,
+        payload: serde_bytes::ByteBuf::from(vec![]),
+        signature: serde_bytes::ByteBuf::from(vec![0xff]),
+    };
+
+    let bytes = cbor2::to_vec(&msg).unwrap();
+    assert_eq!(hex::encode(&bytes), "d28441a0004041ff");
+    assert_eq!(cbor2::from_slice::<Sign1>(&bytes).unwrap(), msg);
+
+    let value = Value::serialized(&msg).unwrap();
+    assert_eq!(
+        value,
+        Value::Tag(
+            18,
+            Box::new(Value::Array(vec![
+                Value::Bytes(vec![0xa0]),
+                Value::from(0),
+                Value::Bytes(vec![]),
+                Value::Bytes(vec![0xff]),
+            ]))
+        )
+    );
+    assert_eq!(value.deserialized::<Sign1>().unwrap(), msg);
+
+    let untagged = hex::decode("8441a0004041ff").unwrap();
+    assert!(cbor2::from_slice::<Sign1>(&untagged)
+        .unwrap_err()
+        .to_string()
+        .contains("expected tag(18)"));
+    assert!(cbor2::cbor!({ "protected" => 1 })
+        .unwrap()
+        .deserialized::<Sign1>()
+        .unwrap_err()
+        .to_string()
+        .contains("expected tag(18)"));
+}
+
+#[test]
 fn only_canonical_markers_take_effect() {
     // A frame or tag segment that does not parse leaves an ordinary
     // container name: no tag, no key table.

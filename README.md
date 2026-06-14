@@ -1,9 +1,9 @@
 # cbor2
 
 Full-featured [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949) CBOR for
-Rust: serde round trips, canonical/deterministic encoding, `Value`/`RawValue`,
-semantic tags, COSE integer keys, validation, diagnostic notation and
-`no_std`.
+Rust: async item I/O, serde round trips, canonical/deterministic encoding,
+`Value`/`RawValue`, semantic tags, COSE integer keys and arrays, validation,
+diagnostic notation and `no_std`.
 
 [![CI](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml/badge.svg)](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/cbor2.svg)](https://crates.io/crates/cbor2)
@@ -16,15 +16,16 @@ from `std` services down to constrained `no_std` targets.
 
 ## Why cbor2
 
-| Need | Built in |
-| ---- | -------- |
-| Serde encode/decode | `to_vec`, `to_writer`, `from_slice`, `from_reader` and direct support for derived serde types. |
-| Stable protocol bytes | RFC 8949 preferred serialization plus deterministic/canonical encoders and selectable map key ordering. |
-| Protocol CBOR | Semantic tags, bignums, integer map keys and COSE-style tags with `#[derive(cbor2::Cbor)]`. |
-| Dynamic or unknown data | `Value`, the `cbor!` macro and `RawValue` for validated pass-through bytes. |
-| Safe input handling | Exact-one-item `validate`, CBOR sequence iteration, recursion limits and guarded allocation sizes. |
-| Debugging and inspection | RFC 8949 diagnostic notation, pretty diagnostics and the companion `cbor` CLI. |
-| Embedded targets | `no_std + alloc` for the full heap-backed API, or no allocation for serialization, validation and the core header codec. |
+| Need                     | Built in                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| Serde encode/decode      | `to_vec`, `to_writer`, borrowing `from_slice`, `from_reader` and direct support for derived serde types.                 |
+| Stable protocol bytes    | RFC 8949 preferred serialization plus deterministic/canonical encoders and selectable map key ordering.                  |
+| Protocol CBOR            | Semantic tags, bignums, integer map keys, field-order arrays and COSE-style tags with `#[derive(cbor2::Cbor)]`.          |
+| Dynamic or unknown data  | `Value`, the `cbor!` macro and `RawValue` for validated pass-through bytes.                                              |
+| Safe input handling      | Exact-one-item `validate`, CBOR sequence iteration, recursion limits and guarded allocation sizes.                       |
+| Async boundaries         | `async_io` reads or writes one complete CBOR item without pretending serde itself is async.                              |
+| Debugging and inspection | RFC 8949 diagnostic notation, pretty diagnostics and the companion `cbor` CLI.                                           |
+| Embedded targets         | `no_std + alloc` for the full heap-backed API, or no allocation for serialization, validation and the core header codec. |
 
 Dual-licensed under MIT or the [UNLICENSE](http://unlicense.org).
 
@@ -72,6 +73,9 @@ a buffer must contain exactly one item.
 
 * **Full serde integration** — `#[derive(Serialize, Deserialize)]` types
   encode and decode directly.
+* **Borrowing `from_slice`** — definite-length text and byte strings can
+  deserialize as `&str` and borrowed `serde_bytes` values directly from the
+  input buffer; segmented indefinite strings fall back to owned buffers.
 * **RFC 8949 preferred serialization** — integers and floats are always
   encoded in their smallest lossless form, including half-precision floats.
 * **A dynamic `Value` type** — the CBOR analogue of `serde_json::Value`,
@@ -86,14 +90,15 @@ a buffer must contain exactly one item.
   For protocols built on the older RFC 7049 §3.9 "Canonical CBOR" rule
   (kept as RFC 8949 §4.2.3, and used by ciborium's canonical module), the
   `*_with` variants take `KeyOrder::LengthFirst`.
-* **Integer map keys and tags (COSE)** — with the `derive` feature,
+* **Integer map keys, arrays and tags (COSE)** — with the `derive` feature,
   `#[derive(cbor2::Cbor)]` maps struct fields to integer keys
-  (`#[cbor(key = 1)]`) and wraps the struct in a CBOR tag
+  (`#[cbor(key = 1)]`), encodes named structs as field-order arrays
+  (`#[cbor(array)]`) and wraps containers in CBOR tags
   (`#[cbor(tag = 18)]`), as RFC 9052 requires, with no ambiguity against
   textual keys. Field names and the type name stay untouched, so the same
   types still serialize to plain JSON — `serde_json::to_string(&v)` just
-  works, with the original field names and no tag. The declared keys and
-  tag stay inspectable at runtime through the `cbor2::Cbor` trait.
+  works, with the original field names and no tag. The declared keys, array
+  shape and tag stay inspectable at runtime through the `cbor2::Cbor` trait.
 * **Raw values** — `RawValue` keeps one item as validated, undecoded
   bytes: serializing splices them into the stream untouched and
   deserializing captures them byte for byte, for signature payloads,
@@ -113,6 +118,9 @@ a buffer must contain exactly one item.
   `serialized_size` computes the exact encoded size of any serializable
   value and `to_slice` encodes into a caller-provided buffer; none of them
   allocates heap memory.
+* **Async item I/O** — the `async_io` module frames complete CBOR items on
+  async byte streams, then reuses the normal synchronous serde API once an
+  item is buffered.
 * **A low-level header codec** — the `core` module exposes the pull/push
   `Header` interface for applications that need precise wire control.
 * **`no_std` support** — `default-features = false, features = ["alloc"]`
@@ -122,11 +130,13 @@ a buffer must contain exactly one item.
 
 ## Crate features
 
-| Feature  | Default         | Effect                                                                                                                                               |
-| -------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `std`    | yes             | Implements the `cbor2::io` traits for every `std::io::Read`/`Write` and adds the `HashMap` conversions. Implies `alloc`.                             |
-| `alloc`  | yes (via `std`) | Everything needing a heap: `Value`, `to_vec`/`from_slice`/`from_reader`, `RawValue`, `diagnostic`, the deterministic encoders and the `cbor!` macro. |
-| `derive` | no              | The `#[derive(cbor2::Cbor)]` macro.                                                                                                                  |
+| Feature   | Default         | Effect                                                                                                                                               |
+| --------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `std`     | yes             | Implements the `cbor2::io` traits for every `std::io::Read`/`Write`, adds `async_io`, and adds the `HashMap` conversions. Implies `alloc`.           |
+| `alloc`   | yes (via `std`) | Everything needing a heap: `Value`, `to_vec`/`from_slice`/`from_reader`, `RawValue`, `diagnostic`, the deterministic encoders and the `cbor!` macro. |
+| `derive`  | no              | The `#[derive(cbor2::Cbor)]` macro.                                                                                                                  |
+| `futures` | no              | Adds `async_io::futures` helpers for `futures_io::AsyncRead`/`AsyncWrite`. Implies `std`.                                                            |
+| `tokio`   | no              | Adds `async_io::tokio` helpers for `tokio::io::AsyncRead`/`AsyncWrite`. Implies `std`.                                                               |
 
 With no features at all the crate is a `#![no_std]` core for constrained
 targets: streaming serialization with `to_writer`/`to_slice`/
@@ -189,14 +199,43 @@ If you build data with `Value`, use `Value::Bytes(...)` or the `From`
 implementations for byte slices/vectors; those already represent a CBOR
 byte string.
 
-### Integer map keys and tags: COSE with `#[derive(Cbor)]`
+### Borrowed deserialization from slices
+
+`from_slice` is lifetime-aware: definite-length text and byte-string bodies
+can be borrowed directly from the input. This matches serde_json's slice
+path and is useful for signed payloads or COSE structures where the input
+buffer already lives long enough.
+
+```rust
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct Packet<'a> {
+    #[serde(borrow)]
+    label: &'a str,
+    #[serde(borrow, with = "serde_bytes")]
+    payload: &'a [u8],
+}
+
+let bytes = hex::decode("a2656c6162656c626869677061796c6f616442dead").unwrap();
+let packet: Packet<'_> = cbor2::from_slice(&bytes).unwrap();
+assert_eq!(packet.label, "hi");
+assert_eq!(packet.payload, &[0xde, 0xad]);
+```
+
+Indefinite-length strings are still accepted, but they cannot be borrowed
+because their body is split across segments.
+
+### Integer map keys, arrays and tags: COSE with `#[derive(Cbor)]`
 
 With the `derive` feature, `#[derive(cbor2::Cbor)]` generates the serde
 `Serialize`/`Deserialize` impls with CBOR protocol details: fields
 annotated `#[cbor(key = ...)]` use integer map keys and the container is
-wrapped in a CBOR tag (`#[cbor(tag = ...)]`, required on decode). Field
-names and the type name stay untouched, so the same types still
-serialize to plain JSON.
+wrapped in a CBOR tag (`#[cbor(tag = ...)]`, required on decode). Named
+structs can also use `#[cbor(array)]` to encode as a compact field-order
+CBOR array while keeping Rust field names for JSON and code. Field names
+and the type name stay untouched, so the same types still serialize to
+plain JSON.
 
 ```toml
 [dependencies]
@@ -280,7 +319,7 @@ The full program lives in [`examples/cose.rs`](examples/cose.rs):
 `cargo run --features derive --example cose`.
 
 The derive also implements the `cbor2::Cbor` trait, which exposes the
-declared protocol details at runtime — `T::KEYS` and `T::TAG` as
+declared protocol details at runtime — `T::KEYS`, `T::TAG` and `T::ARRAY` as
 allocation-free constants, and `value.keys()` as a
 `BTreeMap<String, i128>`:
 
@@ -289,6 +328,36 @@ use cbor2::Cbor; // one import: the derive macro and the trait
 
 assert_eq!(Protected::KEYS, &[("alg", 1)]);
 assert_eq!(CoseEncrypt0::TAG, Some(16));
+assert!(!CoseEncrypt0::ARRAY);
+```
+
+For COSE structures whose wire shape is an array but whose Rust form should
+keep named fields, add `#[cbor(array)]`:
+
+```rust
+use cbor2::Cbor;
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 18, array)]
+struct Sign1 {
+    #[serde(with = "serde_bytes")]
+    protected: Vec<u8>,
+    unprotected: u8,
+    #[serde(with = "serde_bytes")]
+    payload: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    signature: Vec<u8>,
+}
+
+let msg = Sign1 {
+    protected: vec![0xa0],
+    unprotected: 0,
+    payload: vec![],
+    signature: vec![0xff],
+};
+
+assert_eq!(hex::encode(cbor2::to_vec(&msg).unwrap()), "d28441a0004041ff");
+assert!(Sign1::ARRAY);
 ```
 
 ### Dynamic values
@@ -358,6 +427,44 @@ let items: Vec<cbor2::Value> = cbor2::de::Deserializer::from_reader(&stream[..])
 
 assert_eq!(items, vec![cbor2::Value::from("first"), cbor2::Value::from(2)]);
 assert!(cbor2::validate(&stream[..]).is_err()); // a sequence is not one item
+```
+
+### Async item I/O
+
+Serde itself is synchronous, but async transports usually need item
+boundaries. The `async_io` module reads one complete CBOR item into a
+buffer, validates the same structure as `validate`, and then lets you call
+`from_slice` on bytes that you own.
+
+```rust
+# async fn example<R: cbor2::async_io::AsyncRead + ?Sized>(reader: &mut R) -> Result<(), cbor2::de::Error> {
+let item = cbor2::async_io::read_item(reader).await?;
+let value: cbor2::Value = cbor2::from_slice(&item)?;
+# Ok(())
+# }
+```
+
+Use `async_io::write_value` to serialize and send a value, or
+`async_io::write_item` when you already have a validated single-item byte
+buffer.
+
+With the `futures` or `tokio` feature enabled, use the runtime-specific
+adapters instead of writing a local wrapper:
+
+```rust
+# #[cfg(feature = "futures")]
+# async fn futures_example<R: futures_io::AsyncRead + Unpin + ?Sized>(reader: &mut R) -> Result<(), cbor2::de::Error> {
+let item = cbor2::async_io::futures::read_item(reader).await?;
+# let _: cbor2::Value = cbor2::from_slice(&item)?;
+# Ok(())
+# }
+#
+# #[cfg(feature = "tokio")]
+# async fn tokio_example<R: tokio::io::AsyncRead + Unpin + ?Sized>(reader: &mut R) -> Result<(), cbor2::de::Error> {
+let item = cbor2::async_io::tokio::read_item(reader).await?;
+# let _: cbor2::Value = cbor2::from_slice(&item)?;
+# Ok(())
+# }
 ```
 
 ### More examples

@@ -103,23 +103,35 @@ impl ser::Error for Error {
 ///
 /// ```text
 /// @@CBOR@@<tag>@@<field>=<key>;<field>=<key>@@<OriginalName>
+/// @@CBOR@@<tag>@@<field>=<key>;<field>=<key>@@array@@<OriginalName>
 /// ```
 ///
 /// `<tag>` is an optional CBOR tag number and each `<field>=<key>` entry
 /// maps a serde field name to an integer map key; both segments may be
-/// empty. Because the marker renames only the *container* — which
-/// formats like JSON ignore — field names stay untouched and the same
-/// type serializes naturally everywhere else.
+/// empty. The optional `array` segment switches named structs from map
+/// encoding to field-order array encoding. Because the marker renames
+/// only the *container* — which formats like JSON ignore — field names
+/// stay untouched and the same type serializes naturally everywhere else.
 ///
 /// Only canonical decimals count: no leading zeros, no `-0`, no `+`,
 /// within the CBOR integer range (the tag within `0..=2^64-1`). A name
 /// that does not parse is an ordinary container name with no effect.
 pub const STRUCT_MARKER: &str = "@@CBOR@@";
 
+/// The container wire shape carried by a parsed [`STRUCT_MARKER`].
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum StructShape {
+    /// A struct encoded as a CBOR map.
+    Map,
+    /// A struct encoded as a CBOR array in serde field order.
+    Array,
+}
+
 // A parsed `STRUCT_MARKER` container name.
 pub(crate) struct StructMarker<'a> {
     pub tag: Option<u64>,
     pub keys: &'a str,
+    pub shape: StructShape,
 }
 
 // Splits a marked container name into its tag number and its field key
@@ -128,14 +140,19 @@ pub(crate) struct StructMarker<'a> {
 pub(crate) fn parse_struct_marker(name: &str) -> Option<StructMarker<'_>> {
     let rest = name.strip_prefix(STRUCT_MARKER)?;
     let (tag, rest) = rest.split_once("@@")?;
-    let (keys, _original) = rest.split_once("@@")?;
+    let (keys, original) = rest.split_once("@@")?;
 
     let tag = match tag {
         "" => None,
         _ => Some(canonical_u64(tag)?),
     };
 
-    Some(StructMarker { tag, keys })
+    let shape = match original.strip_prefix("array@@") {
+        Some(..) => StructShape::Array,
+        None => StructShape::Map,
+    };
+
+    Some(StructMarker { tag, keys, shape })
 }
 
 // The integer map key for a struct field, if the key table names it.
@@ -425,6 +442,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             encoder: self,
             ending: length.is_none(),
             tag: false,
+            shape: StructShape::Map,
             keys: "",
         })
     }
@@ -459,6 +477,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
                 encoder: self,
                 ending: false,
                 tag: true,
+                shape: StructShape::Map,
                 keys: "",
             });
         }
@@ -470,6 +489,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             encoder: self,
             ending: false,
             tag: false,
+            shape: StructShape::Map,
             keys: "",
         })
     }
@@ -481,6 +501,7 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
             encoder: self,
             ending: length.is_none(),
             tag: false,
+            shape: StructShape::Map,
             keys: "",
         })
     }
@@ -492,18 +513,24 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         length: usize,
     ) -> Result<Self::SerializeStruct, Error> {
         let mut keys = "";
+        let mut shape = StructShape::Map;
         if let Some(marker) = parse_struct_marker(name) {
             keys = marker.keys;
+            shape = marker.shape;
             if let Some(tag) = marker.tag {
                 self.0.push(Header::Tag(tag))?;
             }
         }
 
-        self.0.push(Header::Map(Some(length)))?;
+        match shape {
+            StructShape::Map => self.0.push(Header::Map(Some(length)))?,
+            StructShape::Array => self.0.push(Header::Array(Some(length)))?,
+        }
         Ok(CollectionSerializer {
             encoder: self,
             ending: false,
             tag: false,
+            shape,
             keys,
         })
     }
@@ -516,15 +543,21 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         variant: &'static str,
         length: usize,
     ) -> Result<Self::SerializeStructVariant, Error> {
-        let keys = parse_struct_marker(name).map_or("", |marker| marker.keys);
+        let marker = parse_struct_marker(name);
+        let keys = marker.as_ref().map_or("", |marker| marker.keys);
+        let shape = marker.map_or(StructShape::Map, |marker| marker.shape);
 
         self.0.push(Header::Map(Some(1)))?;
         self.serialize_str(variant)?;
-        self.0.push(Header::Map(Some(length)))?;
+        match shape {
+            StructShape::Map => self.0.push(Header::Map(Some(length)))?,
+            StructShape::Array => self.0.push(Header::Array(Some(length)))?,
+        }
         Ok(CollectionSerializer {
             encoder: self,
             ending: false,
             tag: false,
+            shape,
             keys,
         })
     }
@@ -603,6 +636,8 @@ pub struct CollectionSerializer<'a, W> {
     encoder: &'a mut Serializer<W>,
     ending: bool,
     tag: bool,
+    // Structs may be marker-switched from maps to field-order arrays.
+    shape: StructShape,
     // The `<field>=<key>` table of a marked struct (see [`STRUCT_MARKER`]);
     // empty for everything else.
     keys: &'static str,
@@ -718,7 +753,9 @@ impl<W: Write> ser::SerializeStruct for CollectionSerializer<'_, W> {
         key: &'static str,
         value: &U,
     ) -> Result<(), Error> {
-        self.encoder.push_field_key(self.keys, key)?;
+        if self.shape == StructShape::Map {
+            self.encoder.push_field_key(self.keys, key)?;
+        }
         value.serialize(&mut *self.encoder)
     }
 
@@ -738,7 +775,9 @@ impl<W: Write> ser::SerializeStructVariant for CollectionSerializer<'_, W> {
         key: &'static str,
         value: &U,
     ) -> Result<(), Error> {
-        self.encoder.push_field_key(self.keys, key)?;
+        if self.shape == StructShape::Map {
+            self.encoder.push_field_key(self.keys, key)?;
+        }
         value.serialize(&mut *self.encoder)
     }
 

@@ -11,10 +11,10 @@
 //! ```
 //!
 //! The derive generates `serde::Serialize` and `serde::Deserialize` impls
-//! for CBOR protocols that need integer map keys and semantic tags, such as
-//! COSE (RFC 9052). It also implements `cbor2::Cbor`, exposing the declared
-//! keys and tag as runtime metadata. The original Rust field names stay
-//! intact for JSON and other serde formats.
+//! for CBOR protocols that need integer map keys, field-order arrays and
+//! semantic tags, such as COSE (RFC 9052). It also implements `cbor2::Cbor`,
+//! exposing the declared keys, tag and array shape as runtime metadata. The
+//! original Rust field names stay intact for JSON and other serde formats.
 //!
 //! ```ignore
 //! use cbor2::Cbor;
@@ -46,7 +46,8 @@ use syn::spanned::Spanned as _;
 const MARKER: &str = "@@CBOR@@";
 
 /// Derives `serde::Serialize` and `serde::Deserialize` with CBOR protocol
-/// details: integer map keys (`#[cbor(key = <integer>)]` on fields) and a
+/// details: integer map keys (`#[cbor(key = <integer>)]` on fields),
+/// field-order array structs (`#[cbor(array)]` on the container) and a
 /// CBOR tag (`#[cbor(tag = <integer>)]` on the container). The declared
 /// details are also exposed through an implementation of the
 /// `cbor2::Cbor` trait, so the generated code requires the `cbor2` crate
@@ -76,7 +77,7 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
         ));
     }
 
-    let tag = container_tag(&input.attrs)?;
+    let container = container_attrs(&input.attrs)?;
     let serde = scan_serde(&input.attrs);
     if let Some(span) = serde.rename.map(|(_, span)| span).or(serde.split_rename) {
         return Err(syn::Error::new(
@@ -93,6 +94,21 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
                 merge_entry(&mut entries, entry)?;
             }
 
+            if let Some(span) = container.array {
+                if !matches!(data.fields, syn::Fields::Named(..)) {
+                    return Err(syn::Error::new(
+                        span,
+                        "#[cbor(array)] requires a struct with named fields",
+                    ));
+                }
+                if let Some(entry) = entries.first() {
+                    return Err(syn::Error::new(
+                        entry.span,
+                        "#[cbor(key = ...)] cannot be used with #[cbor(array)]",
+                    ));
+                }
+            }
+
             if !entries.is_empty() {
                 if let Some(span) = serde.rename_all {
                     return Err(syn::Error::new(
@@ -105,11 +121,14 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
         }
 
         syn::Data::Enum(data) => {
-            if let Some(tag) = tag {
+            if let Some(tag) = &container.tag {
                 return Err(syn::Error::new(
                     tag.span,
                     "`tag = ...` is not supported on enums",
                 ));
+            }
+            if let Some(span) = container.array {
+                return Err(syn::Error::new(span, "`array` is not supported on enums"));
             }
 
             for variant in &data.variants {
@@ -160,7 +179,12 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
         }
     }
 
-    Ok(generate(&input, tag.map(|tag| tag.value), &entries))
+    Ok(generate(
+        &input,
+        container.tag.as_ref().map(|tag| tag.value),
+        container.array.is_some(),
+        &entries,
+    ))
 }
 
 // Generates the serde impls: a hidden *shadow* of the item carrying the
@@ -168,7 +192,12 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
 // to the shadow's generated functions. The shadow accesses the real
 // type's fields directly, so nothing is copied at runtime, and the real
 // type's name and field names stay exactly as written.
-fn generate(input: &syn::DeriveInput, tag: Option<u64>, entries: &[Entry]) -> TokenStream {
+fn generate(
+    input: &syn::DeriveInput,
+    tag: Option<u64>,
+    array: bool,
+    entries: &[Entry],
+) -> TokenStream {
     let ident = &input.ident;
     let shadow_ident = format_ident!("__CborShadow");
 
@@ -204,7 +233,7 @@ fn generate(input: &syn::DeriveInput, tag: Option<u64>, entries: &[Entry]) -> To
         syn::parse_quote!(#[serde(remote = #remote)]),
         syn::parse_quote!(#[automatically_derived]),
     ];
-    if let Some(marker) = marker(tag, entries, ident) {
+    if let Some(marker) = marker(tag, array, entries, ident) {
         head.push(syn::parse_quote!(#[serde(rename = #marker)]));
     }
     head.append(&mut shadow.attrs);
@@ -243,6 +272,7 @@ fn generate(input: &syn::DeriveInput, tag: Option<u64>, entries: &[Entry]) -> To
         Some(tag) => quote!(::core::option::Option::Some(#tag)),
         None => quote!(::core::option::Option::None),
     };
+    let array_const = array;
 
     quote! {
         #[doc(hidden)]
@@ -273,6 +303,7 @@ fn generate(input: &syn::DeriveInput, tag: Option<u64>, entries: &[Entry]) -> To
             impl #impl_generics ::cbor2::Cbor for #ident #ty_generics #where_clause {
                 const KEYS: &'static [(&'static str, i128)] = &[#(#key_pairs),*];
                 const TAG: ::core::option::Option<u64> = #tag_const;
+                const ARRAY: bool = #array_const;
             }
         };
     }
@@ -305,8 +336,8 @@ fn copied_attrs(attrs: &[syn::Attribute]) -> Vec<syn::Attribute> {
 
 // The `@@CBOR@@<tag>@@<keys>@@<name>` container marker, when the item
 // declares a tag or integer keys.
-fn marker(tag: Option<u64>, entries: &[Entry], ident: &syn::Ident) -> Option<String> {
-    if tag.is_none() && entries.is_empty() {
+fn marker(tag: Option<u64>, array: bool, entries: &[Entry], ident: &syn::Ident) -> Option<String> {
+    if tag.is_none() && entries.is_empty() && !array {
         return None;
     }
 
@@ -322,6 +353,9 @@ fn marker(tag: Option<u64>, entries: &[Entry], ident: &syn::Ident) -> Option<Str
         let _ = write!(&mut marker, "{}={}", entry.name, entry.key);
     }
     marker.push_str("@@");
+    if array {
+        marker.push_str("array@@");
+    }
     let name = ident.to_string();
     marker.push_str(name.strip_prefix("r#").unwrap_or(&name));
 
@@ -332,30 +366,6 @@ fn marker(tag: Option<u64>, entries: &[Entry], ident: &syn::Ident) -> Option<Str
 struct TagArg {
     value: u64,
     span: proc_macro2::Span,
-}
-
-impl Parse for TagArg {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let name: syn::Ident = input.parse()?;
-        if name != "tag" {
-            return Err(syn::Error::new(name.span(), "expected `tag = <integer>`"));
-        }
-        input.parse::<syn::Token![=]>()?;
-
-        const RANGE: &str = "tag must fit a CBOR tag (0 ..= 2^64 - 1)";
-        if input.peek(syn::Token![-]) {
-            return Err(syn::Error::new(input.span(), RANGE));
-        }
-        let literal: syn::LitInt = input.parse()?;
-        let value = literal
-            .base10_parse()
-            .map_err(|_| syn::Error::new(literal.span(), RANGE))?;
-
-        Ok(TagArg {
-            value,
-            span: literal.span(),
-        })
-    }
 }
 
 // `key = <integer>` inside a field's `#[cbor(...)]`.
@@ -388,25 +398,68 @@ impl Parse for KeyArg {
     }
 }
 
-// Reads the container-level `#[cbor(tag = ...)]` attribute.
-fn container_tag(attrs: &[syn::Attribute]) -> syn::Result<Option<TagArg>> {
-    let mut tag: Option<TagArg> = None;
+struct ContainerAttrs {
+    tag: Option<TagArg>,
+    array: Option<proc_macro2::Span>,
+}
+
+// Reads the container-level `#[cbor(tag = ..., array)]` attribute.
+fn container_attrs(attrs: &[syn::Attribute]) -> syn::Result<ContainerAttrs> {
+    let mut out = ContainerAttrs {
+        tag: None,
+        array: None,
+    };
 
     for attr in attrs {
         if !attr.path().is_ident("cbor") {
             continue;
         }
 
-        let arg: TagArg = attr.parse_args()?;
-        if tag.replace(arg).is_some() {
-            return Err(syn::Error::new(
-                attr.span(),
-                "duplicate #[cbor(tag = ...)] attribute",
-            ));
-        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("tag") {
+                const RANGE: &str = "tag must fit a CBOR tag (0 ..= 2^64 - 1)";
+                let value = meta.value()?;
+                if value.peek(syn::Token![-]) {
+                    return Err(syn::Error::new(value.span(), RANGE));
+                }
+                let literal: syn::LitInt = value.parse()?;
+                let tag = TagArg {
+                    value: literal
+                        .base10_parse()
+                        .map_err(|_| syn::Error::new(literal.span(), RANGE))?,
+                    span: literal.span(),
+                };
+                if out.tag.replace(tag).is_some() {
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "duplicate #[cbor(tag = ...)] attribute",
+                    ));
+                }
+                Ok(())
+            } else if meta.path.is_ident("array") {
+                if meta.input.peek(syn::Token![=]) {
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "expected `array` without a value",
+                    ));
+                }
+                if out.array.replace(meta.path.span()).is_some() {
+                    return Err(syn::Error::new(
+                        meta.path.span(),
+                        "duplicate #[cbor(array)] attribute",
+                    ));
+                }
+                Ok(())
+            } else {
+                Err(syn::Error::new(
+                    meta.path.span(),
+                    "expected `tag = <integer>` or `array`",
+                ))
+            }
+        })?;
     }
 
-    Ok(tag)
+    Ok(out)
 }
 
 // One `<name>=<key>` entry of the marker's key table.
@@ -675,6 +728,26 @@ mod tests {
     }
 
     #[test]
+    fn supports_field_order_array_structs() {
+        let out = expanded(quote! {
+            #[cbor(tag = 18, array)]
+            struct Sign1 {
+                protected: Vec<u8>,
+                unprotected: u8,
+                payload: Vec<u8>,
+                signature: Vec<u8>,
+            }
+        });
+
+        assert!(
+            out.contains(r#"rename = "@@CBOR@@18@@@@array@@Sign1""#),
+            "{out}"
+        );
+        assert!(out.contains("const ARRAY : bool = true"), "{out}");
+        assert!(out.contains("impl :: cbor2 :: Cbor for Sign1"), "{out}");
+    }
+
+    #[test]
     fn strips_raw_identifier_prefixes() {
         let out = expanded(quote! {
             struct S {
@@ -825,6 +898,27 @@ mod tests {
         assert!(msg.contains("not supported on enums"), "{msg}");
 
         let msg = error(quote! {
+            #[cbor(array)]
+            enum E { A }
+        });
+        assert!(msg.contains("`array` is not supported on enums"), "{msg}");
+
+        let msg = error(quote! {
+            #[cbor(array)]
+            struct S(u8);
+        });
+        assert!(msg.contains("requires a struct with named fields"), "{msg}");
+
+        let msg = error(quote! {
+            #[cbor(array)]
+            struct S {
+                #[cbor(key = 1)]
+                a: u8,
+            }
+        });
+        assert!(msg.contains("cannot be used with #[cbor(array)]"), "{msg}");
+
+        let msg = error(quote! {
             struct S {
                 #[cbor(key = 1)]
                 #[cbor(key = 2)]
@@ -852,7 +946,10 @@ mod tests {
                 a: u8,
             }
         });
-        assert!(msg.contains("expected `tag = <integer>`"), "{msg}");
+        assert!(
+            msg.contains("expected `tag = <integer>` or `array`"),
+            "{msg}"
+        );
 
         let msg = error(quote! {
             union U { a: u8 }

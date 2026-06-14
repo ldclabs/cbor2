@@ -3,6 +3,7 @@ use alloc::{vec, vec::Vec};
 use serde::ser::{self, SerializeMap as _, SerializeSeq as _, SerializeTupleVariant as _};
 
 use super::{Error, Integer, Value};
+use crate::ser::StructShape;
 
 // Struct field keys follow the same COSE-style rule as the streaming
 // serializer: fields named in the container's key table become integer
@@ -113,12 +114,20 @@ struct Map {
     temp: Option<Value>,
 }
 
+struct StructFields {
+    map: Vec<(Value, Value)>,
+    array: Vec<Value>,
+    shape: StructShape,
+}
+
 // The collector for a struct: a map plus the key table and tag of its
 // container marker, if any.
 struct StructMap {
     data: Vec<(Value, Value)>,
+    array: Vec<Value>,
     keys: &'static str,
     tag: Option<u64>,
+    shape: StructShape,
 }
 
 // The collector for a tuple struct, which may carry a marker tag.
@@ -139,7 +148,7 @@ impl ser::Serializer for Serializer<()> {
     type SerializeTupleVariant = Serializer<Named<Vec<Value>>>;
     type SerializeMap = Serializer<Map>;
     type SerializeStruct = Serializer<StructMap>;
-    type SerializeStructVariant = Serializer<Named<Vec<(Value, Value)>>>;
+    type SerializeStructVariant = Serializer<Named<StructFields>>;
 
     mkserialize! {
         serialize_bool(bool),
@@ -288,8 +297,10 @@ impl ser::Serializer for Serializer<()> {
         let marker = crate::ser::parse_struct_marker(name);
         Ok(Serializer(StructMap {
             data: Vec::with_capacity(length),
+            array: Vec::with_capacity(length),
             keys: marker.as_ref().map_or("", |marker| marker.keys),
-            tag: marker.and_then(|marker| marker.tag),
+            tag: marker.as_ref().and_then(|marker| marker.tag),
+            shape: marker.map_or(StructShape::Map, |marker| marker.shape),
         }))
     }
 
@@ -301,11 +312,18 @@ impl ser::Serializer for Serializer<()> {
         variant: &'static str,
         length: usize,
     ) -> Result<Self::SerializeStructVariant, Error> {
+        let marker = crate::ser::parse_struct_marker(name);
         Ok(Serializer(Named {
             name: variant,
-            data: Vec::with_capacity(length),
+            data: StructFields {
+                map: Vec::with_capacity(length),
+                array: Vec::with_capacity(length),
+                shape: marker
+                    .as_ref()
+                    .map_or(StructShape::Map, |marker| marker.shape),
+            },
             tag: None,
-            keys: crate::ser::parse_struct_marker(name).map_or("", |marker| marker.keys),
+            keys: marker.map_or("", |marker| marker.keys),
         }))
     }
 
@@ -442,19 +460,24 @@ impl ser::SerializeStruct for Serializer<StructMap> {
         key: &'static str,
         value: &U,
     ) -> Result<(), Error> {
-        self.0
-            .data
-            .push((field_key(self.0.keys, key), Value::serialized(value)?));
+        let value = Value::serialized(value)?;
+        match self.0.shape {
+            StructShape::Map => self.0.data.push((field_key(self.0.keys, key), value)),
+            StructShape::Array => self.0.array.push(value),
+        }
         Ok(())
     }
 
     #[inline]
     fn end(self) -> Result<Value, Error> {
-        Ok(apply_tag(self.0.tag, self.0.data.into()))
+        Ok(match self.0.shape {
+            StructShape::Map => apply_tag(self.0.tag, self.0.data.into()),
+            StructShape::Array => apply_tag(self.0.tag, self.0.array.into()),
+        })
     }
 }
 
-impl ser::SerializeStructVariant for Serializer<Named<Vec<(Value, Value)>>> {
+impl ser::SerializeStructVariant for Serializer<Named<StructFields>> {
     type Ok = Value;
     type Error = Error;
 
@@ -464,15 +487,21 @@ impl ser::SerializeStructVariant for Serializer<Named<Vec<(Value, Value)>>> {
         key: &'static str,
         value: &U,
     ) -> Result<(), Error> {
-        self.0
-            .data
-            .push((field_key(self.0.keys, key), Value::serialized(value)?));
+        let value = Value::serialized(value)?;
+        match self.0.data.shape {
+            StructShape::Map => self.0.data.map.push((field_key(self.0.keys, key), value)),
+            StructShape::Array => self.0.data.array.push(value),
+        }
         Ok(())
     }
 
     #[inline]
     fn end(self) -> Result<Value, Error> {
-        Ok(vec![(self.0.name.into(), self.0.data.into())].into())
+        let value = match self.0.data.shape {
+            StructShape::Map => self.0.data.map.into(),
+            StructShape::Array => self.0.data.array.into(),
+        };
+        Ok(vec![(self.0.name.into(), value)].into())
     }
 }
 

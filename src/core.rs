@@ -604,6 +604,30 @@ impl<R: Read> Decoder<R> {
     }
 }
 
+impl<'de> Decoder<&'de [u8]> {
+    /// Borrows exactly `len` body bytes from the underlying slice.
+    ///
+    /// This is only valid immediately after pulling a definite-length bytes
+    /// or text header. Generic readers still go through [`read_exact`];
+    /// slice deserialization uses this to hand serde borrowed strings and
+    /// byte strings without copying.
+    #[cfg(feature = "alloc")]
+    pub(crate) fn borrow_body(&mut self, len: usize) -> Result<&'de [u8], crate::io::Error> {
+        debug_assert!(self.pushback.is_none());
+        if self.reader.len() < len {
+            return Err(crate::io::ErrorKind::UnexpectedEof.into());
+        }
+
+        let (head, tail) = self.reader.split_at(len);
+        self.reader = tail;
+        self.offset += len;
+        if let Some(record) = &mut self.record {
+            record.extend_from_slice(head);
+        }
+        Ok(head)
+    }
+}
+
 // 2^n for a small exponent range, built directly from the IEEE 754 bit
 // layout because `f64::powi` is not available in core. Exact for any
 // normal exponent (-1022..=1023).
