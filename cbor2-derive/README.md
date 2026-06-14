@@ -3,6 +3,8 @@
 Derive support for protocol-shaped CBOR with
 [`cbor2`](https://crates.io/crates/cbor2).
 
+English | [简体中文](README.zh-CN.md)
+
 Most users should not depend on this crate directly. Enable the `derive`
 feature on `cbor2` instead:
 

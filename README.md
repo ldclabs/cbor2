@@ -9,6 +9,8 @@ diagnostic notation and `no_std`.
 [![crates.io](https://img.shields.io/crates/v/cbor2.svg)](https://crates.io/crates/cbor2)
 [![docs.rs](https://docs.rs/cbor2/badge.svg)](https://docs.rs/cbor2)
 
+English | [简体中文](README.zh-CN.md)
+
 `cbor2` is for applications that need a complete CBOR toolkit, not just a
 basic serializer. It works with ordinary `serde::Serialize`/`Deserialize`
 types, preserves protocol details when the wire shape matters, and scales

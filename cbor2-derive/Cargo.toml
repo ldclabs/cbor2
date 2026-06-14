@@ -1,6 +1,6 @@
 [package]
 name = "cbor2-derive"
-version = "1.0.2"
+version = "1.0.3"
 authors = ["0xZensh <txr1883@gmail.com>"]
 description = "Derive cbor2 serde impls for CBOR protocols: integer map keys, semantic tags and inspectable COSE metadata."
 homepage = "https://github.com/ldclabs/cbor2"

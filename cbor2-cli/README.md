@@ -5,6 +5,8 @@ Inspect, convert and debug CBOR
 crate installs the `cbor` command, built on
 [`cbor2`](https://crates.io/crates/cbor2).
 
+English | [简体中文](README.zh-CN.md)
+
 ```bash
 cargo install cbor2-cli   # installs the `cbor` binary
 ```

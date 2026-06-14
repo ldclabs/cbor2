@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [1.0.3] - 2026-06-14
 
 ### Added
 
@@ -17,7 +17,11 @@
   a serialized/validated item without attempting unsupported async serde.
   The `futures` and `tokio` features add matching adapters for
   `futures_io::AsyncRead`/`AsyncWrite` and
-  `tokio::io::AsyncRead`/`AsyncWrite`.
+  `tokio::io::AsyncRead`/`AsyncWrite`. The `AsyncRead`/`AsyncWrite` traits
+  return `Send` futures, so the helpers stay `Send` through generic code and
+  can be driven by multi-threaded executors such as `tokio::spawn`.
+* Added Simplified Chinese READMEs for `cbor2`, `cbor2-cli` and
+  `cbor2-derive`, with language switch links from the English READMEs.
 
 ### Changed
 
@@ -29,6 +33,7 @@
   deserializer annotations and slice-specific construction should use the
   source-based forms. The slice recursion-limit constructor is
   `Deserializer::from_slice_with_recursion_limit`.
+* Bumped `cbor2`, `cbor2-cli` and `cbor2-derive` to `1.0.3`.
 
 ## [1.0.2] - 2026-06-13
 
