@@ -138,6 +138,35 @@ fn read_item_future_is_send() {
 }
 
 #[test]
+fn futures_are_send_in_generic_context() {
+    // These generic bodies type-check only if the helper futures are `Send`
+    // for *any* `Send` reader/writer — i.e. the `Send` guarantee survives
+    // generic code, not just concrete call sites (`tokio::spawn` needs it).
+    fn assert_send<T: Send>(value: T) -> T {
+        value
+    }
+
+    fn check_read<R: AsyncRead + Send>(reader: &mut R) -> impl Send + '_ {
+        assert_send(async_io::read_item(reader))
+    }
+
+    fn check_value<R: AsyncRead + Send>(reader: &mut R) -> impl Send + '_ {
+        assert_send(async_io::read_value::<u8, R>(reader))
+    }
+
+    fn check_write<W: AsyncWrite + Send>(writer: &mut W) -> impl Send + '_ {
+        assert_send(async_io::write_value(writer, &1u8))
+    }
+
+    // Reference the functions so they are instantiated and not dead code.
+    let _ = (
+        check_read::<Cursor>,
+        check_value::<Cursor>,
+        check_write::<Sink>,
+    );
+}
+
+#[test]
 fn write_helpers_emit_exactly_one_item() {
     let mut sink = Sink::default();
     block_on(async_io::write_value(&mut sink, &("ok", 1u8))).unwrap();

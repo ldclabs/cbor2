@@ -14,6 +14,7 @@
 //! can be driven by multi-threaded executors such as `tokio::spawn`.
 
 use alloc::vec::Vec;
+use core::future::Future;
 
 use serde::{de, ser};
 
@@ -26,33 +27,44 @@ const CHUNK: usize = 4096;
 ///
 /// Runtime-specific socket types can be adapted with a small newtype that
 /// calls the runtime's own `read_exact` method.
-#[allow(async_fn_in_trait)]
+///
+/// The returned future is `Send`, so the [`read_item`]/[`read_value`]
+/// helpers stay `Send` even through generic code and can be driven by
+/// multi-threaded executors such as `tokio::spawn`. Implementors whose
+/// future would not be `Send` are not supported.
 pub trait AsyncRead {
     /// Reads exactly `buf.len()` bytes into `buf`.
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), crate::io::Error>;
+    fn read_exact(
+        &mut self,
+        buf: &mut [u8],
+    ) -> impl Future<Output = Result<(), crate::io::Error>> + Send;
 }
 
 /// An async sink for bytes.
 ///
 /// Runtime-specific socket types can be adapted with a small newtype that
 /// calls the runtime's own `write_all` and `flush` methods.
-#[allow(async_fn_in_trait)]
+///
+/// The returned futures are `Send`; see [`AsyncRead`].
 pub trait AsyncWrite {
     /// Writes all of `data`.
-    async fn write_all(&mut self, data: &[u8]) -> Result<(), crate::io::Error>;
+    fn write_all(
+        &mut self,
+        data: &[u8],
+    ) -> impl Future<Output = Result<(), crate::io::Error>> + Send;
 
     /// Flushes any buffered output.
-    async fn flush(&mut self) -> Result<(), crate::io::Error>;
+    fn flush(&mut self) -> impl Future<Output = Result<(), crate::io::Error>> + Send;
 }
 
-impl<T: AsyncRead + ?Sized> AsyncRead for &mut T {
+impl<T: AsyncRead + Send + ?Sized> AsyncRead for &mut T {
     #[inline]
     async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), crate::io::Error> {
         (**self).read_exact(buf).await
     }
 }
 
-impl<T: AsyncWrite + ?Sized> AsyncWrite for &mut T {
+impl<T: AsyncWrite + Send + ?Sized> AsyncWrite for &mut T {
     #[inline]
     async fn write_all(&mut self, data: &[u8]) -> Result<(), crate::io::Error> {
         (**self).write_all(data).await
@@ -80,7 +92,7 @@ pub mod futures {
 
     impl<R> AsyncRead for Reader<'_, R>
     where
-        R: futures_io::AsyncRead + Unpin + ?Sized,
+        R: futures_io::AsyncRead + Unpin + Send + ?Sized,
     {
         async fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<(), crate::io::Error> {
             while !buf.is_empty() {
@@ -102,7 +114,7 @@ pub mod futures {
 
     impl<W> AsyncWrite for Writer<'_, W>
     where
-        W: futures_io::AsyncWrite + Unpin + ?Sized,
+        W: futures_io::AsyncWrite + Unpin + Send + ?Sized,
     {
         async fn write_all(&mut self, mut data: &[u8]) -> Result<(), crate::io::Error> {
             while !data.is_empty() {
@@ -124,7 +136,7 @@ pub mod futures {
     /// Reads one complete, well-formed CBOR item from a futures reader.
     pub async fn read_item<R>(reader: &mut R) -> Result<alloc::vec::Vec<u8>, Error>
     where
-        R: futures_io::AsyncRead + Unpin + ?Sized,
+        R: futures_io::AsyncRead + Unpin + Send + ?Sized,
     {
         let mut reader = Reader(reader);
         super::read_item(&mut reader).await
@@ -134,7 +146,7 @@ pub mod futures {
     pub async fn read_value<T, R>(reader: &mut R) -> Result<T, Error>
     where
         T: de::DeserializeOwned,
-        R: futures_io::AsyncRead + Unpin + ?Sized,
+        R: futures_io::AsyncRead + Unpin + Send + ?Sized,
     {
         let mut reader = Reader(reader);
         super::read_value(&mut reader).await
@@ -143,7 +155,7 @@ pub mod futures {
     /// Writes one already-encoded CBOR item to a futures writer.
     pub async fn write_item<W>(writer: &mut W, item: &[u8]) -> Result<(), Error>
     where
-        W: futures_io::AsyncWrite + Unpin + ?Sized,
+        W: futures_io::AsyncWrite + Unpin + Send + ?Sized,
     {
         let mut writer = Writer(writer);
         super::write_item(&mut writer, item).await
@@ -153,7 +165,7 @@ pub mod futures {
     pub async fn write_value<T, W>(writer: &mut W, value: &T) -> Result<(), crate::ser::Error>
     where
         T: ?Sized + ser::Serialize,
-        W: futures_io::AsyncWrite + Unpin + ?Sized,
+        W: futures_io::AsyncWrite + Unpin + Send + ?Sized,
     {
         let mut writer = Writer(writer);
         super::write_value(&mut writer, value).await
@@ -174,7 +186,7 @@ pub mod tokio {
 
     impl<R> AsyncRead for Reader<'_, R>
     where
-        R: ::tokio::io::AsyncRead + Unpin + ?Sized,
+        R: ::tokio::io::AsyncRead + Unpin + Send + ?Sized,
     {
         async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), crate::io::Error> {
             use ::tokio::io::AsyncReadExt as _;
@@ -187,7 +199,7 @@ pub mod tokio {
 
     impl<W> AsyncWrite for Writer<'_, W>
     where
-        W: ::tokio::io::AsyncWrite + Unpin + ?Sized,
+        W: ::tokio::io::AsyncWrite + Unpin + Send + ?Sized,
     {
         async fn write_all(&mut self, data: &[u8]) -> Result<(), crate::io::Error> {
             use ::tokio::io::AsyncWriteExt as _;
@@ -205,7 +217,7 @@ pub mod tokio {
     /// Reads one complete, well-formed CBOR item from a Tokio reader.
     pub async fn read_item<R>(reader: &mut R) -> Result<alloc::vec::Vec<u8>, Error>
     where
-        R: ::tokio::io::AsyncRead + Unpin + ?Sized,
+        R: ::tokio::io::AsyncRead + Unpin + Send + ?Sized,
     {
         let mut reader = Reader(reader);
         super::read_item(&mut reader).await
@@ -215,7 +227,7 @@ pub mod tokio {
     pub async fn read_value<T, R>(reader: &mut R) -> Result<T, Error>
     where
         T: de::DeserializeOwned,
-        R: ::tokio::io::AsyncRead + Unpin + ?Sized,
+        R: ::tokio::io::AsyncRead + Unpin + Send + ?Sized,
     {
         let mut reader = Reader(reader);
         super::read_value(&mut reader).await
@@ -224,7 +236,7 @@ pub mod tokio {
     /// Writes one already-encoded CBOR item to a Tokio writer.
     pub async fn write_item<W>(writer: &mut W, item: &[u8]) -> Result<(), Error>
     where
-        W: ::tokio::io::AsyncWrite + Unpin + ?Sized,
+        W: ::tokio::io::AsyncWrite + Unpin + Send + ?Sized,
     {
         let mut writer = Writer(writer);
         super::write_item(&mut writer, item).await
@@ -234,7 +246,7 @@ pub mod tokio {
     pub async fn write_value<T, W>(writer: &mut W, value: &T) -> Result<(), crate::ser::Error>
     where
         T: ?Sized + ser::Serialize,
-        W: ::tokio::io::AsyncWrite + Unpin + ?Sized,
+        W: ::tokio::io::AsyncWrite + Unpin + Send + ?Sized,
     {
         let mut writer = Writer(writer);
         super::write_value(&mut writer, value).await
