@@ -94,6 +94,50 @@ fn read_item_validates_text_and_structure() {
 }
 
 #[test]
+fn read_item_walks_nested_indefinite_and_tags() {
+    // [tag(0)"x", {1: 2}, (_ "ab" "c"), (_ h'de' h'ad'), [1, 2, 3]]
+    let item = hex::decode("85c06178a101027f6261626163ff5f41de41adff83010203").unwrap();
+    assert!(
+        cbor2::validate(&item[..]).is_ok(),
+        "test vector must be one item"
+    );
+
+    let mut stream = item.clone();
+    stream.extend_from_slice(&cbor2::to_vec(&99u8).unwrap());
+
+    let mut reader = Cursor::new(stream);
+    let got = block_on(async_io::read_item(&mut reader)).unwrap();
+    assert_eq!(got, item);
+    assert_eq!(reader.pos, item.len());
+}
+
+#[test]
+fn read_item_enforces_recursion_limit() {
+    // Far more nested single-element arrays than the recursion limit.
+    let mut bytes = vec![0x81u8; 1000];
+    bytes.push(0x00);
+    let mut reader = Cursor::new(bytes);
+    assert!(matches!(
+        block_on(async_io::read_item(&mut reader)),
+        Err(cbor2::de::Error::RecursionLimitExceeded)
+    ));
+}
+
+#[test]
+fn read_item_future_is_send() {
+    // A concrete `Send` reader must yield a `Send` future so the helper can
+    // be driven by `tokio::spawn` and other multi-threaded executors.
+    fn assert_send<T: Send>(value: T) -> T {
+        value
+    }
+
+    let one = cbor2::to_vec(&1u8).unwrap();
+    let mut reader = Cursor::new(one.clone());
+    let fut = assert_send(async_io::read_item(&mut reader));
+    assert_eq!(block_on(fut).unwrap(), one);
+}
+
+#[test]
 fn write_helpers_emit_exactly_one_item() {
     let mut sink = Sink::default();
     block_on(async_io::write_value(&mut sink, &("ok", 1u8))).unwrap();

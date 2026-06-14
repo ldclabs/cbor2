@@ -8,9 +8,12 @@
 //!
 //! Enable the `futures` or `tokio` crate features to use the adapters in the
 //! `async_io::futures` or `async_io::tokio` modules.
+//!
+//! The item walk is iterative, so the futures returned here are plain state
+//! machines: when the reader or writer is `Send`, so is the future, and it
+//! can be driven by multi-threaded executors such as `tokio::spawn`.
 
-use alloc::{boxed::Box, vec::Vec};
-use core::{future::Future, pin::Pin};
+use alloc::vec::Vec;
 
 use serde::{de, ser};
 
@@ -430,99 +433,135 @@ async fn read_text_body<R: AsyncRead + ?Sized>(
     Ok(())
 }
 
-fn read_item_inner<'a, R: AsyncRead + ?Sized + 'a>(
-    reader: &'a mut R,
-    out: &'a mut Vec<u8>,
-    offset: &'a mut usize,
-    depth: usize,
-) -> Pin<Box<dyn Future<Output = Result<(), Error>> + 'a>> {
-    Box::pin(async move {
-        let (header, start) = pull_header(reader, out, offset).await?;
-        read_header_payload(reader, out, offset, header, start, depth).await
-    })
+// One open container while walking an item. The walk is iterative rather
+// than recursive so the resulting future is a plain state machine (no boxed
+// `dyn Future`), which keeps `read_item` `Send` for `Send` readers — a
+// requirement for `tokio::spawn`. Recursion depth becomes the stack length.
+enum Frame {
+    // A definite-length array: this many items remain.
+    Array(usize),
+    // A definite-length map: this many key/value pairs remain. `value` is
+    // true when the next item read completes a pair (a value rather than a
+    // key).
+    Map { pairs: usize, value: bool },
+    // An indefinite-length array, read until `Break`.
+    IndefArray,
+    // An indefinite-length map, read until `Break`. `value` as above; a
+    // `Break` is only well-formed between pairs (when `value` is false).
+    IndefMap { value: bool },
 }
 
-fn read_header_payload<'a, R: AsyncRead + ?Sized + 'a>(
-    reader: &'a mut R,
-    out: &'a mut Vec<u8>,
-    offset: &'a mut usize,
-    header: Header,
-    start: usize,
-    depth: usize,
-) -> Pin<Box<dyn Future<Output = Result<(), Error>> + 'a>> {
-    Box::pin(async move {
-        if depth == 0 {
-            return Err(Error::RecursionLimitExceeded);
+// Reads one complete item, appending its exact wire bytes to `out`. A tag is
+// treated as a one-item container so its content is walked at the next level.
+async fn read_item_inner<R: AsyncRead + ?Sized>(
+    reader: &mut R,
+    out: &mut Vec<u8>,
+    offset: &mut usize,
+    limit: usize,
+) -> Result<(), Error> {
+    // The initial one-item frame is the budget for the single top-level item.
+    let mut stack = Vec::with_capacity(8);
+    stack.push(Frame::Array(1));
+
+    while !stack.is_empty() {
+        // Close any finished definite container, bubbling up through parents.
+        match stack.last().expect("non-empty") {
+            Frame::Array(0)
+            | Frame::Map {
+                pairs: 0,
+                value: false,
+            } => {
+                stack.pop();
+                continue;
+            }
+            _ => {}
         }
 
+        let (header, start) = pull_header(reader, out, offset).await?;
+
+        if header == Header::Break {
+            match stack.last().expect("non-empty") {
+                Frame::IndefArray | Frame::IndefMap { value: false } => {
+                    stack.pop();
+                    continue;
+                }
+                // A break inside a definite container, between a map key and
+                // its value, or at the top level is not well-formed.
+                _ => return Err(Error::Syntax(start)),
+            }
+        }
+
+        // Count this item against the current frame.
+        match stack.last_mut().expect("non-empty") {
+            Frame::Array(n) => *n -= 1,
+            Frame::Map { pairs, value } => {
+                if *value {
+                    *pairs -= 1;
+                }
+                *value = !*value;
+            }
+            Frame::IndefArray => {}
+            Frame::IndefMap { value } => *value = !*value,
+        }
+
+        // Walk the item's own body: read string bodies inline, and push a
+        // frame for each container (a tag wraps exactly one item).
         match header {
             Header::Positive(..)
             | Header::Negative(..)
             | Header::Float(..)
-            | Header::Simple(..) => Ok(()),
+            | Header::Simple(..) => {}
 
-            Header::Break => Err(Error::Syntax(start)),
+            Header::Break => unreachable!("handled above"),
 
-            Header::Tag(..) => read_item_inner(reader, out, offset, depth - 1).await,
+            Header::Bytes(Some(len)) => read_body(reader, out, offset, len).await?,
+            Header::Text(Some(len)) => read_text_body(reader, out, offset, len).await?,
+            Header::Bytes(None) => read_indef_string(reader, out, offset, false).await?,
+            Header::Text(None) => read_indef_string(reader, out, offset, true).await?,
 
-            Header::Bytes(Some(len)) => read_body(reader, out, offset, len).await,
-            Header::Bytes(None) => loop {
-                let (header, start) = pull_header(reader, out, offset).await?;
-                match header {
-                    Header::Break => return Ok(()),
-                    Header::Bytes(Some(len)) => read_body(reader, out, offset, len).await?,
-                    _ => return Err(Error::Syntax(start)),
-                }
-            },
-
-            Header::Text(Some(len)) => read_text_body(reader, out, offset, len).await,
-            Header::Text(None) => loop {
-                let (header, start) = pull_header(reader, out, offset).await?;
-                match header {
-                    Header::Break => return Ok(()),
-                    Header::Text(Some(len)) => {
-                        read_text_body(reader, out, offset, len).await?;
-                    }
-                    _ => return Err(Error::Syntax(start)),
-                }
-            },
-
-            Header::Array(Some(len)) => {
-                for _ in 0..len {
-                    read_item_inner(reader, out, offset, depth - 1).await?;
-                }
-                Ok(())
-            }
-            Header::Array(None) => loop {
-                let (header, start) = pull_header(reader, out, offset).await?;
-                if header == Header::Break {
-                    return Ok(());
-                }
-                read_header_payload(reader, out, offset, header, start, depth - 1).await?;
-            },
-
-            Header::Map(Some(len)) => {
-                for _ in 0..len {
-                    read_item_inner(reader, out, offset, depth - 1).await?;
-                    read_item_inner(reader, out, offset, depth - 1).await?;
-                }
-                Ok(())
-            }
-            Header::Map(None) => {
-                let mut expecting_value = false;
-                loop {
-                    let (header, start) = pull_header(reader, out, offset).await?;
-                    match header {
-                        Header::Break if expecting_value => return Err(Error::Syntax(start)),
-                        Header::Break => return Ok(()),
-                        header => {
-                            read_header_payload(reader, out, offset, header, start, depth - 1)
-                                .await?;
-                            expecting_value = !expecting_value;
-                        }
-                    }
-                }
-            }
+            Header::Tag(..) => push(&mut stack, Frame::Array(1), limit)?,
+            Header::Array(Some(len)) => push(&mut stack, Frame::Array(len), limit)?,
+            Header::Array(None) => push(&mut stack, Frame::IndefArray, limit)?,
+            Header::Map(Some(pairs)) => push(
+                &mut stack,
+                Frame::Map {
+                    pairs,
+                    value: false,
+                },
+                limit,
+            )?,
+            Header::Map(None) => push(&mut stack, Frame::IndefMap { value: false }, limit)?,
         }
-    })
+    }
+
+    Ok(())
+}
+
+// Pushes a nested container, enforcing the recursion limit on nesting depth.
+fn push(stack: &mut Vec<Frame>, frame: Frame, limit: usize) -> Result<(), Error> {
+    if stack.len() >= limit {
+        return Err(Error::RecursionLimitExceeded);
+    }
+    stack.push(frame);
+    Ok(())
+}
+
+// Reads the segments of an indefinite-length byte or text string until the
+// terminating `Break`. Segments must be definite-length strings of the same
+// major type (RFC 8949 §3.2.3); text segments are individually UTF-8 checked.
+async fn read_indef_string<R: AsyncRead + ?Sized>(
+    reader: &mut R,
+    out: &mut Vec<u8>,
+    offset: &mut usize,
+    text: bool,
+) -> Result<(), Error> {
+    loop {
+        let (header, start) = pull_header(reader, out, offset).await?;
+        match header {
+            Header::Break => return Ok(()),
+            Header::Text(Some(len)) if text => read_text_body(reader, out, offset, len).await?,
+            Header::Bytes(Some(len)) if !text => read_body(reader, out, offset, len).await?,
+            _ => return Err(Error::Syntax(start)),
+        }
+    }
 }
