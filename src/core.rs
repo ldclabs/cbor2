@@ -604,6 +604,7 @@ impl<R: Read> Decoder<R> {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<'de> Decoder<&'de [u8]> {
     /// Borrows exactly `len` body bytes from the underlying slice.
     ///
@@ -611,7 +612,6 @@ impl<'de> Decoder<&'de [u8]> {
     /// or text header. Generic readers still go through [`read_exact`];
     /// slice deserialization uses this to hand serde borrowed strings and
     /// byte strings without copying.
-    #[cfg(feature = "alloc")]
     pub(crate) fn borrow_body(&mut self, len: usize) -> Result<&'de [u8], crate::io::Error> {
         debug_assert!(self.pushback.is_none());
         if self.reader.len() < len {

@@ -50,12 +50,18 @@ jobs:
       - run: ${{ matrix.command }}
 
   no-std:
-    name: no_std (${{ matrix.features }})
+    name: no_std (${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        features: ["", "alloc", "alloc,derive"]
+        include:
+          - name: core
+            feature_args: ""
+          - name: alloc
+            feature_args: "--features alloc"
+          - name: alloc,derive
+            feature_args: "--features alloc,derive"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -64,9 +70,9 @@ jobs:
           targets: thumbv7em-none-eabihf
       # A bare-metal target proves no std dependency leaks in; the host
       # build runs the feature-gated unit tests.
-      - run: cargo build --no-default-features --features=${{ matrix.features }} --target thumbv7em-none-eabihf
-      - run: cargo test --lib --no-default-features --features=${{ matrix.features }}
-      - run: cargo clippy --no-default-features --features=${{ matrix.features }} -- -Dwarnings
+      - run: cargo build --no-default-features ${{ matrix.feature_args }} --target thumbv7em-none-eabihf
+      - run: cargo test --lib --no-default-features ${{ matrix.feature_args }}
+      - run: cargo clippy --no-default-features ${{ matrix.feature_args }} -- -Dwarnings
 
   lint:
     name: rustfmt and clippy
