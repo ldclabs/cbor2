@@ -19,6 +19,17 @@
   `futures_io::AsyncRead`/`AsyncWrite` and
   `tokio::io::AsyncRead`/`AsyncWrite`.
 
+### Changed
+
+* `de::Deserializer<R>` is now parameterized by its byte [`Source`] rather
+  than the raw reader, mirroring `serde_json`: `from_reader` builds a
+  `Deserializer<ReaderSource<R>>` (copying) and `from_slice` builds a
+  `Deserializer<SliceSource<'de>>` (borrowing). Code using the `from_reader`,
+  `from_slice` and free `from_*` functions is unaffected; explicit
+  deserializer annotations and slice-specific construction should use the
+  source-based forms. The slice recursion-limit constructor is
+  `Deserializer::from_slice_with_recursion_limit`.
+
 ## [1.0.2] - 2026-06-13
 
 ### Fixed
