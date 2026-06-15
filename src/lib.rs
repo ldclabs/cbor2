@@ -47,6 +47,14 @@ assert_eq!(photo, back);
 [`validate`] first when a byte buffer must contain exactly one item, or use
 [`de::Deserializer::into_iter`] for a CBOR sequence.
 
+# For code agents
+
+Code agents should read the repository's
+[`AGENTS.md`](https://github.com/ldclabs/cbor2/blob/main/AGENTS.md) first for
+the compressed API-selection contract, then use the
+[`agent cookbook`](https://github.com/ldclabs/cbor2/blob/main/docs/agent-cookbook.md)
+and the `agent_patterns` example for copyable recipes.
+
 # Command line tool
 
 The workspace also publishes `cbor2-cli`, which installs the `cbor`
@@ -562,7 +570,7 @@ pub mod __private {
 /// `Serialize`/`Deserialize` — this macro generates both impls. Field
 /// names and the type name stay untouched, so the same type still
 /// serializes naturally to JSON and other formats. See the [crate-level
-/// documentation](crate#integer-map-keys-and-tags-cose) for examples.
+/// documentation](crate#integer-map-keys-arrays-and-tags-cose) for examples.
 ///
 /// The declared protocol details are also exposed for runtime inspection
 /// through the [`Cbor`](trait@Cbor) trait, which this macro implements.

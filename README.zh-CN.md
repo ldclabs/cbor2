@@ -140,6 +140,13 @@ assert_eq!(photo, back);
 `Deserializer::into_iter` 可解码一串连续拼接的项。`from_slice`/`from_reader`
 读取开头的一个 CBOR 项；当缓冲区必须恰好包含一项时请使用 `validate`。
 
+## 面向 AI agents
+
+代码代理应先阅读 [`AGENTS.md`](AGENTS.md) 中压缩后的 API 选择规则，再参考
+[`docs/agent-cookbook.md`](docs/agent-cookbook.md) 中可复制的 recipes 和迁移
+陷阱。可运行示例 [`agent_patterns`](examples/agent_patterns.rs) 覆盖恰好一项
+校验、字节串、借用反序列化、原始值、CBOR 序列和规范化编码。
+
 ## 特性亮点
 
 * **完整的 serde 集成** —— `#[derive(Serialize, Deserialize)]` 类型可直接

@@ -147,6 +147,15 @@ assert_eq!(photo, back);
 `from_slice`/`from_reader` read one leading CBOR item; use `validate` when
 a buffer must contain exactly one item.
 
+## For AI agents
+
+Code agents should start with [`AGENTS.md`](AGENTS.md) for the compressed API
+selection rules, then use [`docs/agent-cookbook.md`](docs/agent-cookbook.md)
+for copyable recipes and common migration traps. The runnable
+[`agent_patterns`](examples/agent_patterns.rs) example covers exact-item
+validation, byte strings, borrowed deserialization, raw values, CBOR sequences
+and canonical encoding.
+
 ## Highlights
 
 * **Full serde integration** — `#[derive(Serialize, Deserialize)]` types
