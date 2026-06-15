@@ -16,6 +16,7 @@ categories = ["encoding", "parsing"]
 license = "Unlicense OR MIT"
 edition = "2021"
 rust-version = "1.85"
+exclude = [".github/"]
 
 [features]
 default = ["std"]
@@ -49,6 +50,10 @@ hex = "0.4"
 
 [[example]]
 name = "cose"
+required-features = ["derive"]
+
+[[example]]
+name = "cwt"
 required-features = ["derive"]
 
 [package.metadata.docs.rs]

@@ -3,12 +3,23 @@ on:
   push:
     tags:
       - "v*"
+
+# Trusted Publishing: mint a short-lived token via OIDC instead of a
+# stored CARGO_REGISTRY_TOKEN secret. `id-token: write` is required for
+# the OIDC exchange; `contents: read` is the least privilege for checkout.
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Authenticate to crates.io (Trusted Publishing)
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
       - uses: katyo/publish-crates@v2
         with:
-          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          registry-token: ${{ steps.auth.outputs.token }}
           ignore-unpublished-changes: true

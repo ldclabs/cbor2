@@ -402,8 +402,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The full program lives in [`examples/cose.rs`](examples/cose.rs):
-`cargo run --features derive --example cose`.
+The runnable [`examples/cose.rs`](examples/cose.rs) builds this out into the
+actual wire types of [`cose2`](https://github.com/ldclabs/cose2) — a complete
+RFC 9052 COSE and RFC 8392 CWT library built on cbor2 — with a named
+`#[cbor(array)]` struct, an optional (detached) ciphertext and an untagged
+variant for tag-less transports: `cargo run --features derive --example cose`.
+The companion [`examples/cwt.rs`](examples/cwt.rs) is cose2's CWT claims set
+(RFC 8392): a tagged *map* with registered integer claim keys, natural JSON
+names and `skip_serializing_if` claim omission —
+`cargo run --features derive --example cwt`.
 
 The derive also implements the `cbor2::Cbor` trait, which exposes the
 declared protocol details at runtime — `T::KEYS`, `T::TAG` and `T::ARRAY` as
@@ -564,6 +571,7 @@ cargo run --example bytes
 cargo run --example sequence
 cargo run --example core_headers
 cargo run --features derive --example cose
+cargo run --features derive --example cwt
 ```
 
 ## Design decisions

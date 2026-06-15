@@ -373,8 +373,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-完整程序见 [`examples/cose.rs`](examples/cose.rs)：
-`cargo run --features derive --example cose`。
+可运行的 [`examples/cose.rs`](examples/cose.rs) 将其扩展为
+[`cose2`](https://github.com/ldclabs/cose2) 的真实线缆类型 —— cose2 是一个
+构建于 cbor2 之上的完整 RFC 9052 COSE 与 RFC 8392 CWT 库 —— 采用具名的
+`#[cbor(array)]` 结构体、可选的（分离式）密文，以及面向无标签传输的未加标签
+变体：`cargo run --features derive --example cose`。配套的
+[`examples/cwt.rs`](examples/cwt.rs) 则是 cose2 的 CWT 声明集（RFC 8392）：
+一个带注册整数声明键的加标签 *map*，配合自然的 JSON 名称与
+`skip_serializing_if` 声明省略 —— `cargo run --features derive --example cwt`。
 
 该派生宏还实现了 `cbor2::Cbor` trait，在运行时暴露所声明的协议细节 ——
 `T::KEYS`、`T::TAG` 和 `T::ARRAY` 作为免分配常量，以及作为
@@ -531,6 +537,7 @@ cargo run --example bytes
 cargo run --example sequence
 cargo run --example core_headers
 cargo run --features derive --example cose
+cargo run --features derive --example cwt
 ```
 
 ## 设计决策
