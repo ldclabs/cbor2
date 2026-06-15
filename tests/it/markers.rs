@@ -112,7 +112,7 @@ fn unknown_integer_keys_are_ignored() {
 }
 
 #[test]
-fn marked_tags_wrap_and_are_required() {
+fn marked_tags_wrap_and_decode_transparently() {
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     #[serde(rename = "@@CBOR@@123@@alg=1@@Header")]
     struct Header {
@@ -127,15 +127,16 @@ fn marked_tags_wrap_and_are_required() {
     );
     assert_eq!(cbor2::to_canonical_vec(&Header { alg: -7 }).unwrap(), bytes);
 
-    // Missing or different tags are rejected; foreign wrappers are not.
-    let msg = cbor2::from_slice::<Header>(&hex::decode("a10126").unwrap())
-        .unwrap_err()
-        .to_string();
-    assert!(msg.contains("expected tag(123)"), "{msg}");
-    let msg = cbor2::from_slice::<Header>(&hex::decode("d87ca10126").unwrap())
-        .unwrap_err()
-        .to_string();
-    assert!(msg.contains("expected tag(123)"), "{msg}");
+    // Decode accepts the tagged form, the untagged form, and foreign wrapper
+    // tags transparently.
+    assert_eq!(
+        cbor2::from_slice::<Header>(&hex::decode("a10126").unwrap()).unwrap(),
+        Header { alg: -7 }
+    );
+    assert_eq!(
+        cbor2::from_slice::<Header>(&hex::decode("d87ca10126").unwrap()).unwrap(),
+        Header { alg: -7 }
+    );
     assert_eq!(
         cbor2::from_slice::<Header>(&hex::decode("d9d9f7d87ba10126").unwrap()).unwrap(),
         Header { alg: -7 }
@@ -148,12 +149,89 @@ fn marked_tags_wrap_and_are_required() {
         Value::Tag(123, Box::new(cbor2::cbor!({ 1 => -7 }).unwrap()))
     );
     assert_eq!(value.deserialized::<Header>().unwrap(), Header { alg: -7 });
-    let msg = cbor2::cbor!({ 1 => -7 })
-        .unwrap()
-        .deserialized::<Header>()
-        .unwrap_err()
-        .to_string();
-    assert!(msg.contains("expected tag(123)"), "{msg}");
+    assert_eq!(
+        cbor2::cbor!({ 1 => -7 })
+            .unwrap()
+            .deserialized::<Header>()
+            .unwrap(),
+        Header { alg: -7 }
+    );
+}
+
+#[test]
+fn marked_tags_accept_tagged_or_untagged() {
+    // A marker tag is still written on encode, but decode accepts input with
+    // or without it.
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[serde(rename = "@@CBOR@@61@@iss=1@@Claims")]
+    struct Claims {
+        iss: u8,
+    }
+
+    // Encode still writes the tag, canonically.
+    let bytes = cbor2::to_vec(&Claims { iss: 7 }).unwrap();
+    assert_eq!(hex::encode(&bytes), "d83da10107"); // 61({1: 7})
+    assert_eq!(cbor2::to_canonical_vec(&Claims { iss: 7 }).unwrap(), bytes);
+
+    // Decode accepts the tagged form, the untagged form, and a foreign
+    // wrapper tag (transparent, as everywhere else).
+    assert_eq!(
+        cbor2::from_slice::<Claims>(&bytes).unwrap(),
+        Claims { iss: 7 }
+    );
+    assert_eq!(
+        cbor2::from_slice::<Claims>(&hex::decode("a10107").unwrap()).unwrap(),
+        Claims { iss: 7 }
+    );
+    assert_eq!(
+        cbor2::from_slice::<Claims>(&hex::decode("d9d9f7a10107").unwrap()).unwrap(),
+        Claims { iss: 7 }
+    );
+
+    // The Value paths agree, on both forms.
+    let value = Value::serialized(&Claims { iss: 7 }).unwrap();
+    assert_eq!(
+        value,
+        Value::Tag(61, Box::new(cbor2::cbor!({ 1 => 7 }).unwrap()))
+    );
+    assert_eq!(value.deserialized::<Claims>().unwrap(), Claims { iss: 7 });
+    assert_eq!(
+        cbor2::cbor!({ 1 => 7 })
+            .unwrap()
+            .deserialized::<Claims>()
+            .unwrap(),
+        Claims { iss: 7 }
+    );
+}
+
+#[test]
+fn marked_tags_on_tuple_structs_decode_untagged() {
+    // The transparent tag behavior also covers tuple structs (array shape),
+    // exercising the `unwrap_struct_tag` path on the Value side.
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[serde(rename = "@@CBOR@@16@@@@Pair")]
+    struct Pair(u8, u8);
+
+    let bytes = cbor2::to_vec(&Pair(1, 2)).unwrap();
+    assert_eq!(hex::encode(&bytes), "d0820102"); // 16([1, 2])
+    assert_eq!(cbor2::from_slice::<Pair>(&bytes).unwrap(), Pair(1, 2));
+    assert_eq!(
+        cbor2::from_slice::<Pair>(&hex::decode("820102").unwrap()).unwrap(),
+        Pair(1, 2)
+    );
+
+    let value = Value::serialized(&Pair(1, 2)).unwrap();
+    assert_eq!(
+        value,
+        Value::Tag(16, Box::new(Value::Array(vec![1.into(), 2.into()])))
+    );
+    assert_eq!(value.deserialized::<Pair>().unwrap(), Pair(1, 2));
+    assert_eq!(
+        Value::Array(vec![1.into(), 2.into()])
+            .deserialized::<Pair>()
+            .unwrap(),
+        Pair(1, 2)
+    );
 }
 
 #[test]
@@ -194,16 +272,13 @@ fn marked_named_structs_can_encode_as_arrays() {
     assert_eq!(value.deserialized::<Sign1>().unwrap(), msg);
 
     let untagged = hex::decode("8441a0004041ff").unwrap();
-    assert!(cbor2::from_slice::<Sign1>(&untagged)
-        .unwrap_err()
-        .to_string()
-        .contains("expected tag(18)"));
+    assert_eq!(cbor2::from_slice::<Sign1>(&untagged).unwrap(), msg);
     assert!(cbor2::cbor!({ "protected" => 1 })
         .unwrap()
         .deserialized::<Sign1>()
         .unwrap_err()
         .to_string()
-        .contains("expected tag(18)"));
+        .contains("invalid type"));
 }
 
 #[test]
@@ -430,11 +505,9 @@ fn marked_containers_carry_tags_in_every_shape() {
     );
     assert_eq!(value.deserialized::<T>().unwrap(), T(1, 2));
 
-    // The declared tag is required on the Value path too.
-    let msg = Value::Null.deserialized::<U>().unwrap_err().to_string();
-    assert!(msg.contains("expected tag(71)"), "{msg}");
-    let msg = Value::from(7).deserialized::<N>().unwrap_err().to_string();
-    assert!(msg.contains("expected tag(72)"), "{msg}");
+    // The untagged Value paths agree too.
+    assert_eq!(Value::Null.deserialized::<U>().unwrap(), U);
+    assert_eq!(Value::from(7).deserialized::<N>().unwrap(), N(7));
 }
 
 #[test]

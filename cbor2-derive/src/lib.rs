@@ -48,10 +48,11 @@ const MARKER: &str = "@@CBOR@@";
 /// Derives `serde::Serialize` and `serde::Deserialize` with CBOR protocol
 /// details: integer map keys (`#[cbor(key = <integer>)]` on fields),
 /// field-order array structs (`#[cbor(array)]` on the container) and a
-/// CBOR tag (`#[cbor(tag = <integer>)]` on the container). The declared
-/// details are also exposed through an implementation of the
-/// `cbor2::Cbor` trait, so the generated code requires the `cbor2` crate
-/// under that name.
+/// CBOR tag (`#[cbor(tag = <integer>)]` on the container). The tag is
+/// written on encode and transparent on decode, so input is accepted with
+/// or without it. The declared details are also exposed through an
+/// implementation of the `cbor2::Cbor` trait, so the generated code
+/// requires the `cbor2` crate under that name.
 ///
 /// Do not also derive serde's `Serialize`/`Deserialize`: this macro
 /// generates both impls (the implementations would conflict).
@@ -335,7 +336,7 @@ fn copied_attrs(attrs: &[syn::Attribute]) -> Vec<syn::Attribute> {
 }
 
 // The `@@CBOR@@<tag>@@<keys>@@<name>` container marker, when the item
-// declares a tag or integer keys.
+// declares a tag, array shape or integer keys.
 fn marker(tag: Option<u64>, array: bool, entries: &[Entry], ident: &syn::Ident) -> Option<String> {
     if tag.is_none() && entries.is_empty() && !array {
         return None;
@@ -946,15 +947,23 @@ mod tests {
                 a: u8,
             }
         });
-        assert!(
-            msg.contains("expected `tag = <integer>` or `array`"),
-            "{msg}"
-        );
+        assert!(msg.contains("expected `tag = <integer>`"), "{msg}");
 
         let msg = error(quote! {
             union U { a: u8 }
         });
         assert!(msg.contains("supports structs and enums"), "{msg}");
+
+        let msg = error(quote! {
+            #[cbor(tag = 1, foo)]
+            struct S {
+                a: u8,
+            }
+        });
+        assert!(
+            msg.contains("expected `tag = <integer>` or `array`"),
+            "{msg}"
+        );
     }
 
     #[test]

@@ -414,19 +414,8 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
         };
 
         let mut value = self.0;
-        if let Some(tag) = marker.tag {
-            let mut seen = false;
-            while let Value::Tag(t, v) = value {
-                seen |= *t == tag;
-                value = v;
-            }
-            if !seen {
-                return Err(de::Error::custom(format!("expected tag({tag})")));
-            }
-        } else {
-            while let Value::Tag(.., v) = value {
-                value = v;
-            }
+        while let Value::Tag(.., v) = value {
+            value = v;
         }
 
         match (marker.shape, value) {
@@ -635,29 +624,23 @@ impl<'a, 'de, T: Iterator<Item = &'a (Value, Value)>> de::MapAccess<'de>
     }
 }
 
-// Walks the tag layers of a marked struct's value, requiring the marker's
-// tag if it declares one. Returns `None` — keep the value and the default
-// handling — for unmarked structs.
+// Walks the tag layers of a tagged marked struct's value. Returns `None` —
+// keep the value and the default handling — for unmarked or untagged structs.
 fn unwrap_struct_tag<'x>(
     name: &'static str,
     mut value: &'x Value,
 ) -> Result<Option<&'x Value>, Error> {
-    let Some(crate::ser::StructMarker { tag: Some(tag), .. }) =
+    let Some(crate::ser::StructMarker { tag: Some(..), .. }) =
         crate::ser::parse_struct_marker(name)
     else {
         return Ok(None);
     };
 
-    let mut seen = false;
-    while let Value::Tag(t, v) = value {
-        seen |= *t == tag;
+    while let Value::Tag(.., v) = value {
         value = v;
     }
 
-    match seen {
-        true => Ok(Some(value)),
-        false => Err(de::Error::custom(format!("expected tag({tag})"))),
-    }
+    Ok(Some(value))
 }
 
 // Map access for a marked struct: integer keys translate to field names

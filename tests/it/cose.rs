@@ -104,7 +104,7 @@ fn header() -> ProtectedHeader {
 }
 
 #[test]
-fn tagged_structs_wrap_and_require_their_tag() {
+fn tagged_structs_wrap_and_decode_transparently() {
     // 123({1: -7, 4: h'6b6964'})
     let bytes = cbor2::to_vec(&header()).unwrap();
     assert_eq!(hex::encode(&bytes), "d87ba2012604436b6964");
@@ -120,21 +120,22 @@ fn tagged_structs_wrap_and_require_their_tag() {
     // Canonical encoding keeps the tag.
     assert_eq!(cbor2::to_canonical_vec(&header()).unwrap(), bytes);
 
-    // The declared tag is required ...
+    // The declared tag is transparent on decode, so tag-less transports work.
     let untagged = hex::decode("a2012604436b6964").unwrap();
-    let msg = cbor2::from_slice::<ProtectedHeader>(&untagged)
-        .unwrap_err()
-        .to_string();
-    assert!(msg.contains("expected tag(123)"), "{msg}");
+    assert_eq!(
+        cbor2::from_slice::<ProtectedHeader>(&untagged).unwrap(),
+        header()
+    );
 
-    // ... a different tag does not satisfy it ...
+    // Other wrapper tags are also transparent, as in the rest of the
+    // deserializer.
     let wrong = hex::decode("d87ca2012604436b6964").unwrap(); // 124(...)
-    let msg = cbor2::from_slice::<ProtectedHeader>(&wrong)
-        .unwrap_err()
-        .to_string();
-    assert!(msg.contains("expected tag(123)"), "{msg}");
+    assert_eq!(
+        cbor2::from_slice::<ProtectedHeader>(&wrong).unwrap(),
+        header()
+    );
 
-    // ... and extra foreign tags around it stay transparent.
+    // Extra foreign tags around it stay transparent too.
     let wrapped = hex::decode("d9d9f7d87ba2012604436b6964").unwrap(); // 55799(123(...))
     assert_eq!(
         cbor2::from_slice::<ProtectedHeader>(&wrapped).unwrap(),
@@ -152,11 +153,10 @@ fn tagged_structs_wrap_and_require_their_tag() {
     );
     assert_eq!(value.deserialized::<ProtectedHeader>().unwrap(), header());
     let untagged = cbor2::cbor!({ 1 => -7, 4 => Value::Bytes(b"kid".to_vec()) }).unwrap();
-    let msg = untagged
-        .deserialized::<ProtectedHeader>()
-        .unwrap_err()
-        .to_string();
-    assert!(msg.contains("expected tag(123)"), "{msg}");
+    assert_eq!(
+        untagged.deserialized::<ProtectedHeader>().unwrap(),
+        header()
+    );
 
     // JSON carries neither the tag nor the integer keys.
     let json = serde_json::to_string(&header()).unwrap();
@@ -185,8 +185,10 @@ fn tagged_tuple_structs_work_too() {
     assert_eq!(hex::encode(&bytes), "d28441a0004041ff");
     assert_eq!(cbor2::from_slice::<Sign1>(&bytes).unwrap(), msg);
 
-    let msg2 = cbor2::from_slice::<Sign1>(&hex::decode("8441a0004041ff").unwrap());
-    assert!(msg2.unwrap_err().to_string().contains("expected tag(18)"));
+    assert_eq!(
+        cbor2::from_slice::<Sign1>(&hex::decode("8441a0004041ff").unwrap()).unwrap(),
+        msg
+    );
 }
 
 #[test]
@@ -362,4 +364,49 @@ fn derive_exposes_keys_and_tag() {
     assert_eq!(Plain::KEYS, &[]);
     assert_eq!(Plain::TAG, None);
     assert!(Plain { a: 0 }.keys().is_empty());
+}
+
+// A CWT-claims-shaped struct (RFC 8392): tag 61 on encode, but decode accepts
+// either the tagged or the untagged form — no separate "bare" struct and
+// `From` impl.
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 61)]
+struct Claims {
+    #[cbor(key = 1)]
+    #[serde(rename = "iss")]
+    issuer: String,
+    #[cbor(key = 4)]
+    #[serde(rename = "exp")]
+    expiration: u64,
+}
+
+#[test]
+fn tagged_claims_decode_tagged_or_untagged() {
+    let claims = Claims {
+        issuer: "me".into(),
+        expiration: 9,
+    };
+
+    // Encode writes the tag, canonically.
+    let bytes = cbor2::to_canonical_vec(&claims).unwrap();
+    assert_eq!(hex::encode(&bytes), "d83da201626d650409"); // 61({1: "me", 4: 9})
+    assert_eq!(&bytes[..2], [0xd8, 0x3d]);
+
+    // Decode accepts the tagged form and the untagged form alike.
+    assert_eq!(cbor2::from_slice::<Claims>(&bytes).unwrap(), claims);
+    assert_eq!(cbor2::from_slice::<Claims>(&bytes[2..]).unwrap(), claims);
+
+    // The trait surfaces the declared tag.
+    assert_eq!(Claims::TAG, Some(61));
+
+    // The Value paths agree on both forms.
+    let value = Value::serialized(&claims).unwrap();
+    assert_eq!(value.deserialized::<Claims>().unwrap(), claims);
+    assert_eq!(
+        cbor2::cbor!({ 1 => "me", 4 => 9 })
+            .unwrap()
+            .deserialized::<Claims>()
+            .unwrap(),
+        claims
+    );
 }

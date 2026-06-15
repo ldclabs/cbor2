@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.0.4] - 2026-06-15
+
+### Added
+
+* Added agent-facing integration docs: `AGENTS.md`,
+  `docs/agent-cookbook.md` and the runnable `examples/agent_patterns.rs`
+  tour for API selection, exact-item validation, byte strings, borrowed
+  deserialization, raw values, CBOR sequences and canonical encoding.
+* Added `examples/cwt.rs`, an RFC 8392 CWT claims-set example with registered
+  integer claim keys, tag 61 encoding, natural JSON names,
+  `skip_serializing_if` claim omission and tagged/untagged decode through one
+  derived type.
+* Added a `Makefile` with local `lint`, `fix` and `test` shortcuts.
+
+### Changed
+
+* `#[cbor(tag = N)]` still writes tag `N` on encode but now treats tags as
+  transparent on decode, so one derived type accepts both tagged and untagged
+  COSE/CWT-style payloads without a separate "bare" struct.
+* Expanded the COSE/CWT documentation and examples to point at `cose2` wire
+  shapes and the new CWT claims example.
+* The crates.io publishing workflow now uses Trusted Publishing/OIDC instead
+  of a stored `CARGO_REGISTRY_TOKEN`, and crate packages exclude `.github/`.
+* The detached benchmark suite now compares with `cbor4ii` instead of
+  `serde_cbor_2`.
+* Bumped `cbor2`, `cbor2-cli` and `cbor2-derive` to `1.0.4`.
+
 ## [1.0.3] - 2026-06-14
 
 ### Added

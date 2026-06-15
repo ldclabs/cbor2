@@ -288,11 +288,11 @@ assert_eq!(cbor2::from_slice::<CoseSign>(&bytes).unwrap(), key);
 # }
 ```
 
-The tag is optional, and the serde attributes (`alias`, `default`,
-`skip`, `with`, ...) work as usual; map types like `HashMap<String, _>`
-are unaffected. The declared keys, array shape and tag stay inspectable at runtime
-through the [`Cbor`](trait@Cbor) trait, which the derive implements
-alongside the serde traits.
+The tag is transparent on decode, and the serde attributes (`alias`,
+`default`, `skip`, `with`, ...) work as usual; map types like
+`HashMap<String, _>` are unaffected. The declared keys, array shape and tag
+stay inspectable at runtime through the [`Cbor`](trait@Cbor) trait, which the
+derive implements alongside the serde traits.
 
 The derive touches neither the field names nor the type name — the
 protocol details ride along on a hidden shadow type (see

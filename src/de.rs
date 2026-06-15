@@ -537,32 +537,25 @@ impl<S: Source> Deserializer<S> {
         result
     }
 
-    // Requires the declared tag of a marked struct (see
-    // [`STRUCT_MARKER`](crate::ser::STRUCT_MARKER)) among the tags in
-    // front of the next item; other tags stay transparent, as everywhere
-    // else in this deserializer.
-    fn expect_struct_tag(&mut self, name: &'static str) -> Result<(), Error> {
-        let Some(crate::ser::StructMarker { tag: Some(tag), .. }) =
+    // `#[cbor(tag = ...)]` emits a tag on encode, but tags are transparent on
+    // decode. Strip any leading tag layers for marked newtype/unit/tuple
+    // structs before delegating to serde's generated visitor; map/array
+    // structs also skip tags in their own dispatch loop below.
+    fn skip_struct_tags(&mut self, name: &'static str) -> Result<(), Error> {
+        let Some(crate::ser::StructMarker { tag: Some(..), .. }) =
             crate::ser::parse_struct_marker(name)
         else {
             return Ok(());
         };
 
-        let offset = self.source.offset();
-        let mut seen = false;
         loop {
             match self.source.pull()? {
-                Header::Tag(x) => seen |= x == tag,
+                Header::Tag(..) => {}
                 header => {
                     self.source.push(header);
-                    break;
+                    return Ok(());
                 }
             }
-        }
-
-        match seen {
-            true => Ok(()),
-            false => Err(Error::semantic(offset, format!("expected tag({tag})"))),
         }
     }
 
@@ -1069,7 +1062,7 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
             return self.deserialize_map(visitor);
         };
 
-        self.expect_struct_tag(name)?;
+        self.skip_struct_tags(name)?;
         loop {
             return match self.source.pull()? {
                 Header::Tag(..) => continue,
@@ -1101,7 +1094,7 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
         _len: usize,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        self.expect_struct_tag(name)?;
+        self.skip_struct_tags(name)?;
         self.deserialize_seq(visitor)
     }
 
@@ -1217,7 +1210,7 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
         name: &'static str,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        self.expect_struct_tag(name)?;
+        self.skip_struct_tags(name)?;
         self.deserialize_unit(visitor)
     }
 
@@ -1232,7 +1225,7 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
             return visitor.visit_byte_buf(self.capture_item()?);
         }
 
-        self.expect_struct_tag(name)?;
+        self.skip_struct_tags(name)?;
         visitor.visit_newtype_struct(self)
     }
 

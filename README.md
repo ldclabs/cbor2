@@ -182,10 +182,12 @@ and canonical encoding.
   (`#[cbor(key = 1)]`), encodes named structs as field-order arrays
   (`#[cbor(array)]`) and wraps containers in CBOR tags
   (`#[cbor(tag = 18)]`), as RFC 9052 requires, with no ambiguity against
-  textual keys. Field names and the type name stay untouched, so the same
-  types still serialize to plain JSON — `serde_json::to_string(&v)` just
-  works, with the original field names and no tag. The declared keys, array
-  shape and tag stay inspectable at runtime through the `cbor2::Cbor` trait.
+  textual keys. Tags are written on encode and transparent on decode, so one
+  type accepts tagged or untagged input. Field names and the type name stay
+  untouched, so the same types still serialize to plain JSON —
+  `serde_json::to_string(&v)` just works, with the original field names and
+  no tag. The declared keys, array shape and tag stay inspectable at runtime
+  through the `cbor2::Cbor` trait.
 * **Raw values** — `RawValue` keeps one item as validated, undecoded
   bytes: serializing splices them into the stream untouched and
   deserializing captures them byte for byte, for signature payloads,
@@ -318,11 +320,12 @@ because their body is split across segments.
 With the `derive` feature, `#[derive(cbor2::Cbor)]` generates the serde
 `Serialize`/`Deserialize` impls with CBOR protocol details: fields
 annotated `#[cbor(key = ...)]` use integer map keys and the container is
-wrapped in a CBOR tag (`#[cbor(tag = ...)]`, required on decode). Named
-structs can also use `#[cbor(array)]` to encode as a compact field-order
-CBOR array while keeping Rust field names for JSON and code. Field names
-and the type name stay untouched, so the same types still serialize to
-plain JSON.
+wrapped in a CBOR tag (`#[cbor(tag = ...)]`) on encode. Tag layers are
+transparent on decode, so the same type handles a protocol that travels both
+tagged and untagged, instead of a second "bare" struct and a `From` impl.
+Named structs can also use `#[cbor(array)]` to encode as a compact field-order
+CBOR array while keeping Rust field names for JSON and code. Field names and
+the type name stay untouched, so the same types still serialize to plain JSON.
 
 ```toml
 [dependencies]
@@ -405,11 +408,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 The runnable [`examples/cose.rs`](examples/cose.rs) builds this out into the
 actual wire types of [`cose2`](https://github.com/ldclabs/cose2) — a complete
 RFC 9052 COSE and RFC 8392 CWT library built on cbor2 — with a named
-`#[cbor(array)]` struct, an optional (detached) ciphertext and an untagged
-variant for tag-less transports: `cargo run --features derive --example cose`.
-The companion [`examples/cwt.rs`](examples/cwt.rs) is cose2's CWT claims set
-(RFC 8392): a tagged *map* with registered integer claim keys, natural JSON
-names and `skip_serializing_if` claim omission —
+`#[cbor(array)]` struct, an optional (detached) ciphertext and transparent tag
+decoding so one type decodes both tagged and tag-less messages:
+`cargo run --features derive --example cose`. The companion
+[`examples/cwt.rs`](examples/cwt.rs) is cose2's CWT claims set (RFC 8392): a
+tagged *map* with registered integer claim keys, natural JSON names,
+`skip_serializing_if` claim omission and the same transparent tag decoding —
 `cargo run --features derive --example cwt`.
 
 The derive also implements the `cbor2::Cbor` trait, which exposes the

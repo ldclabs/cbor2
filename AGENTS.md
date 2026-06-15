@@ -59,6 +59,9 @@ feature is the most common compile failure — set the manifest first.
   creates the text key `"1"`.
 - `#[cbor(array)]` is for named structs whose CBOR wire shape is a field-order
   array. Do not combine it with per-field `#[cbor(key = ...)]`.
+- `#[cbor(tag = N)]` wraps the container in CBOR tag `N` on encode and treats
+  tag layers as transparent on decode, so the same type accepts tagged *or*
+  untagged input — no separate "bare" struct plus a `From` impl.
 - `async_io::read_value`/`write_value` frame and (de)serialize one CBOR item in
   a single call. Drop to `read_item`/`write_item` only to borrow from or inspect
   the raw item bytes; serde itself stays synchronous on the buffered item.

@@ -176,6 +176,27 @@ struct Sign1 {
 }
 ```
 
+A `#[cbor(tag = N)]` tag is written on encode and transparent on decode. When
+a protocol travels both tagged and untagged (CWT, many COSE messages), one type
+decodes either form instead of defining a second "bare" struct:
+
+```rust
+use cbor2::Cbor;
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 61)]
+struct Claims {
+    #[cbor(key = 1)]
+    #[serde(rename = "iss")]
+    issuer: String,
+}
+
+// Encodes with tag 61; decodes whether or not the tag is present.
+let bytes = cbor2::to_canonical_vec(&Claims { issuer: "me".into() }).unwrap();
+assert_eq!(cbor2::from_slice::<Claims>(&bytes).unwrap().issuer, "me");
+assert_eq!(cbor2::from_slice::<Claims>(&bytes[2..]).unwrap().issuer, "me");
+```
+
 Common mistakes:
 
 - Do not also write `#[derive(Serialize, Deserialize)]`; `Cbor` generates

@@ -11,7 +11,7 @@
 [English](README.md) | 简体中文
 
 `cbor2` 面向需要完整 CBOR 工具集（而非仅仅基础序列化器）的应用。它能直接
-处理普通的 `serde::Serialize`/`Deserialize` 类型，在线缆格式（wire shape）
+处理普通的 `serde::Serialize`/`Deserialize` 类型，在传输格式（wire shape）
 重要时保留协议细节，并且从 `std` 服务一直适配到受限的 `no_std` 目标。
 
 ## 为什么选择 cbor2
@@ -170,7 +170,8 @@ assert_eq!(photo, back);
   `#[derive(cbor2::Cbor)]` 将结构体字段映射为整数键（`#[cbor(key = 1)]`），
   将具名结构体编码为字段顺序数组（`#[cbor(array)]`），并按 RFC 9052 的要求
   将容器包裹进 CBOR 标签（`#[cbor(tag = 18)]`），且与文本键之间没有歧义。
-  字段名和类型名保持不变，因此同样的类型仍可序列化为普通 JSON ——
+  标签会在编码时写出，并在解码时透明处理，因此同一个类型可同时接受带标签或不带
+  标签的输入。字段名和类型名保持不变，因此同样的类型仍可序列化为普通 JSON ——
   `serde_json::to_string(&v)` 直接可用，使用原始字段名且没有标签。所声明的键、
   数组形态和标签在运行时仍可通过 `cbor2::Cbor` trait 检视。
 * **原始值（Raw values）** —— `RawValue` 将一项保留为已校验、未解码的字节：
@@ -188,7 +189,7 @@ assert_eq!(photo, back);
 * **异步逐项 I/O** —— `async_io` 模块在异步字节流上为完整的 CBOR 项划定
   边界，一旦项被缓冲，便复用常规的同步 serde API。
 * **底层头部编解码器** —— `core` 模块暴露 pull/push 式的 `Header` 接口，
-  供需要精确控制线缆格式的应用使用。
+  供需要精确控制传输格式的应用使用。
 * **`no_std` 支持** —— `default-features = false, features = ["alloc"]` 保留
   完整 API，仅去掉 `std::io` 互操作和 `HashMap` 转换；不启用 `alloc` 时，
   crate 仍可序列化（`to_writer`/`to_slice`/`serialized_size`）、校验，并使用
@@ -291,10 +292,11 @@ assert_eq!(packet.payload, &[0xde, 0xad]);
 
 启用 `derive` 特性后，`#[derive(cbor2::Cbor)]` 会连同 CBOR 协议细节一起生成
 serde 的 `Serialize`/`Deserialize` 实现：标注了 `#[cbor(key = ...)]` 的字段
-使用整数 map 键，且容器会被包裹进 CBOR 标签（`#[cbor(tag = ...)]`，解码时
-必需）。具名结构体也可使用 `#[cbor(array)]`，将其编码为紧凑的字段顺序 CBOR
-数组，同时为 JSON 和代码保留 Rust 字段名。字段名和类型名保持不变，因此同样
-的类型仍可序列化为普通 JSON。
+使用整数 map 键，且容器会在编码时被包裹进 CBOR 标签（`#[cbor(tag = ...)]`）。
+标签层在解码时透明处理，于是一个类型即可处理同时以带标签与不带标签两种形式传输
+的协议，无需再额外定义一个「裸」结构体和 `From` 实现。具名结构体也可使用
+`#[cbor(array)]`，将其编码为紧凑的字段顺序 CBOR 数组，同时为 JSON 和代码保留
+Rust 字段名。字段名和类型名保持不变，因此同样的类型仍可序列化为普通 JSON。
 
 ```toml
 [dependencies]
@@ -374,13 +376,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 可运行的 [`examples/cose.rs`](examples/cose.rs) 将其扩展为
-[`cose2`](https://github.com/ldclabs/cose2) 的真实线缆类型 —— cose2 是一个
+[`cose2`](https://github.com/ldclabs/cose2) 的真实传输类型 —— cose2 是一个
 构建于 cbor2 之上的完整 RFC 9052 COSE 与 RFC 8392 CWT 库 —— 采用具名的
-`#[cbor(array)]` 结构体、可选的（分离式）密文，以及面向无标签传输的未加标签
-变体：`cargo run --features derive --example cose`。配套的
+`#[cbor(array)]` 结构体、可选的（分离式）密文，以及透明的标签解码，让同一个
+类型同时解码带标签与不带标签的消息：
+`cargo run --features derive --example cose`。配套的
 [`examples/cwt.rs`](examples/cwt.rs) 则是 cose2 的 CWT 声明集（RFC 8392）：
-一个带注册整数声明键的加标签 *map*，配合自然的 JSON 名称与
-`skip_serializing_if` 声明省略 —— `cargo run --features derive --example cwt`。
+一个带注册整数声明键的加标签 *map*，配合自然的 JSON 名称、
+`skip_serializing_if` 声明省略，以及同样的透明标签解码 ——
+`cargo run --features derive --example cwt`。
 
 该派生宏还实现了 `cbor2::Cbor` trait，在运行时暴露所声明的协议细节 ——
 `T::KEYS`、`T::TAG` 和 `T::ARRAY` 作为免分配常量，以及作为
@@ -394,7 +398,7 @@ assert_eq!(CoseEncrypt0::TAG, Some(16));
 assert!(!CoseEncrypt0::ARRAY);
 ```
 
-对于线缆形态是数组、但 Rust 形态应保留具名字段的 COSE 结构，添加
+对于传输形态是数组、但 Rust 形态应保留具名字段的 COSE 结构，添加
 `#[cbor(array)]`：
 
 ```rust
@@ -441,7 +445,7 @@ assert_eq!(value, back);
 
 ### 原始值
 
-`RawValue` 延迟解码并保留一项的精确线缆字节 —— 处理签名负载的合适工具：
+`RawValue` 延迟解码并保留一项的精确传输字节 —— 处理签名负载的合适工具：
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -542,13 +546,13 @@ cargo run --features derive --example cwt
 
 ## 设计决策
 
-本实现刻意与 ciborium 的线缆行为保持一致，因此两个 crate 可逐字节互操作：
+本实现刻意与 ciborium 的传输行为保持一致，因此两个 crate 可逐字节互操作：
 
 * 数字始终以其最小且无损的形式编码，符合确定性编码（RFC 8949 §4.2.1）的
-  要求。Rust 中的整数宽度被视为内存中的细节，而非线缆属性。
+  要求。Rust 中的整数宽度被视为内存中的细节，而非传输属性。
 * 枚举编码为裸字符串（单元变体）或单条目 map `{variant: payload}`
   （其他所有情况）。
-* `Value` 的 map 是 `Vec<(Value, Value)>`，保留线缆顺序和任意键。
+* `Value` 的 map 是 `Vec<(Value, Value)>`，保留传输顺序和任意键。
 * 解码遵循健壮性原则：即便编码永不产生不定长、分段字符串、半宽浮点数和
   未知标签，解码时仍接受它们。
 
@@ -561,8 +565,7 @@ cargo run --features derive --example cwt
 crates.io 上的 `cbor` 名称保留给遗留的 0.4 版本 —— 而 1.0 使其稳定。0.4 的
 API 无一保留。
 
-此次重写沿用了 [ciborium](https://github.com/enarx/ciborium) 的设计（并与其
-线缆兼容）—— 在此向其作者们致谢。
+此次重写沿用了 [ciborium](https://github.com/enarx/ciborium) 的设计 —— 在此向其作者们致谢。
 
 ## 命令行工具
 
