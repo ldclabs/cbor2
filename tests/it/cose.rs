@@ -1,5 +1,7 @@
 //! End-to-end tests for `#[derive(cbor2::Cbor)]` (`derive` feature).
 
+use std::collections::BTreeMap;
+
 use cbor2::{Cbor, Value};
 
 // A COSE_Key-shaped structure (RFC 9052 §7): all map keys are integers.
@@ -409,4 +411,230 @@ fn tagged_claims_decode_tagged_or_untagged() {
             .unwrap(),
         claims
     );
+}
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 61)]
+struct OpenClaims {
+    #[cbor(key = 1)]
+    #[serde(rename = "iss")]
+    issuer: String,
+    #[cbor(key = 4)]
+    #[serde(rename = "exp")]
+    expiration: u64,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: BTreeMap<String, Value>,
+}
+
+#[test]
+fn tagged_claims_support_flattened_extra_fields() {
+    let mut extra = BTreeMap::new();
+    extra.insert("scope".into(), Value::Array(vec![Value::from("read")]));
+    extra.insert("tenant".into(), Value::from("acme"));
+    let claims = OpenClaims {
+        issuer: "me".into(),
+        expiration: 9,
+        extra,
+    };
+
+    let value = Value::serialized(&claims).unwrap();
+    assert_eq!(
+        value,
+        Value::Tag(
+            61,
+            Box::new(
+                cbor2::cbor!({
+                    1 => "me",
+                    4 => 9,
+                    "scope" => ["read"],
+                    "tenant" => "acme",
+                })
+                .unwrap()
+            )
+        )
+    );
+
+    let bytes = cbor2::to_canonical_vec(&claims).unwrap();
+    assert_eq!(cbor2::from_slice::<OpenClaims>(&bytes).unwrap(), claims);
+    assert_eq!(
+        cbor2::from_slice::<OpenClaims>(&bytes[2..]).unwrap(),
+        claims
+    );
+    assert_eq!(value.deserialized::<OpenClaims>().unwrap(), claims);
+    assert_eq!(
+        cbor2::cbor!({
+            1 => "me",
+            4 => 9,
+            "scope" => ["read"],
+            "tenant" => "acme",
+        })
+        .unwrap()
+        .deserialized::<OpenClaims>()
+        .unwrap(),
+        claims
+    );
+
+    assert_eq!(OpenClaims::KEYS, &[("iss", 1), ("exp", 4)]);
+    assert_eq!(OpenClaims::TAG, Some(61));
+
+    let json = serde_json::to_string(&claims).unwrap();
+    assert_eq!(
+        json,
+        r#"{"iss":"me","exp":9,"scope":["read"],"tenant":"acme"}"#
+    );
+    assert_eq!(serde_json::from_str::<OpenClaims>(&json).unwrap(), claims);
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Label {
+    Int(i64),
+    Text(String),
+}
+
+impl serde::Serialize for Label {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Int(value) => serializer.serialize_i64(*value),
+            Self::Text(value) => serializer.serialize_str(value),
+        }
+    }
+}
+
+struct LabelVisitor;
+
+impl<'de> serde::de::Visitor<'de> for LabelVisitor {
+    type Value = Label;
+
+    fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("an integer or text COSE label")
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(Label::Int(value))
+    }
+
+    fn visit_i128<E: serde::de::Error>(self, value: i128) -> Result<Self::Value, E> {
+        i64::try_from(value)
+            .map(Label::Int)
+            .map_err(|_| E::custom("COSE integer label is out of i64 range"))
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+        i64::try_from(value)
+            .map(Label::Int)
+            .map_err(|_| E::custom("COSE integer label is out of i64 range"))
+    }
+
+    fn visit_u128<E: serde::de::Error>(self, value: u128) -> Result<Self::Value, E> {
+        i64::try_from(value)
+            .map(Label::Int)
+            .map_err(|_| E::custom("COSE integer label is out of i64 range"))
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(Label::Text(value.into()))
+    }
+
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+        Ok(Label::Text(value))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Label {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(LabelVisitor)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct CoseMap(BTreeMap<Label, Value>);
+
+impl CoseMap {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl serde::Serialize for CoseMap {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in &self.0 {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+struct CoseMapVisitor;
+
+impl<'de> serde::de::Visitor<'de> for CoseMapVisitor {
+    type Value = CoseMap;
+
+    fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("a COSE label map")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut acc: A) -> Result<Self::Value, A::Error> {
+        let mut map = BTreeMap::new();
+        while let Some((key, value)) = acc.next_entry::<Label, Value>()? {
+            map.insert(key, value);
+        }
+        Ok(CoseMap(map))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for CoseMap {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(CoseMapVisitor)
+    }
+}
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 61)]
+struct LabelClaims {
+    #[cbor(key = 1)]
+    #[serde(rename = "iss")]
+    issuer: String,
+    #[cbor(key = 4)]
+    #[serde(rename = "exp")]
+    expiration: u64,
+    #[serde(flatten, default, skip_serializing_if = "CoseMap::is_empty")]
+    extra: CoseMap,
+}
+
+#[test]
+fn tagged_claims_support_flattened_cose_label_map() {
+    let mut extra = CoseMap::default();
+    extra.0.insert(Label::Int(-65537), Value::from("private"));
+    extra.0.insert(Label::Int(42), Value::from("answer"));
+    extra
+        .0
+        .insert(Label::Text("tenant".into()), Value::from("acme"));
+    let claims = LabelClaims {
+        issuer: "me".into(),
+        expiration: 9,
+        extra,
+    };
+
+    let untagged = cbor2::cbor!({
+        1 => "me",
+        4 => 9,
+        -65537 => "private",
+        42 => "answer",
+        "tenant" => "acme",
+    })
+    .unwrap();
+    let value = Value::serialized(&claims).unwrap();
+    assert_eq!(value, Value::Tag(61, Box::new(untagged.clone())));
+
+    let bytes = cbor2::to_canonical_vec(&claims).unwrap();
+    assert_eq!(cbor2::from_slice::<LabelClaims>(&bytes).unwrap(), claims);
+    assert_eq!(
+        cbor2::from_slice::<LabelClaims>(&bytes[2..]).unwrap(),
+        claims
+    );
+    assert_eq!(value.deserialized::<LabelClaims>().unwrap(), claims);
+    assert_eq!(untagged.deserialized::<LabelClaims>().unwrap(), claims);
 }

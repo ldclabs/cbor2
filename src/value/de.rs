@@ -178,7 +178,30 @@ impl<'de> de::Deserialize<'de> for Value {
     }
 }
 
-struct Deserializer<T>(T);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IdentifierMode {
+    Placeholder,
+    PreserveInteger,
+}
+
+struct Deserializer<T>(T, IdentifierMode);
+
+impl<T> Deserializer<T> {
+    #[inline]
+    fn new(value: T) -> Self {
+        Self(value, IdentifierMode::Placeholder)
+    }
+
+    #[inline]
+    fn preserve_integer_identifiers(value: T) -> Self {
+        Self(value, IdentifierMode::PreserveInteger)
+    }
+
+    #[inline]
+    fn nested<U>(&self, value: U) -> Deserializer<U> {
+        Deserializer(value, self.1)
+    }
+}
 
 impl Deserializer<&Value> {
     fn integer<N>(&self, kind: &'static str) -> Result<N, Error>
@@ -232,13 +255,13 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
         match self.0 {
             Value::Bytes(x) => visitor.visit_bytes(x),
             Value::Text(x) => visitor.visit_str(x),
-            Value::Array(x) => visitor.visit_seq(Deserializer(x.iter())),
-            Value::Map(x) => visitor.visit_map(Deserializer(x.iter().peekable())),
+            Value::Array(x) => visitor.visit_seq(self.nested(x.iter())),
+            Value::Map(x) => visitor.visit_map(self.nested(x.iter().peekable())),
             Value::Bool(x) => visitor.visit_bool(*x),
             Value::Null => visitor.visit_none(),
 
             Value::Tag(t, v) => {
-                let parent: Deserializer<&Value> = Deserializer(v);
+                let parent = self.nested(v.as_ref());
                 visitor.visit_enum(TagAccess::new(parent, Some(*t)))
             }
 
@@ -367,7 +390,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
 
         match value {
             Value::Bytes(x) => visitor.visit_bytes(x),
-            Value::Array(x) => visitor.visit_seq(Deserializer(x.iter())),
+            Value::Array(x) => visitor.visit_seq(self.nested(x.iter())),
             _ => Err(de::Error::invalid_type(value.into(), &"bytes")),
         }
     }
@@ -386,7 +409,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
         }
 
         match value {
-            Value::Array(x) => visitor.visit_seq(Deserializer(x.iter())),
+            Value::Array(x) => visitor.visit_seq(self.nested(x.iter())),
             _ => Err(de::Error::invalid_type(value.into(), &"array")),
         }
     }
@@ -398,7 +421,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
         }
 
         match value {
-            Value::Map(x) => visitor.visit_map(Deserializer(x.iter().peekable())),
+            Value::Map(x) => visitor.visit_map(self.nested(x.iter().peekable())),
             _ => Err(de::Error::invalid_type(value.into(), &"map")),
         }
     }
@@ -424,7 +447,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
                 keys: marker.keys,
             }),
             (StructShape::Map, _) => Err(de::Error::invalid_type(value.into(), &"map")),
-            (StructShape::Array, Value::Array(x)) => visitor.visit_seq(Deserializer(x.iter())),
+            (StructShape::Array, Value::Array(x)) => visitor.visit_seq(self.nested(x.iter())),
             (StructShape::Array, _) => Err(de::Error::invalid_type(value.into(), &"array")),
         }
     }
@@ -444,7 +467,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
         match unwrap_struct_tag(name, self.0)? {
-            Some(value) => Deserializer(value).deserialize_seq(visitor),
+            Some(value) => self.nested(value).deserialize_seq(visitor),
             None => self.deserialize_seq(visitor),
         }
     }
@@ -462,9 +485,21 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
             Value::Text(x) => visitor.visit_str(x),
             Value::Bytes(x) => visitor.visit_bytes(x),
             // Integer keys match struct fields through the key table of a
-            // marked struct (handled in `StructAccess`); in any other
-            // identifier position they take a placeholder form that
-            // matches no field, so they are simply unknown.
+            // marked struct (handled in `StructAccess`). In normal
+            // identifier positions they take a placeholder form that matches
+            // no field, so they are simply unknown. The preserve mode is only
+            // used by derived `#[serde(flatten)]` recovery, where serde needs
+            // the original unknown key in the flatten buffer.
+            Value::Integer(x) if self.1 == IdentifierMode::PreserveInteger => {
+                let key = i128::from(*x);
+                if let Ok(key) = u64::try_from(key) {
+                    visitor.visit_u64(key)
+                } else if let Ok(key) = i64::try_from(key) {
+                    visitor.visit_i64(key)
+                } else {
+                    visitor.visit_str(&format!("{}{}", crate::de::INT_KEY_PLACEHOLDER, key))
+                }
+            }
             Value::Integer(x) => visitor.visit_str(&format!(
                 "{}{}",
                 crate::de::INT_KEY_PLACEHOLDER,
@@ -485,7 +520,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
     fn deserialize_option<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
         match self.0 {
             Value::Null => visitor.visit_none(),
-            x => visitor.visit_some(Self(x)),
+            x => visitor.visit_some(Self(x, self.1)),
         }
     }
 
@@ -504,7 +539,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
         match unwrap_struct_tag(name, self.0)? {
-            Some(value) => Deserializer(value).deserialize_unit(visitor),
+            Some(value) => self.nested(value).deserialize_unit(visitor),
             None => self.deserialize_unit(visitor),
         }
     }
@@ -522,7 +557,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
         }
 
         match unwrap_struct_tag(name, self.0)? {
-            Some(value) => visitor.visit_newtype_struct(Deserializer(value)),
+            Some(value) => visitor.visit_newtype_struct(self.nested(value)),
             None => visitor.visit_newtype_struct(self),
         }
     }
@@ -540,17 +575,19 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
                 v => (None, v),
             };
 
-            let parent: Deserializer<&Value> = Deserializer(val);
+            let parent = self.nested(val);
             return visitor.visit_enum(TagAccess::new(parent, tag));
         }
 
         match self.0 {
-            Value::Tag(.., v) => Deserializer(v.as_ref()).deserialize_enum(name, variants, visitor),
+            Value::Tag(.., v) => self
+                .nested(v.as_ref())
+                .deserialize_enum(name, variants, visitor),
             Value::Map(x) if x.len() == 1 => visitor.visit_enum(KeyedEnum {
                 pair: &x[0],
                 marker: crate::ser::parse_struct_marker(name),
             }),
-            x @ Value::Text(..) => visitor.visit_enum(Deserializer(x)),
+            x @ Value::Text(..) => visitor.visit_enum(self.nested(x)),
             _ => Err(de::Error::invalid_type(self.0.into(), &"map")),
         }
     }
@@ -569,9 +606,10 @@ impl<'a, 'de, T: Iterator<Item = &'a Value>> de::SeqAccess<'de> for Deserializer
         &mut self,
         seed: U,
     ) -> Result<Option<U::Value>, Self::Error> {
+        let mode = self.1;
         match self.0.next() {
             None => Ok(None),
-            Some(v) => seed.deserialize(Deserializer(v)).map(Some),
+            Some(v) => seed.deserialize(Deserializer(v, mode)).map(Some),
         }
     }
 }
@@ -586,9 +624,10 @@ impl<'a, 'de, T: Iterator<Item = &'a (Value, Value)>> de::MapAccess<'de>
         &mut self,
         seed: K,
     ) -> Result<Option<K::Value>, Self::Error> {
+        let mode = self.1;
         match self.0.peek() {
             None => Ok(None),
-            Some(x) => Ok(Some(seed.deserialize(Deserializer(&x.0))?)),
+            Some(x) => Ok(Some(seed.deserialize(Deserializer(&x.0, mode))?)),
         }
     }
 
@@ -597,7 +636,8 @@ impl<'a, 'de, T: Iterator<Item = &'a (Value, Value)>> de::MapAccess<'de>
         &mut self,
         seed: V,
     ) -> Result<V::Value, Self::Error> {
-        seed.deserialize(Deserializer(&self.0.next().unwrap().1))
+        let mode = self.1;
+        seed.deserialize(Deserializer(&self.0.next().unwrap().1, mode))
     }
 
     #[inline]
@@ -606,10 +646,11 @@ impl<'a, 'de, T: Iterator<Item = &'a (Value, Value)>> de::MapAccess<'de>
         kseed: K,
         vseed: V,
     ) -> Result<Option<(K::Value, V::Value)>, Self::Error> {
+        let mode = self.1;
         match self.0.next() {
             Some((k, v)) => Ok(Some((
-                kseed.deserialize(Deserializer(k))?,
-                vseed.deserialize(Deserializer(v))?,
+                kseed.deserialize(Deserializer(k, mode))?,
+                vseed.deserialize(Deserializer(v, mode))?,
             ))),
             None => Ok(None),
         }
@@ -670,7 +711,7 @@ impl<'a, 'de, T: Iterator<Item = &'a (Value, Value)>> de::MapAccess<'de> for Str
         }
 
         let Value::Integer(x) = key else {
-            return seed.deserialize(Deserializer(&pair.0)).map(Some);
+            return seed.deserialize(Deserializer::new(&pair.0)).map(Some);
         };
 
         let key = i128::from(*x);
@@ -694,7 +735,7 @@ impl<'a, 'de, T: Iterator<Item = &'a (Value, Value)>> de::MapAccess<'de> for Str
         &mut self,
         seed: V,
     ) -> Result<V::Value, Self::Error> {
-        seed.deserialize(Deserializer(&self.iter.next().expect("peeked").1))
+        seed.deserialize(Deserializer::new(&self.iter.next().expect("peeked").1))
     }
 
     #[inline]
@@ -722,7 +763,7 @@ impl<'a, 'de> de::EnumAccess<'de> for KeyedEnum<'a> {
         self,
         seed: V,
     ) -> Result<(V::Value, Self::Variant), Self::Error> {
-        let key = seed.deserialize(Deserializer(&self.pair.0))?;
+        let key = seed.deserialize(Deserializer::new(&self.pair.0))?;
         Ok((
             key,
             KeyedVariant {
@@ -743,7 +784,7 @@ impl<'de> de::VariantAccess<'de> for KeyedVariant<'_> {
 
     #[inline]
     fn unit_variant(self) -> Result<(), Self::Error> {
-        de::VariantAccess::unit_variant(Deserializer(self.value))
+        de::VariantAccess::unit_variant(Deserializer::new(self.value))
     }
 
     #[inline]
@@ -751,7 +792,7 @@ impl<'de> de::VariantAccess<'de> for KeyedVariant<'_> {
         self,
         seed: U,
     ) -> Result<U::Value, Self::Error> {
-        seed.deserialize(Deserializer(self.value))
+        seed.deserialize(Deserializer::new(self.value))
     }
 
     #[inline]
@@ -760,7 +801,7 @@ impl<'de> de::VariantAccess<'de> for KeyedVariant<'_> {
         _len: usize,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        Deserializer(self.value).deserialize_seq(visitor)
+        Deserializer::new(self.value).deserialize_seq(visitor)
     }
 
     #[inline]
@@ -784,7 +825,7 @@ impl<'de> de::VariantAccess<'de> for KeyedVariant<'_> {
                 keys: self.marker.as_ref().map_or("", |marker| marker.keys),
             }),
             (StructShape::Map, _) => Err(de::Error::invalid_type(value.into(), &"map")),
-            (StructShape::Array, Value::Array(x)) => visitor.visit_seq(Deserializer(x.iter())),
+            (StructShape::Array, Value::Array(x)) => visitor.visit_seq(Deserializer::new(x.iter())),
             (StructShape::Array, _) => Err(de::Error::invalid_type(value.into(), &"array")),
         }
     }
@@ -800,7 +841,7 @@ impl<'a, 'de> de::EnumAccess<'de> for Deserializer<&'a Value> {
         seed: V,
     ) -> Result<(V::Value, Self::Variant), Self::Error> {
         let key = seed.deserialize(self)?;
-        Ok((key, Deserializer(&Value::Null)))
+        Ok((key, Deserializer::new(&Value::Null)))
     }
 }
 
@@ -865,7 +906,15 @@ impl Value {
     /// ```
     #[inline]
     pub fn deserialized<'de, T: de::Deserialize<'de>>(&self) -> Result<T, Error> {
-        T::deserialize(Deserializer(self))
+        T::deserialize(Deserializer::new(self))
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub(crate) fn __cbor2_deserialized_with_integer_identifiers<'de, T: de::Deserialize<'de>>(
+        &self,
+    ) -> Result<T, Error> {
+        T::deserialize(Deserializer::preserve_integer_identifiers(self))
     }
 }
 
@@ -879,11 +928,11 @@ mod tests {
     fn size_hint_follows_the_iterator() {
         let pairs = [(Value::Null, Value::Null), (Value::Null, Value::Null)];
 
-        let exact = Deserializer(pairs.iter().peekable());
+        let exact = Deserializer::new(pairs.iter().peekable());
         assert_eq!(de::MapAccess::size_hint(&exact), Some(2));
 
         // A filtered iterator no longer knows its exact length.
-        let inexact = Deserializer(pairs.iter().filter(|_| true).peekable());
+        let inexact = Deserializer::new(pairs.iter().filter(|_| true).peekable());
         assert_eq!(de::MapAccess::size_hint(&inexact), None);
     }
 }

@@ -27,7 +27,7 @@
 | 调试与检查     | RFC 8949 诊断记法、美化诊断输出，以及配套的 `cbor` 命令行工具。                                                 |
 | 嵌入式目标     | `no_std + alloc` 提供完整的基于堆的 API；无 alloc 时仍支持序列化、校验和核心头部编解码器。                      |
 
-以 MIT 或 [UNLICENSE](http://unlicense.org) 双重许可。
+以 MIT 许可发布。
 
 ## 与其他 CBOR crate 的对比
 
@@ -383,7 +383,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 `cargo run --features derive --example cose`。配套的
 [`examples/cwt.rs`](examples/cwt.rs) 则是 cose2 的 CWT 声明集（RFC 8392）：
 一个带注册整数声明键的加标签 *map*，配合自然的 JSON 名称、
-`skip_serializing_if` 声明省略，以及同样的透明标签解码 ——
+`skip_serializing_if` 声明省略、以 COSE label 为键的 `#[serde(flatten)]`
+扩展声明，以及同样的透明标签解码 ——
 `cargo run --features derive --example cwt`。
 
 该派生宏还实现了 `cbor2::Cbor` trait，在运行时暴露所声明的协议细节 ——
@@ -572,7 +573,8 @@ API 无一保留。
 本工作区在 [`cbor2-cli`](cbor2-cli/README.md) 中提供了 `cbor` 命令行工具。
 裸 `cbor` 将任意 CBOR ——来自文件、stdin、十六进制字符串或 base64 字符串——
 显示为诊断记法（RFC 8949 §8）；`decode` 转换为美化 JSON（或用 `--diag`
-转换为美化诊断记法），`encode` 将 JSON 转换为 CBOR：
+转换为美化诊断记法），`encode` 将 JSON 转换为 CBOR，`encode --hex` 为
+agent 和文档输出可复制的 CBOR 十六进制，`validate` 校验完整 CBOR 输入：
 
 ```bash
 brew install ldclabs/tap/cbor2-cli   # Homebrew
@@ -588,6 +590,12 @@ $ echo '{"name": "example", "ok": true}' | cbor encode | cbor decode
   "name": "example",
   "ok": true
 }
+
+$ echo '{"name": "example", "ok": true}' | cbor encode --hex
+a2646e616d65676578616d706c65626f6bf5
+
+$ cbor validate a2646e616d65676578616d706c65626f6bf5
+valid
 ```
 
 ## 测试
@@ -604,4 +612,4 @@ Rust 1.85。
 
 ## 许可
 
-与原始 crate 一样，以 MIT 或 [UNLICENSE](http://unlicense.org) 双重许可。
+以 MIT 许可发布。

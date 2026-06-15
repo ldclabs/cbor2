@@ -17,7 +17,85 @@
 //!
 //! https://datatracker.ietf.org/doc/html/rfc8392#appendix-A.1
 
+use std::collections::BTreeMap;
+
 use cbor2::Cbor;
+
+/// A COSE label can be either an integer label or a text label.
+///
+/// The real `cose2::Label` has this same serde shape: integers serialize as
+/// integer map keys, not as JSON-like strings.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Label {
+    Int(i64),
+    Text(String),
+}
+
+impl serde::Serialize for Label {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Int(value) => serializer.serialize_i64(*value),
+            Self::Text(value) => serializer.serialize_str(value),
+        }
+    }
+}
+
+struct LabelVisitor;
+
+impl<'de> serde::de::Visitor<'de> for LabelVisitor {
+    type Value = Label;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("an integer or text COSE label")
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(Label::Int(value))
+    }
+
+    fn visit_i128<E: serde::de::Error>(self, value: i128) -> Result<Self::Value, E> {
+        i64::try_from(value)
+            .map(Label::Int)
+            .map_err(|_| E::custom("COSE integer label is out of i64 range"))
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+        i64::try_from(value)
+            .map(Label::Int)
+            .map_err(|_| E::custom("COSE integer label is out of i64 range"))
+    }
+
+    fn visit_u128<E: serde::de::Error>(self, value: u128) -> Result<Self::Value, E> {
+        i64::try_from(value)
+            .map(Label::Int)
+            .map_err(|_| E::custom("COSE integer label is out of i64 range"))
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(Label::Text(value.into()))
+    }
+
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+        Ok(Label::Text(value))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Label {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(LabelVisitor)
+    }
+}
+
+/// Extension claims keyed by COSE labels.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct CoseMap(pub BTreeMap<Label, cbor2::Value>);
+
+impl CoseMap {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 /// The common, typed subset of CWT claims (RFC 8392 §3).
 ///
@@ -28,31 +106,31 @@ use cbor2::Cbor;
 /// format, while CBOR uses the compact integer keys.
 #[derive(Clone, Debug, Default, PartialEq, Cbor)]
 #[cbor(tag = 61)]
-struct Claims {
+pub struct Claims {
     /// Issuer (`iss`, claim 1).
     #[cbor(key = 1)]
     #[serde(rename = "iss", skip_serializing_if = "Option::is_none", default)]
-    issuer: Option<String>,
+    pub issuer: Option<String>,
     /// Subject (`sub`, claim 2).
     #[cbor(key = 2)]
     #[serde(rename = "sub", skip_serializing_if = "Option::is_none", default)]
-    subject: Option<String>,
+    pub subject: Option<String>,
     /// Audience (`aud`, claim 3).
     #[cbor(key = 3)]
     #[serde(rename = "aud", skip_serializing_if = "Option::is_none", default)]
-    audience: Option<String>,
+    pub audience: Option<String>,
     /// Expiration time, seconds since the UNIX epoch (`exp`, claim 4).
     #[cbor(key = 4)]
     #[serde(rename = "exp", skip_serializing_if = "Option::is_none", default)]
-    expiration: Option<u64>,
+    pub expiration: Option<u64>,
     /// Not-before time, seconds since the UNIX epoch (`nbf`, claim 5).
     #[cbor(key = 5)]
     #[serde(rename = "nbf", skip_serializing_if = "Option::is_none", default)]
-    not_before: Option<u64>,
+    pub not_before: Option<u64>,
     /// Issued-at time, seconds since the UNIX epoch (`iat`, claim 6).
     #[cbor(key = 6)]
     #[serde(rename = "iat", skip_serializing_if = "Option::is_none", default)]
-    issued_at: Option<u64>,
+    pub issued_at: Option<u64>,
     /// CWT ID (`cti`, claim 7).
     #[cbor(key = 7)]
     #[serde(
@@ -61,7 +139,14 @@ struct Claims {
         skip_serializing_if = "Option::is_none",
         default
     )]
-    cwt_id: Option<Vec<u8>>,
+    pub cwt_id: Option<Vec<u8>>,
+    /// Additional CWT claims outside the typed subset above.
+    ///
+    /// Use this for application/private claims and registered claims that do
+    /// not yet have typed fields here.
+    #[serde(flatten)]
+    #[serde(skip_serializing_if = "CoseMap::is_empty", default)]
+    pub extra: CoseMap,
 }
 
 // cargo run --features derive --example cwt
@@ -75,6 +160,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         not_before: Some(1443944944),
         issued_at: Some(1443944944),
         cwt_id: Some(vec![0x0b, 0x71]),
+        extra: CoseMap::default(),
     };
 
     // Canonical CBOR: tag 61 around the integer-keyed claim map, byte for byte
@@ -134,6 +220,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
         serde_json::to_string(&minimal)?,
         r#"{"iss":"me","exp":1444064944}"#
+    );
+
+    // Application/private claims can ride in the flattened extra map. The
+    // registered fields above keep their integer CWT labels, while the business
+    // field stays a normal text-keyed claim.
+    let mut extended = minimal.clone();
+    extended
+        .extra
+        .0
+        .insert(Label::Text("tenant".into()), cbor2::Value::from("acme"));
+    let extended_bytes = cbor2::to_canonical_vec(&extended)?;
+    assert_eq!(cbor2::from_slice::<Claims>(&extended_bytes)?, extended);
+    assert_eq!(
+        serde_json::to_string(&extended)?,
+        r#"{"iss":"me","exp":1444064944,"tenant":"acme"}"#
     );
 
     // CWT tokens are time-bound. cose2 ships a full `Validator` (issuer /

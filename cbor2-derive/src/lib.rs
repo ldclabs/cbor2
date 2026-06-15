@@ -12,9 +12,11 @@
 //!
 //! The derive generates `serde::Serialize` and `serde::Deserialize` impls
 //! for CBOR protocols that need integer map keys, field-order arrays and
-//! semantic tags, such as COSE (RFC 9052). It also implements `cbor2::Cbor`,
-//! exposing the declared keys, tag and array shape as runtime metadata. The
-//! original Rust field names stay intact for JSON and other serde formats.
+//! semantic tags, such as COSE (RFC 9052). Map-shaped structs can also use
+//! `#[serde(flatten)]` for extension fields beside the registered integer-key
+//! subset. It implements `cbor2::Cbor`, exposing the declared keys, tag and
+//! array shape as runtime metadata. The original Rust field names stay intact
+//! for JSON and other serde formats.
 //!
 //! ```ignore
 //! use cbor2::Cbor;
@@ -89,10 +91,26 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
     }
 
     let mut entries = Vec::new();
+    let mut flatten = false;
     match &input.data {
         syn::Data::Struct(data) => {
             for entry in field_entries(&data.fields)? {
                 merge_entry(&mut entries, entry)?;
+            }
+            if let Some(span) = fields_have_flatten(&data.fields) {
+                flatten = true;
+                if !matches!(data.fields, syn::Fields::Named(..)) {
+                    return Err(syn::Error::new(
+                        span,
+                        "#[serde(flatten)] with #[derive(Cbor)] requires a struct with named fields",
+                    ));
+                }
+                if let Some(array) = container.array {
+                    return Err(syn::Error::new(
+                        array,
+                        "#[serde(flatten)] cannot be used with #[cbor(array)]",
+                    ));
+                }
             }
 
             if let Some(span) = container.array {
@@ -141,6 +159,12 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
                 }
 
                 let keyed = field_entries(&variant.fields)?;
+                if let Some(span) = fields_have_flatten(&variant.fields) {
+                    return Err(syn::Error::new(
+                        span,
+                        "#[serde(flatten)] with #[derive(Cbor)] is supported only on structs",
+                    ));
+                }
                 if !keyed.is_empty() {
                     if let Some(span) = scan_serde(&variant.attrs).rename_all {
                         return Err(syn::Error::new(
@@ -184,6 +208,7 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
         &input,
         container.tag.as_ref().map(|tag| tag.value),
         container.array.is_some(),
+        flatten,
         &entries,
     ))
 }
@@ -197,6 +222,7 @@ fn generate(
     input: &syn::DeriveInput,
     tag: Option<u64>,
     array: bool,
+    flatten: bool,
     entries: &[Entry],
 ) -> TokenStream {
     let ident = &input.ident;
@@ -263,23 +289,98 @@ fn generate(
         .insert(0, syn::GenericParam::Lifetime(de_lifetime_param));
     let (de_impl_generics, ..) = de_generics.split_for_impl();
 
-    // The `cbor2::Cbor` trait exposes the declared protocol details.
-    let key_pairs = entries.iter().map(|entry| {
-        let name = &entry.name;
-        let key = entry.key;
-        quote!((#name, #key))
-    });
-    let tag_const = match tag {
-        Some(tag) => quote!(::core::option::Option::Some(#tag)),
-        None => quote!(::core::option::Option::None),
-    };
-    let array_const = array;
+    let serde_impls = if flatten {
+        let cbor_lifetime = fresh_lifetime(&input.generics, "__cbor");
 
-    quote! {
-        #[doc(hidden)]
-        const _: () = {
-            #shadow
+        let mut shadow_ref_generics = input.generics.clone();
+        shadow_ref_generics.params.insert(
+            0,
+            syn::GenericParam::Lifetime(syn::LifetimeParam::new(cbor_lifetime.clone())),
+        );
+        let (shadow_ref_impl_generics, _shadow_ref_ty_generics, shadow_ref_where_clause) =
+            shadow_ref_generics.split_for_impl();
 
+        let mut ser_ref_generics = ser_generics.clone();
+        ser_ref_generics.params.insert(
+            0,
+            syn::GenericParam::Lifetime(syn::LifetimeParam::new(cbor_lifetime.clone())),
+        );
+        let (ser_ref_impl_generics, ser_ref_ty_generics, ser_ref_where_clause) =
+            ser_ref_generics.split_for_impl();
+
+        quote! {
+            struct __CborShadowRef #shadow_ref_impl_generics #shadow_ref_where_clause {
+                value: &#cbor_lifetime #ident #ty_generics,
+            }
+
+            impl #ser_ref_impl_generics ::serde::Serialize for __CborShadowRef #ser_ref_ty_generics #ser_ref_where_clause {
+                fn serialize<__S>(&self, serializer: __S) -> ::core::result::Result<__S::Ok, __S::Error>
+                where
+                    __S: ::serde::Serializer,
+                {
+                    #shadow_ident::serialize(self.value, serializer)
+                }
+            }
+
+            struct __CborShadowOwned #impl_generics (#ident #ty_generics) #where_clause;
+
+            impl #de_impl_generics ::serde::Deserialize<#de_lifetime> for __CborShadowOwned #ty_generics #where_clause {
+                fn deserialize<__D>(deserializer: __D) -> ::core::result::Result<Self, __D::Error>
+                where
+                    __D: ::serde::Deserializer<#de_lifetime>,
+                {
+                    #shadow_ident::deserialize(deserializer).map(Self)
+                }
+            }
+
+            #[automatically_derived]
+            impl #ser_impl_generics ::serde::Serialize for #ident #ty_generics #where_clause {
+                fn serialize<__S>(&self, serializer: __S) -> ::core::result::Result<__S::Ok, __S::Error>
+                where
+                    __S: ::serde::Serializer,
+                {
+                    if serializer.is_human_readable() {
+                        return #shadow_ident::serialize(self, serializer);
+                    }
+
+                    let __value = ::cbor2::Value::serialized(&__CborShadowRef { value: self })
+                        .map_err(::serde::ser::Error::custom)?;
+                    let __value = ::cbor2::__private::__cbor2_flatten_serialize(
+                        __value,
+                        <#ident #ty_generics as ::cbor2::Cbor>::TAG,
+                        <#ident #ty_generics as ::cbor2::Cbor>::KEYS,
+                    )
+                    .map_err(::serde::ser::Error::custom)?;
+                    ::serde::Serialize::serialize(&__value, serializer)
+                }
+            }
+
+            #[automatically_derived]
+            impl #de_impl_generics ::serde::Deserialize<#de_lifetime> for #ident #ty_generics #where_clause {
+                fn deserialize<__D>(deserializer: __D) -> ::core::result::Result<Self, __D::Error>
+                where
+                    __D: ::serde::Deserializer<#de_lifetime>,
+                {
+                    if deserializer.is_human_readable() {
+                        return #shadow_ident::deserialize(deserializer);
+                    }
+
+                    let __value: ::cbor2::Value =
+                        ::serde::Deserialize::deserialize(deserializer)?;
+                    let __value = ::cbor2::__private::__cbor2_flatten_deserialize(
+                        __value,
+                        <#ident #ty_generics as ::cbor2::Cbor>::KEYS,
+                    )
+                    .map_err(::serde::de::Error::custom)?;
+                    let __value: __CborShadowOwned #ty_generics =
+                        ::cbor2::__private::__cbor2_flatten_deserialize_value(&__value)
+                        .map_err(::serde::de::Error::custom)?;
+                    ::core::result::Result::Ok(__value.0)
+                }
+            }
+        }
+    } else {
+        quote! {
             #[automatically_derived]
             impl #ser_impl_generics ::serde::Serialize for #ident #ty_generics #where_clause {
                 fn serialize<__S>(&self, serializer: __S) -> ::core::result::Result<__S::Ok, __S::Error>
@@ -299,6 +400,27 @@ fn generate(
                     #shadow_ident::deserialize(deserializer)
                 }
             }
+        }
+    };
+
+    // The `cbor2::Cbor` trait exposes the declared protocol details.
+    let key_pairs = entries.iter().map(|entry| {
+        let name = &entry.name;
+        let key = entry.key;
+        quote!((#name, #key))
+    });
+    let tag_const = match tag {
+        Some(tag) => quote!(::core::option::Option::Some(#tag)),
+        None => quote!(::core::option::Option::None),
+    };
+    let array_const = array;
+
+    quote! {
+        #[doc(hidden)]
+        const _: () = {
+            #shadow
+
+            #serde_impls
 
             #[automatically_derived]
             impl #impl_generics ::cbor2::Cbor for #ident #ty_generics #where_clause {
@@ -313,7 +435,11 @@ fn generate(
 // Picks an internal deserializer lifetime that cannot collide with the
 // user's generics. User code may legitimately name a lifetime `'de`.
 fn fresh_de_lifetime(generics: &syn::Generics) -> syn::Lifetime {
-    let mut name = String::from("__de");
+    fresh_lifetime(generics, "__de")
+}
+
+fn fresh_lifetime(generics: &syn::Generics, base: &str) -> syn::Lifetime {
+    let mut name = String::from(base);
     while generics.lifetimes().any(|def| def.lifetime.ident == name) {
         name.push('_');
     }
@@ -516,6 +642,13 @@ fn field_entries(fields: &syn::Fields) -> syn::Result<Vec<Entry>> {
                 ));
             }
         }
+        let serde = scan_serde(&field.attrs);
+        if let (Some(..), Some(span)) = (&key, serde.flatten) {
+            return Err(syn::Error::new(
+                span,
+                "#[serde(flatten)] cannot be combined with #[cbor(key = ...)]",
+            ));
+        }
 
         let Some(key) = key else { continue };
 
@@ -534,7 +667,6 @@ fn field_entries(fields: &syn::Fields) -> syn::Result<Vec<Entry>> {
             ));
         }
 
-        let serde = scan_serde(&field.attrs);
         if let Some(span) = serde.split_rename {
             return Err(syn::Error::new(
                 span,
@@ -570,6 +702,12 @@ fn field_entries(fields: &syn::Fields) -> syn::Result<Vec<Entry>> {
     Ok(entries)
 }
 
+fn fields_have_flatten(fields: &syn::Fields) -> Option<proc_macro2::Span> {
+    fields
+        .iter()
+        .find_map(|field| scan_serde(&field.attrs).flatten)
+}
+
 // The serde attribute metas the marker must coordinate with.
 #[derive(Default)]
 struct SerdeAttrs {
@@ -578,6 +716,7 @@ struct SerdeAttrs {
     rename_all: Option<proc_macro2::Span>,
     rename_all_fields: Option<proc_macro2::Span>,
     enum_repr: Option<proc_macro2::Span>,
+    flatten: Option<proc_macro2::Span>,
 }
 
 // Scans `#[serde(...)]` attributes, tolerating any meta shapes we do not
@@ -608,6 +747,8 @@ fn scan_serde(attrs: &[syn::Attribute]) -> SerdeAttrs {
                 out.rename_all = Some(meta.path.span());
             } else if meta.path.is_ident("rename_all_fields") {
                 out.rename_all_fields = Some(meta.path.span());
+            } else if meta.path.is_ident("flatten") {
+                out.flatten = Some(meta.path.span());
             } else if meta.path.is_ident("tag")
                 || meta.path.is_ident("untagged")
                 || meta.path.is_ident("content")
@@ -746,6 +887,33 @@ mod tests {
         );
         assert!(out.contains("const ARRAY : bool = true"), "{out}");
         assert!(out.contains("impl :: cbor2 :: Cbor for Sign1"), "{out}");
+    }
+
+    #[test]
+    fn supports_flattened_map_structs() {
+        let out = expanded(quote! {
+            #[cbor(tag = 61)]
+            struct Claims {
+                #[cbor(key = 1)]
+                #[serde(rename = "iss")]
+                issuer: String,
+                #[serde(flatten)]
+                extra: BTreeMap<String, cbor2::Value>,
+            }
+        });
+
+        assert!(out.contains("__cbor2_flatten_serialize"), "{out}");
+        assert!(out.contains("__cbor2_flatten_deserialize"), "{out}");
+        assert!(
+            out.contains(r#"rename = "@@CBOR@@61@@iss=1@@Claims""#),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                r#"const KEYS : & 'static [(& 'static str , i128)] = & [("iss" , 1i128)] ;"#
+            ),
+            "{out}"
+        );
     }
 
     #[test]
@@ -920,6 +1088,16 @@ mod tests {
         assert!(msg.contains("cannot be used with #[cbor(array)]"), "{msg}");
 
         let msg = error(quote! {
+            #[cbor(array)]
+            struct S {
+                a: u8,
+                #[serde(flatten)]
+                extra: BTreeMap<String, u8>,
+            }
+        });
+        assert!(msg.contains("cannot be used with #[cbor(array)]"), "{msg}");
+
+        let msg = error(quote! {
             struct S {
                 #[cbor(key = 1)]
                 #[cbor(key = 2)]
@@ -940,6 +1118,27 @@ mod tests {
             }
         });
         assert!(msg.contains("expected `key = <integer>`"), "{msg}");
+
+        let msg = error(quote! {
+            struct S {
+                #[cbor(key = 1)]
+                a: u8,
+                #[cbor(key = 9)]
+                #[serde(flatten)]
+                extra: BTreeMap<String, u8>,
+            }
+        });
+        assert!(msg.contains("cannot be combined with #[cbor(key"), "{msg}");
+
+        let msg = error(quote! {
+            enum E {
+                A {
+                    #[serde(flatten)]
+                    extra: BTreeMap<String, u8>,
+                },
+            }
+        });
+        assert!(msg.contains("supported only on structs"), "{msg}");
 
         let msg = error(quote! {
             #[cbor(key = 1)]

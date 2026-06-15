@@ -71,7 +71,7 @@ class ${FORMULA_CLASS} < Formula
   desc "CBOR command-line converter and diagnostic notation inspector"
   homepage "https://github.com/${REPO}"
   version "${VERSION}"
-  license any_of: ["MIT", "Unlicense"]
+  license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?

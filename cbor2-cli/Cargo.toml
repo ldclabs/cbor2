@@ -1,6 +1,6 @@
 [package]
 name = "cbor2-cli"
-version = "1.0.4"
+version = "1.0.5"
 authors = ["0xZensh <txr1883@gmail.com>"]
 description = "A practical cbor CLI for inspecting, decoding and encoding CBOR: diagnostic notation, JSON, hex/base64 and CBOR sequences."
 homepage = "https://github.com/ldclabs/cbor2"
@@ -8,7 +8,7 @@ repository = "https://github.com/ldclabs/cbor2"
 readme = "README.md"
 keywords = ["cbor", "json", "diagnostic", "cli", "hex"]
 categories = ["command-line-utilities", "encoding"]
-license = "Unlicense OR MIT"
+license = "MIT"
 edition = "2021"
 rust-version = "1.85"
 

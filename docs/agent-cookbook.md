@@ -183,19 +183,32 @@ decodes either form instead of defining a second "bare" struct:
 ```rust
 use cbor2::Cbor;
 
-#[derive(Debug, PartialEq, Cbor)]
+#[derive(Debug, PartialEq, Default, Cbor)]
 #[cbor(tag = 61)]
 struct Claims {
     #[cbor(key = 1)]
     #[serde(rename = "iss")]
     issuer: String,
+    #[serde(flatten, default)]
+    extra: std::collections::BTreeMap<String, cbor2::Value>,
 }
 
 // Encodes with tag 61; decodes whether or not the tag is present.
-let bytes = cbor2::to_canonical_vec(&Claims { issuer: "me".into() }).unwrap();
+let bytes = cbor2::to_canonical_vec(&Claims {
+    issuer: "me".into(),
+    ..Default::default()
+})
+.unwrap();
 assert_eq!(cbor2::from_slice::<Claims>(&bytes).unwrap().issuer, "me");
 assert_eq!(cbor2::from_slice::<Claims>(&bytes[2..]).unwrap().issuer, "me");
 ```
+
+For map-shaped protocols such as CWT, `#[serde(flatten)]` can carry
+application/private fields that are outside the typed registered subset. The
+declared fields still use their integer CBOR keys. Flattened text keys remain
+text keys, and flattened map key types that serialize as integers or strings
+such as a COSE `Label` / `CoseMap` preserve their integer labels on CBOR
+round trips.
 
 Common mistakes:
 
@@ -203,7 +216,8 @@ Common mistakes:
   those impls.
 - Do not use `#[serde(rename = "1")]` for integer keys; that creates a text
   key. Use `#[cbor(key = 1)]`.
-- Do not combine `#[cbor(array)]` with per-field integer keys.
+- Do not combine `#[cbor(array)]` with per-field integer keys or
+  `#[serde(flatten)]`; flatten is for map-shaped structs.
 
 ## Use Async Transports
 
@@ -232,6 +246,25 @@ let value: cbor2::Value = cbor2::from_slice(&item)?;
 The bare `async_io::AsyncRead`/`AsyncWrite` traits have no impls of their own.
 Enable `futures` or `tokio` and call `async_io::futures::*` / `async_io::tokio::*`
 to drive real `futures_io` / `tokio::io` streams.
+
+## Use The CLI Safely
+
+When an agent needs to inspect or generate CBOR from a shell, use the `cbor`
+binary from `cbor2-cli`:
+
+```bash
+cbor a1616101
+cbor decode a1616101
+cbor decode --diag bf616101ff
+echo '{"a":1}' | cbor encode --hex
+cbor validate a1616101
+```
+
+Prefer `cbor encode --hex` in transcripts, tests and docs because it prints
+copyable lowercase hex instead of raw binary stdout. Use raw `cbor encode` only
+when the next command expects CBOR bytes on stdin. `cbor validate` prints
+`valid` and exits 0 for one or more complete CBOR items; malformed data exits
+1 and command-line usage errors exit 2.
 
 ## Migrate From ciborium or serde_cbor
 

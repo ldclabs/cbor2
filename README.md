@@ -29,7 +29,7 @@ from `std` services down to constrained `no_std` targets.
 | Debugging and inspection | RFC 8949 diagnostic notation, pretty diagnostics and the companion `cbor` CLI.                                           |
 | Embedded targets         | `no_std + alloc` for the full heap-backed API, or no allocation for serialization, validation and the core header codec. |
 
-Dual-licensed under MIT or the [UNLICENSE](http://unlicense.org).
+Licensed under the MIT License.
 
 ## Comparison with other CBOR crates
 
@@ -413,7 +413,8 @@ decoding so one type decodes both tagged and tag-less messages:
 `cargo run --features derive --example cose`. The companion
 [`examples/cwt.rs`](examples/cwt.rs) is cose2's CWT claims set (RFC 8392): a
 tagged *map* with registered integer claim keys, natural JSON names,
-`skip_serializing_if` claim omission and the same transparent tag decoding —
+`skip_serializing_if` claim omission, COSE-label-keyed `#[serde(flatten)]`
+extension claims and the same transparent tag decoding —
 `cargo run --features derive --example cwt`.
 
 The derive also implements the `cbor2::Cbor` trait, which exposes the
@@ -613,7 +614,9 @@ The workspace ships a `cbor` command line tool in
 [`cbor2-cli`](cbor2-cli/README.md). Bare `cbor` shows any CBOR — from a
 file, stdin, a hex string or a base64 string — as diagnostic notation
 (RFC 8949 §8); `decode` converts to pretty JSON (or pretty diagnostic
-with `--diag`) and `encode` converts JSON to CBOR:
+with `--diag`), `encode` converts JSON to CBOR, `encode --hex` prints
+copyable CBOR hex for agents and docs, and `validate` checks complete
+CBOR input:
 
 ```bash
 brew install ldclabs/tap/cbor2-cli   # Homebrew
@@ -629,6 +632,12 @@ $ echo '{"name": "example", "ok": true}' | cbor encode | cbor decode
   "name": "example",
   "ok": true
 }
+
+$ echo '{"name": "example", "ok": true}' | cbor encode --hex
+a2646e616d65676578616d706c65626f6bf5
+
+$ cbor validate a2646e616d65676578616d706c65626f6bf5
+valid
 ```
 
 ## Testing
@@ -648,5 +657,4 @@ Rust 1.85.
 
 ## License
 
-Dual-licensed under MIT or the [UNLICENSE](http://unlicense.org), like the
-original crate.
+Licensed under the MIT License.

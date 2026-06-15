@@ -558,7 +558,104 @@ pub use crate::value::{KeyOrder, Value};
 #[cfg(feature = "alloc")]
 #[doc(hidden)]
 pub mod __private {
+    use alloc::string::String;
+
+    use crate::value::{self, Integer, Value};
+
     pub use alloc::vec;
+
+    fn flatten_error(msg: &'static str) -> value::Error {
+        value::Error::Custom(String::from(msg))
+    }
+
+    fn unwrap_tags(mut value: Value) -> Value {
+        while let Value::Tag(.., inner) = value {
+            value = *inner;
+        }
+        value
+    }
+
+    fn key_text(mut key: &Value) -> Option<&str> {
+        loop {
+            match key {
+                Value::Tag(.., inner) => key = inner,
+                Value::Text(text) => return Some(text),
+                _ => return None,
+            }
+        }
+    }
+
+    fn key_integer(mut key: &Value) -> Option<i128> {
+        loop {
+            match key {
+                Value::Tag(.., inner) => key = inner,
+                Value::Integer(int) => return Some(i128::from(*int)),
+                _ => return None,
+            }
+        }
+    }
+
+    fn integer_for_field(keys: &[(&'static str, i128)], name: &str) -> Option<Integer> {
+        keys.iter()
+            .find_map(|(field, key)| (*field == name).then_some(*key))
+            .and_then(|key| Integer::try_from(key).ok())
+    }
+
+    fn field_for_integer(keys: &[(&'static str, i128)], key: i128) -> Option<&'static str> {
+        keys.iter()
+            .find_map(|(field, field_key)| (*field_key == key).then_some(*field))
+    }
+
+    pub fn __cbor2_flatten_serialize(
+        value: Value,
+        tag: Option<u64>,
+        keys: &[(&'static str, i128)],
+    ) -> Result<Value, value::Error> {
+        let Value::Map(mut entries) = unwrap_tags(value) else {
+            return Err(flatten_error(
+                "#[serde(flatten)] with #[derive(Cbor)] must serialize as a map",
+            ));
+        };
+
+        for (key, _) in &mut entries {
+            let mapped = key_text(key).and_then(|name| integer_for_field(keys, name));
+            if let Some(integer) = mapped {
+                *key = Value::Integer(integer);
+            }
+        }
+
+        let value = Value::Map(entries);
+        Ok(match tag {
+            Some(tag) => Value::Tag(tag, value.into()),
+            None => value,
+        })
+    }
+
+    pub fn __cbor2_flatten_deserialize(
+        value: Value,
+        keys: &[(&'static str, i128)],
+    ) -> Result<Value, value::Error> {
+        let Value::Map(mut entries) = unwrap_tags(value) else {
+            return Err(flatten_error(
+                "#[serde(flatten)] with #[derive(Cbor)] must deserialize from a map",
+            ));
+        };
+
+        for (key, _) in &mut entries {
+            let mapped = key_integer(key).and_then(|key| field_for_integer(keys, key));
+            if let Some(field) = mapped {
+                *key = Value::Text(String::from(field));
+            }
+        }
+
+        Ok(Value::Map(entries))
+    }
+
+    pub fn __cbor2_flatten_deserialize_value<'de, T: serde::Deserialize<'de>>(
+        value: &Value,
+    ) -> Result<T, value::Error> {
+        value.__cbor2_deserialized_with_integer_identifiers()
+    }
 }
 /// Derives [`serde::Serialize`] and [`serde::Deserialize`] with CBOR
 /// protocol details: integer map keys, field-order arrays and a CBOR tag

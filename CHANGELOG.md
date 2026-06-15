@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.5] - 2026-06-15
+
+### Added
+
+* `#[derive(Cbor)]` now supports `#[serde(flatten)]` on map-shaped structs,
+  so CWT claim sets can carry extension fields beside declared integer-key
+  claims.
+* Flattened extension maps can use key types that serialize as integer or text
+  labels, such as COSE `Label` / `CoseMap`, and preserve those integer labels
+  on CBOR round trips.
+* `cbor encode --hex` prints lowercase hex instead of raw CBOR bytes, making
+  generated fixtures easy for agents to copy, paste and diff.
+* Added `cbor validate`, which validates one or more complete CBOR items and
+  prints `valid` on success.
+
+### Changed
+
+* `examples/cwt.rs` now models extension claims as
+  `CoseMap(BTreeMap<Label, Value>)`, matching the shape used by `cose2`.
+* Bumped `cbor2`, `cbor2-cli` and `cbor2-derive` to `1.0.5`.
+* Switched the project license metadata and docs to MIT-only and removed the
+  old alternate license.
+
 ## [1.0.4] - 2026-06-15
 
 ### Added

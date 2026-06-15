@@ -41,6 +41,23 @@ feature is the most common compile failure — set the manifest first.
 | Async read/write of a typed value | `cbor2::async_io::{read_value, write_value}` | Treating serde itself as async |
 | Async item when you must borrow or inspect raw bytes | `cbor2::async_io::read_item` then `from_slice` | `read_value` when the buffer must outlive the call |
 
+## CLI Selection
+
+The `cbor2-cli` crate installs a `cbor` binary. Prefer text-safe commands when
+you are an AI/code agent working in a terminal transcript:
+
+| Task | Command |
+| --- | --- |
+| Inspect pasted CBOR hex/base64 or a file | `cbor <INPUT>` |
+| Convert CBOR to JSON for jq-like tools | `cbor decode <INPUT>` |
+| Preserve wire details while pretty-printing | `cbor decode --diag <INPUT>` or bare `cbor <INPUT>` |
+| Convert JSON to copyable CBOR bytes | `echo '{"a":1}' \| cbor encode --hex` |
+| Pipe raw CBOR bytes to another binary command | `cbor encode` |
+| Check one or more complete CBOR items | `cbor validate <INPUT>` |
+
+For agent-generated examples, prefer `cbor encode --hex` over raw
+`cbor encode`; raw binary stdout is hard to quote, diff and paste reliably.
+
 ## Non-Negotiable Semantics
 
 - `from_slice` and `from_reader` deserialize one leading CBOR item. They are

@@ -14,7 +14,7 @@ name = "cbor2-bench"
 version = "0.1.0"
 edition = "2021"
 publish = false
-license = "Unlicense OR MIT"
+license = "MIT"
 description = "Comparative CBOR benchmarks for the cbor2 crate."
 
 # Detach from the parent workspace: its own root, its own Cargo.lock.

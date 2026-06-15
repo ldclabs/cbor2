@@ -4,8 +4,9 @@
 //! diagnostic notation (RFC 8949 §8), exactly as it appears on the wire.
 //! `decode` converts CBOR items into pretty-printed JSON or — with
 //! `--diag` — pretty-printed diagnostic notation; `encode` converts JSON
-//! values into CBOR items. Data errors exit with status 1, usage errors
-//! with status 2.
+//! values into CBOR items, optionally as copyable hex text with `--hex`;
+//! `validate` checks one or more complete CBOR items. Data errors exit with
+//! status 1, usage errors with status 2.
 //!
 //! Install with Homebrew or Cargo:
 //!
@@ -34,6 +35,8 @@ Commands:
   decode  Convert CBOR items to pretty-printed JSON, or to
           pretty-printed diagnostic notation with --diag
   encode  Convert JSON values to CBOR items
+  validate
+          Validate one or more complete CBOR items
 
 Input:
   INPUT is a file path, a hex string (optionally 0x-prefixed), a base64
@@ -43,27 +46,37 @@ Input:
 
 Options:
   -d, --diag     With `decode`: print diagnostic notation instead of JSON
+      --hex      With `encode`: print lowercase hex text instead of raw bytes
   -h, --help     Print this help
   -V, --version  Print the version
 
 Examples:
   cbor a201020326                  # show hex CBOR
   cbor decode message.cbor         # CBOR file -> pretty JSON
+  echo '{\"a\": 1}' | cbor encode --hex
   echo '{\"a\": 1}' | cbor encode    # JSON -> CBOR bytes";
 
 enum Command {
     Show,
     Decode,
     Encode,
+    Validate,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EncodeOutput {
+    Raw,
+    Hex,
 }
 
 fn main() {
-    let (command, diag, input) = parse_args();
+    let (command, diag, encode_output, input) = parse_args();
 
     let result = match command {
         Command::Show => show(open_cbor_input(input.as_deref())),
         Command::Decode => decode(open_cbor_input(input.as_deref()), diag),
-        Command::Encode => encode(open_json_input(input.as_deref())),
+        Command::Encode => encode(open_json_input(input.as_deref()), encode_output),
+        Command::Validate => validate(open_cbor_input(input.as_deref())),
     };
 
     if let Err(err) = result {
@@ -74,8 +87,9 @@ fn main() {
 
 // Parses the command line. `-h`/`--help` and `-V`/`--version` print and
 // exit; anything malformed exits with 2.
-fn parse_args() -> (Command, bool, Option<String>) {
+fn parse_args() -> (Command, bool, EncodeOutput, Option<String>) {
     let mut diag = false;
+    let mut encode_output = EncodeOutput::Raw;
     let mut positional = Vec::new();
 
     for arg in env::args().skip(1) {
@@ -89,6 +103,7 @@ fn parse_args() -> (Command, bool, Option<String>) {
                 process::exit(0);
             }
             "-d" | "--diag" => diag = true,
+            "--hex" => encode_output = EncodeOutput::Hex,
             _ if arg.starts_with('-') && arg != "-" => {
                 usage_error(format_args!("unrecognized option `{arg}`"));
             }
@@ -106,6 +121,10 @@ fn parse_args() -> (Command, bool, Option<String>) {
             positional.next();
             Command::Encode
         }
+        Some("validate") => {
+            positional.next();
+            Command::Validate
+        }
         _ => Command::Show,
     };
 
@@ -116,8 +135,11 @@ fn parse_args() -> (Command, bool, Option<String>) {
     if diag && !matches!(command, Command::Decode) {
         usage_error(format_args!("`--diag` only applies to `decode`"));
     }
+    if encode_output == EncodeOutput::Hex && !matches!(command, Command::Encode) {
+        usage_error(format_args!("`--hex` only applies to `encode`"));
+    }
 
-    (command, diag, input)
+    (command, diag, encode_output, input)
 }
 
 fn usage_error(msg: core::fmt::Arguments<'_>) -> ! {
@@ -212,14 +234,46 @@ fn decode(input: Box<dyn Read>, diag: bool) -> Result<(), Error> {
     Ok(stdout.flush()?)
 }
 
-// Reads a stream of JSON values and writes each of them to stdout as a
-// CBOR item, incrementally.
-fn encode(input: Box<dyn Read>) -> Result<(), Error> {
+// Validates one or more complete CBOR items. This is deliberately a sequence
+// check because the rest of the CLI accepts CBOR sequences item by item.
+fn validate(input: Box<dyn Read>) -> Result<(), Error> {
+    let mut count = 0usize;
+    for item in cbor2::de::Deserializer::from_reader(input).into_iter::<RawValue>() {
+        item?;
+        count += 1;
+    }
+
+    if count == 0 {
+        return Err("expected at least one CBOR item".into());
+    }
+
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
+    writeln!(stdout, "valid")?;
+    Ok(stdout.flush()?)
+}
+
+// Reads a stream of JSON values and writes each of them to stdout as a
+// CBOR item. Raw output streams bytes; hex output streams one copyable
+// lowercase hex string for the complete CBOR sequence.
+fn encode(input: Box<dyn Read>, output: EncodeOutput) -> Result<(), Error> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    let mut wrote_hex = false;
 
     for value in serde_json::Deserializer::from_reader(input).into_iter::<serde_json::Value>() {
-        cbor2::to_writer(&value?, &mut stdout)?;
+        match output {
+            EncodeOutput::Raw => cbor2::to_writer(&value?, &mut stdout)?,
+            EncodeOutput::Hex => {
+                let item = cbor2::to_vec(&value?)?;
+                write!(stdout, "{}", hex(&item))?;
+                wrote_hex = true;
+            }
+        }
+    }
+
+    if wrote_hex {
+        stdout.write_all(b"\n")?;
     }
 
     Ok(stdout.flush()?)

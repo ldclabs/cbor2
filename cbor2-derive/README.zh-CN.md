@@ -28,6 +28,7 @@ serde_bytes = "0.11" # 仅在如下例的二进制字段中需要
 | JSON 兼容性  | 字段名和类型名保持不变，因此 `serde_json` 仍使用自然名称且没有 CBOR 标签。               |
 | 运行时元数据 | 生成的 `cbor2::Cbor` 实现暴露 `T::KEYS`、`T::TAG`、`T::ARRAY` 和 `value.keys()`。        |
 | Serde 属性   | 诸如 `default`、`skip`、`alias` 和 `with = "serde_bytes"` 等字段级属性仍然有效。         |
+| 扁平扩展字段 | map 形态结构体上的 `#[serde(flatten)]` 可承载扩展字段，包括 COSE 风格的整数/text 标签键。 |
 
 ## 示例
 
@@ -68,6 +69,29 @@ struct Sign1 {
 assert!(Sign1::ARRAY);
 ```
 
+对于 CWT 这类带扩展 claim 的 map 形态协议：
+
+```rust
+use std::collections::BTreeMap;
+
+use cbor2::{Cbor, Value};
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 61)]
+struct Claims {
+    #[cbor(key = 1)]
+    #[serde(rename = "iss")]
+    issuer: String,
+    #[serde(flatten, default)]
+    extra: BTreeMap<String, Value>,
+}
+```
+
+已声明字段仍使用对应的 CBOR 整数键，扁平 map 中的扩展字段保留普通文本键。
+如果扁平 map 的键类型会序列化为整数或字符串，例如 COSE `Label` / `CoseMap`，
+CBOR 往返时也会保留这些整数键。`#[serde(flatten)]` 支持具名的 map 结构体；
+不要与 `#[cbor(array)]` 混用。
+
 该宏会生成 `serde::Serialize`、`serde::Deserialize` 和 `cbor2::Cbor`。请勿
 在同一类型上同时派生 serde 的 `Serialize` 或 `Deserialize`；那些实现会冲突。
 
@@ -76,4 +100,4 @@ assert!(Sign1::ARRAY);
 
 ## 许可
 
-以 MIT 或 [UNLICENSE](http://unlicense.org) 双重许可。
+以 MIT 许可发布。

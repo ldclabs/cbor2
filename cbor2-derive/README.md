@@ -31,6 +31,7 @@ structures.
 | JSON compatibility | Field names and the type name stay untouched, so `serde_json` still uses the natural names and no CBOR tag. |
 | Runtime metadata   | The generated `cbor2::Cbor` impl exposes `T::KEYS`, `T::TAG`, `T::ARRAY` and `value.keys()`.                |
 | Serde attributes   | Field-level attributes such as `default`, `skip`, `alias` and `with = "serde_bytes"` continue to work.      |
+| Flattened maps     | `#[serde(flatten)]` on map-shaped structs can carry extension fields, including COSE-style integer/text labels. |
 
 ## Example
 
@@ -71,6 +72,30 @@ struct Sign1 {
 assert!(Sign1::ARRAY);
 ```
 
+For map-shaped protocols with extension claims, such as CWT:
+
+```rust
+use std::collections::BTreeMap;
+
+use cbor2::{Cbor, Value};
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 61)]
+struct Claims {
+    #[cbor(key = 1)]
+    #[serde(rename = "iss")]
+    issuer: String,
+    #[serde(flatten, default)]
+    extra: BTreeMap<String, Value>,
+}
+```
+
+The declared fields still use their integer CBOR keys and the flattened map
+keeps ordinary text keys. Flattened maps whose key type serializes as integers
+or strings, such as a COSE `Label` / `CoseMap`, preserve those integer keys on
+CBOR round trips. `#[serde(flatten)]` is supported for named map structs; do not
+combine it with `#[cbor(array)]`.
+
 The macro generates `serde::Serialize`, `serde::Deserialize` and
 `cbor2::Cbor`. Do not also derive serde's `Serialize` or `Deserialize` on the
 same type; those impls would conflict.
@@ -80,4 +105,4 @@ for complete COSE examples.
 
 ## License
 
-Dual-licensed under MIT or the [UNLICENSE](http://unlicense.org).
+Licensed under the MIT License.

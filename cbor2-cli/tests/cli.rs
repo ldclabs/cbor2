@@ -119,6 +119,24 @@ fn encode_streams_json_values() {
 }
 
 #[test]
+fn encode_can_emit_copyable_hex() {
+    assert_eq!(ok(&["encode", "--hex"], br#"{"a": 1}"#), b"a1616101\n");
+
+    // Multiple JSON values still represent one CBOR sequence, just as
+    // copyable lowercase hex text.
+    assert_eq!(
+        ok(&["encode", "--hex"], b"1 {\"two\":2}\n[3]"),
+        b"01a16374776f028103\n"
+    );
+}
+
+#[test]
+fn validate_reports_complete_cbor_sequences() {
+    assert_eq!(ok(&["validate", "a1616101"], b""), b"valid\n");
+    assert_eq!(ok(&["validate"], &hex("01a16374776f02")), b"valid\n");
+}
+
+#[test]
 fn commands_chain_into_a_round_trip() {
     let json = br#"{"name": "example", "ok": true, "tags": [1, 2.5]}"#;
     let cbor = ok(&["encode"], json);
@@ -160,6 +178,8 @@ fn help_and_version_print_and_exit_cleanly() {
         assert!(out.status.success());
         let text = String::from_utf8(out.stdout).unwrap();
         assert!(text.contains("Usage: cbor [COMMAND] [INPUT]"), "{text}");
+        assert!(text.contains("--hex"), "{text}");
+        assert!(text.contains("validate"), "{text}");
     }
 
     let out = run(&["--version"], b"");
@@ -177,6 +197,8 @@ fn usage_errors_exit_with_status_2() {
         &["decode", "a1616101", "01"][..],
         &["--diag", "01"][..],
         &["encode", "--diag"][..],
+        &["--hex", "01"][..],
+        &["decode", "--hex", "01"][..],
         &["/nonexistent/cbor_cli_test"][..],
         // `/` makes it a path, even though it is valid standard base64.
         &["Q/vvvg=="][..],
@@ -193,11 +215,12 @@ fn usage_errors_exit_with_status_2() {
 
 #[test]
 fn data_errors_exit_with_status_1() {
-    // Truncated CBOR, a lone break and broken JSON.
+    // Truncated CBOR, a lone break, broken JSON and empty validation input.
     for (args, input) in [
         (&["1a0000"][..], &b""[..]),
         (&["decode"][..], &hex("ff")[..]),
         (&["encode"][..], &b"{broken"[..]),
+        (&["validate"][..], &b""[..]),
     ] {
         let out = run(args, input);
         assert_eq!(out.status.code(), Some(1), "args: {args:?}");

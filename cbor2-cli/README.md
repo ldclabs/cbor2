@@ -25,6 +25,8 @@ Commands:
   decode  Convert CBOR items to pretty-printed JSON, or to
           pretty-printed diagnostic notation with --diag
   encode  Convert JSON values to CBOR items
+  validate
+          Validate one or more complete CBOR items
 ```
 
 ## Why cbor2-cli
@@ -34,8 +36,9 @@ Commands:
 | Inspect pasted CBOR   | Run `cbor <hex-or-base64>` to render RFC 8949 diagnostic notation.                                                                   |
 | Preserve wire details | Bare `cbor` captures each item as raw bytes, so indefinite lengths, segmented strings, `undefined` and simple values remain visible. |
 | Decode for JSON tools | `cbor decode` pretty-prints CBOR as JSON, one document per item.                                                                     |
-| Encode fixtures       | `cbor encode` turns JSON values into CBOR bytes and supports JSON value streams.                                                     |
+| Encode fixtures       | `cbor encode` turns JSON values into CBOR bytes; `cbor encode --hex` prints copyable lowercase hex for agents and docs.              |
 | Work with sequences   | Multiple JSON values become a CBOR sequence; CBOR sequences decode item by item.                                                     |
+| Validate inputs       | `cbor validate <hex-or-file>` checks one or more complete CBOR items and prints `valid` on success.                                  |
 | Script reliably       | Data errors exit with status 1, usage errors with status 2.                                                                          |
 
 `INPUT` is a file path, a hex string (optionally `0x`-prefixed), a
@@ -44,6 +47,21 @@ argument containing a path separator is always a file path. Everything
 streams: multiple JSON values become a CBOR sequence (RFC 8742), and a
 CBOR sequence becomes one output document or line per item. Data errors
 exit with status 1, usage errors with status 2.
+
+## Agent-friendly usage
+
+For code agents, prefer text-first commands unless a pipeline needs raw bytes:
+
+```bash
+cbor validate a1616101
+echo '{"a":1}' | cbor encode --hex
+cbor decode a1616101
+cbor decode --diag bf616101ff
+```
+
+Use raw `cbor encode` only when piping directly into another binary command.
+Use `cbor encode --hex` when the result needs to be pasted into a test, a
+prompt, a review comment or another `cbor` invocation.
 
 ## Show: `cbor`
 
@@ -108,7 +126,7 @@ value).
 ## encode
 
 `cbor encode` reads JSON text (from a file or stdin) and writes each
-value as a CBOR item:
+value as a CBOR item. Add `--hex` for copyable lowercase hex text:
 
 ```bash
 $ echo '{"name": "example", "ok": true}' | cbor encode | cbor
@@ -116,8 +134,22 @@ $ echo '{"name": "example", "ok": true}' | cbor encode | cbor
 
 $ echo '{"name": "example", "ok": true}' | cbor encode | xxd -p
 a2646e616d65676578616d706c65626f6bf5
+
+$ echo '{"name": "example", "ok": true}' | cbor encode --hex
+a2646e616d65676578616d706c65626f6bf5
+```
+
+## validate
+
+`cbor validate` checks that the input contains one or more complete CBOR
+items. It prints `valid` on success, exits with status 1 for malformed data
+and status 2 for usage errors:
+
+```bash
+$ cbor validate a1616101
+valid
 ```
 
 ## License
 
-Dual-licensed under MIT or the [UNLICENSE](http://unlicense.org).
+Licensed under the MIT License.

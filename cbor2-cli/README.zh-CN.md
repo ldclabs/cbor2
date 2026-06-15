@@ -24,6 +24,8 @@ Commands:
   decode  将 CBOR 项转换为美化的 JSON，或用 --diag
           转换为美化的诊断记法
   encode  将 JSON 值转换为 CBOR 项
+  validate
+          校验一个或多个完整 CBOR 项
 ```
 
 ## 为什么选择 cbor2-cli
@@ -33,8 +35,9 @@ Commands:
 | 检查粘贴的 CBOR  | 运行 `cbor <hex-or-base64>` 渲染 RFC 8949 诊断记法。                                                       |
 | 保留传输细节     | 裸 `cbor` 将每一项捕获为原始字节，因此不定长、分段字符串、`undefined` 和简单值（simple value）都保持可见。 |
 | 为 JSON 工具解码 | `cbor decode` 将 CBOR 美化输出为 JSON，每项一个文档。                                                      |
-| 编码测试夹具     | `cbor encode` 将 JSON 值转换为 CBOR 字节，并支持 JSON 值流。                                               |
+| 编码测试夹具     | `cbor encode` 将 JSON 值转换为 CBOR 字节；`cbor encode --hex` 为 agent 和文档输出可复制的小写十六进制。    |
 | 处理序列         | 多个 JSON 值会成为一个 CBOR 序列；CBOR 序列逐项解码。                                                      |
+| 校验输入         | `cbor validate <hex-or-file>` 校验一个或多个完整 CBOR 项，成功时输出 `valid`。                             |
 | 可靠地编写脚本   | 数据错误以状态码 1 退出，用法错误以状态码 2 退出。                                                         |
 
 `INPUT` 是文件路径、十六进制字符串（可带 `0x` 前缀）、base64/base64url
@@ -42,6 +45,20 @@ Commands:
 文件路径。一切都是流式的：多个 JSON 值会成为一个 CBOR 序列（RFC 8742），
 而一个 CBOR 序列会成为每项一个输出文档或一行。数据错误以状态码 1 退出，
 用法错误以状态码 2 退出。
+
+## 面向 agent 的用法
+
+代码 agent 应优先使用文本优先的命令，除非需要把原始字节直接管道传给另一个二进制命令：
+
+```bash
+cbor validate a1616101
+echo '{"a":1}' | cbor encode --hex
+cbor decode a1616101
+cbor decode --diag bf616101ff
+```
+
+只有在直接管道传输时才使用裸 `cbor encode`。当结果需要粘贴到测试、prompt、review
+评论或另一个 `cbor` 调用里时，使用 `cbor encode --hex`。
 
 ## 显示：`cbor`
 
@@ -101,7 +118,7 @@ $ cbor decode --diag a101820203
 ## encode
 
 `cbor encode` 读取 JSON 文本（来自文件或 stdin），并将每个值写为一个 CBOR
-项：
+项。加上 `--hex` 可输出可复制的小写十六进制文本：
 
 ```bash
 $ echo '{"name": "example", "ok": true}' | cbor encode | cbor
@@ -109,8 +126,21 @@ $ echo '{"name": "example", "ok": true}' | cbor encode | cbor
 
 $ echo '{"name": "example", "ok": true}' | cbor encode | xxd -p
 a2646e616d65676578616d706c65626f6bf5
+
+$ echo '{"name": "example", "ok": true}' | cbor encode --hex
+a2646e616d65676578616d706c65626f6bf5
+```
+
+## validate
+
+`cbor validate` 检查输入是否包含一个或多个完整 CBOR 项。成功时输出 `valid`，
+格式错误以状态码 1 退出，用法错误以状态码 2 退出：
+
+```bash
+$ cbor validate a1616101
+valid
 ```
 
 ## 许可
 
-以 MIT 或 [UNLICENSE](http://unlicense.org) 双重许可。
+以 MIT 许可发布。

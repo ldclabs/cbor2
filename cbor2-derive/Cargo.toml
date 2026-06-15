@@ -1,6 +1,6 @@
 [package]
 name = "cbor2-derive"
-version = "1.0.4"
+version = "1.0.5"
 authors = ["0xZensh <txr1883@gmail.com>"]
 description = "Derive cbor2 serde impls for CBOR protocols: integer map keys, semantic tags and inspectable COSE metadata."
 homepage = "https://github.com/ldclabs/cbor2"
@@ -9,7 +9,7 @@ documentation = "https://docs.rs/cbor2-derive"
 readme = "README.md"
 keywords = ["cbor", "serde", "cose", "derive", "tags"]
 categories = ["encoding"]
-license = "Unlicense OR MIT"
+license = "MIT"
 edition = "2021"
 rust-version = "1.85"
 
