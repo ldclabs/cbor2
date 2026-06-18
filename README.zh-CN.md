@@ -181,9 +181,12 @@ assert_eq!(photo, back);
   序列（RFC 8742）均可处理；递归有深度限制，伪造的长度无法触发巨量分配。
 * **诊断记法** —— `diagnostic` 将原始 CBOR 渲染为 RFC 8949 §8 的人类可读
   文本（与附录 A 示例完全一致，包含不定长标记等所有细节）；`Value` 以相同
-  的记法实现 `Display`，并以缩进的多行形式实现 `Debug`。对于 CWT claims
-  这类使用整数键的协议 map，`diagnostic_pretty_with_key_comments` 可接收
-  `Cbor::KEYS` 表，并在传输层整数键旁加入 `// "iss"` 形式的字符串键注释。
+  的记法实现 `Display`，并以缩进的多行形式实现 `Debug`。RFC 8949 §8 正由
+  IETF “Concise Diagnostic Notation” 草案（CDN，`draft-ietf-cbor-edn-literals`，
+  一个向后兼容的超集）正式化并取代；cbor2 仅输出其核心写法，这些写法在 CDN
+  下依然合法。对于 CWT claims 这类使用整数键的协议 map，
+  `diagnostic_pretty_with_key_comments` 可接收 `Cbor::KEYS` 表，并在传输层整数
+  键旁加入 `// "iss"` 形式的字符串键注释（CDN 的行尾注释）。
 * **免分配辅助函数** —— `validate` 检查输入是否恰好为一个格式良好的 CBOR
   项（RFC 8949 §5.3.1，包括文本的 UTF-8 校验），`serialized_size` 计算任意
   可序列化值的精确编码大小，`to_slice` 将编码写入调用方提供的缓冲区；这些
@@ -589,7 +592,7 @@ API 无一保留。
 
 本工作区在 [`cbor2-cli`](cbor2-cli/README.md) 中提供了 `cbor` 命令行工具。
 裸 `cbor` 将任意 CBOR ——来自文件、stdin、十六进制字符串或 base64 字符串——
-显示为诊断记法（RFC 8949 §8）；`decode` 转换为美化 JSON（或用 `--diag`
+显示为诊断记法（RFC 8949 §8，已正式化为 CDN）；`decode` 转换为美化 JSON（或用 `--diag`
 转换为美化诊断记法），`encode` 将 JSON 转换为 CBOR，`encode --hex` 为
 agent 和文档输出可复制的 CBOR 十六进制，`validate` 校验完整 CBOR 输入：
 

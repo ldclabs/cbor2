@@ -6,6 +6,14 @@
 //! Appendix A exactly, including the extended forms of §8.1: the `_`
 //! marker for indefinite-length items and `(_ ...)` for segmented
 //! strings.
+//!
+//! The notation of RFC 8949 §8 is being formalized, and §8 obsoleted, by
+//! the IETF draft "Concise Diagnostic Notation" (CDN,
+//! `draft-ietf-cbor-edn-literals`). CDN is a backward-compatible superset
+//! that mostly adds input conveniences for hand-written notation (`0x`/
+//! `0o`/`0b` numbers, `b64'..'` byte strings, embedded CBOR `<<..>>`,
+//! comments and application-extension literals such as `dt'..'`). This
+//! module emits only the core forms, which remain valid CDN.
 
 use alloc::{format, string::String, vec::Vec};
 use core::fmt::Write as _;
@@ -77,6 +85,11 @@ pub fn diagnostic_pretty<R: Read>(reader: R) -> Result<String, Error> {
 /// The `keys` table uses the same shape as [`Cbor::KEYS`](crate::Cbor::KEYS):
 /// `(string_key, integer_key)`. The renderer still works directly on the wire;
 /// it only adds comments for integer map keys that match the table.
+///
+/// The `// ...` form is an end-of-line comment in CDN
+/// (`draft-ietf-cbor-edn-literals`); RFC 8610 Appendix G instead used
+/// slash-delimited `/ ... /` comments and read `//` as an empty comment, so
+/// this output assumes the newer CDN reading.
 ///
 /// ```rust
 /// let bytes = hex::decode("a201626d6504182a").unwrap();

@@ -201,9 +201,13 @@ and canonical encoding.
   human-readable text of RFC 8949 §8 (matching the Appendix A examples
   exactly, indefinite-length markers and all); `Value` implements
   `Display` with the same notation and `Debug` as its indented,
-  multi-line form. For integer-keyed protocol maps, such as CWT claims,
-  `diagnostic_pretty_with_key_comments` can take a `Cbor::KEYS` table and
-  add `// "iss"` style string-key comments beside the wire integer keys.
+  multi-line form. RFC 8949 §8 is being formalized, and obsoleted, by the
+  IETF "Concise Diagnostic Notation" draft (CDN,
+  `draft-ietf-cbor-edn-literals`), a backward-compatible superset; cbor2
+  emits the core forms only, which stay valid CDN. For integer-keyed
+  protocol maps, such as CWT claims, `diagnostic_pretty_with_key_comments`
+  can take a `Cbor::KEYS` table and add `// "iss"` style string-key
+  comments (CDN end-of-line comments) beside the wire integer keys.
 * **Allocation-free helpers** — `validate` checks that an input is exactly
   one well-formed CBOR item (RFC 8949 §5.3.1, including text UTF-8),
   `serialized_size` computes the exact encoded size of any serializable
@@ -631,7 +635,7 @@ The rewrite follows the design of (and is wire-compatible with)
 The workspace ships a `cbor` command line tool in
 [`cbor2-cli`](cbor2-cli/README.md). Bare `cbor` shows any CBOR — from a
 file, stdin, a hex string or a base64 string — as diagnostic notation
-(RFC 8949 §8); `decode` converts to pretty JSON (or pretty diagnostic
+(RFC 8949 §8, formalized as CDN); `decode` converts to pretty JSON (or pretty diagnostic
 with `--diag`), `encode` converts JSON to CBOR, `encode --hex` prints
 copyable CBOR hex for agents and docs, and `validate` checks complete
 CBOR input:
