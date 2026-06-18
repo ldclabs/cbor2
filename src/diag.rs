@@ -42,7 +42,7 @@ use crate::value::Value;
 pub fn diagnostic<R: Read>(reader: R) -> Result<String, Error> {
     let mut decoder = Decoder::from(reader);
     let mut out = String::new();
-    item(&mut decoder, &mut out, DEFAULT_RECURSION_LIMIT, None)?;
+    item(&mut decoder, &mut out, DEFAULT_RECURSION_LIMIT, None, None)?;
     expect_eof(&mut decoder)?;
     Ok(out)
 }
@@ -60,30 +60,70 @@ pub fn diagnostic<R: Read>(reader: R) -> Result<String, Error> {
 pub fn diagnostic_pretty<R: Read>(reader: R) -> Result<String, Error> {
     let mut decoder = Decoder::from(reader);
     let mut out = String::new();
-    item(&mut decoder, &mut out, DEFAULT_RECURSION_LIMIT, Some(0))?;
+    item(
+        &mut decoder,
+        &mut out,
+        DEFAULT_RECURSION_LIMIT,
+        Some(0),
+        None,
+    )?;
+    expect_eof(&mut decoder)?;
+    Ok(out)
+}
+
+/// Like [`diagnostic_pretty`], but annotates integer map keys with matching
+/// string keys as `// "key"` comments.
+///
+/// The `keys` table uses the same shape as [`Cbor::KEYS`](crate::Cbor::KEYS):
+/// `(string_key, integer_key)`. The renderer still works directly on the wire;
+/// it only adds comments for integer map keys that match the table.
+///
+/// ```rust
+/// let bytes = hex::decode("a201626d6504182a").unwrap();
+/// let keys = [("iss", 1), ("exp", 4)];
+/// assert_eq!(
+///     cbor2::diagnostic_pretty_with_key_comments(&bytes[..], &keys).unwrap(),
+///     "{\n  1: \"me\", // \"iss\"\n  4: 42 // \"exp\"\n}"
+/// );
+/// ```
+pub fn diagnostic_pretty_with_key_comments<R: Read>(
+    reader: R,
+    keys: &[(&str, i128)],
+) -> Result<String, Error> {
+    let mut decoder = Decoder::from(reader);
+    let mut out = String::new();
+    item(
+        &mut decoder,
+        &mut out,
+        DEFAULT_RECURSION_LIMIT,
+        Some(0),
+        Some(keys),
+    )?;
     expect_eof(&mut decoder)?;
     Ok(out)
 }
 
 // `indent`: `None` = compact, `Some(level)` = pretty with current depth.
-fn item<R: Read>(
+fn item<'a, R: Read>(
     decoder: &mut Decoder<R>,
     out: &mut String,
     depth: usize,
     indent: Option<usize>,
+    key_comments: Option<&'a [(&'a str, i128)]>,
 ) -> Result<(), Error> {
     let offset = decoder.offset();
     let header = decoder.pull()?;
-    item_header(decoder, header, out, offset, depth, indent)
+    item_header(decoder, header, out, offset, depth, indent, key_comments)
 }
 
-fn item_header<R: Read>(
+fn item_header<'a, R: Read>(
     decoder: &mut Decoder<R>,
     header: Header,
     out: &mut String,
     offset: usize,
     depth: usize,
     indent: Option<usize>,
+    key_comments: Option<&'a [(&'a str, i128)]>,
 ) -> Result<(), Error> {
     if depth == 0 {
         return Err(Error::RecursionLimitExceeded);
@@ -141,7 +181,15 @@ fn item_header<R: Read>(
                 }
                 header => {
                     let _ = write!(out, "{t}(");
-                    item_header(decoder, header, out, offset, depth - 1, indent)?;
+                    item_header(
+                        decoder,
+                        header,
+                        out,
+                        offset,
+                        depth - 1,
+                        indent,
+                        key_comments,
+                    )?;
                     out.push(')');
                     Ok(())
                 }
@@ -150,7 +198,7 @@ fn item_header<R: Read>(
 
         Header::Tag(t) => {
             let _ = write!(out, "{t}(");
-            item(decoder, out, depth - 1, indent)?;
+            item(decoder, out, depth - 1, indent, key_comments)?;
             out.push(')');
             Ok(())
         }
@@ -216,7 +264,7 @@ fn item_header<R: Read>(
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    item(decoder, out, depth - 1, None)?;
+                    item(decoder, out, depth - 1, None, key_comments)?;
                 }
                 out.push(']');
                 Ok(())
@@ -232,7 +280,7 @@ fn item_header<R: Read>(
                         out.push_str(",\n");
                     }
                     push_indent(out, ind + 1);
-                    item(decoder, out, depth - 1, Some(ind + 1))?;
+                    item(decoder, out, depth - 1, Some(ind + 1), key_comments)?;
                 }
                 out.push('\n');
                 push_indent(out, ind);
@@ -254,7 +302,15 @@ fn item_header<R: Read>(
                                 out.push_str(", ");
                             }
                             first = false;
-                            item_header(decoder, header, out, offset, depth - 1, None)?;
+                            item_header(
+                                decoder,
+                                header,
+                                out,
+                                offset,
+                                depth - 1,
+                                None,
+                                key_comments,
+                            )?;
                         }
                     }
                 }
@@ -282,7 +338,15 @@ fn item_header<R: Read>(
                             }
                             first = false;
                             push_indent(out, ind + 1);
-                            item_header(decoder, header, out, offset, depth - 1, Some(ind + 1))?;
+                            item_header(
+                                decoder,
+                                header,
+                                out,
+                                offset,
+                                depth - 1,
+                                Some(ind + 1),
+                                key_comments,
+                            )?;
                         }
                     }
                 }
@@ -296,9 +360,9 @@ fn item_header<R: Read>(
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    item(decoder, out, depth - 1, None)?;
+                    item(decoder, out, depth - 1, None, key_comments)?;
                     out.push_str(": ");
-                    item(decoder, out, depth - 1, None)?;
+                    item(decoder, out, depth - 1, None, key_comments)?;
                 }
                 out.push('}');
                 Ok(())
@@ -310,15 +374,29 @@ fn item_header<R: Read>(
                 }
                 out.push_str("{\n");
                 for i in 0..len {
-                    if i > 0 {
-                        out.push_str(",\n");
-                    }
                     push_indent(out, ind + 1);
-                    item(decoder, out, depth - 1, Some(ind + 1))?;
+                    let offset = decoder.offset();
+                    let header = decoder.pull()?;
+                    let comment = key_comment(header, key_comments);
+                    item_header(
+                        decoder,
+                        header,
+                        out,
+                        offset,
+                        depth - 1,
+                        Some(ind + 1),
+                        key_comments,
+                    )?;
                     out.push_str(": ");
-                    item(decoder, out, depth - 1, Some(ind + 1))?;
+                    item(decoder, out, depth - 1, Some(ind + 1), key_comments)?;
+                    if i + 1 < len {
+                        out.push(',');
+                    }
+                    if let Some(comment) = comment {
+                        push_key_comment(out, comment);
+                    }
+                    out.push('\n');
                 }
-                out.push('\n');
                 push_indent(out, ind);
                 out.push('}');
                 Ok(())
@@ -338,43 +416,15 @@ fn item_header<R: Read>(
                                 out.push_str(", ");
                             }
                             first = false;
-                            item_header(decoder, header, out, offset, depth - 1, None)?;
-                            out.push_str(": ");
-                            let offset = decoder.offset();
-                            match decoder.pull()? {
-                                Header::Break => return Err(Error::Syntax(offset)),
-                                header => {
-                                    item_header(decoder, header, out, offset, depth - 1, None)?;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            (None, Some(ind)) => {
-                let mut first = true;
-                loop {
-                    let offset = decoder.offset();
-                    match decoder.pull()? {
-                        Header::Break => {
-                            if first {
-                                out.push_str("{_}");
-                            } else {
-                                out.push('\n');
-                                push_indent(out, ind);
-                                out.push('}');
-                            }
-                            return Ok(());
-                        }
-                        header => {
-                            if first {
-                                out.push_str("{_\n");
-                            } else {
-                                out.push_str(",\n");
-                            }
-                            first = false;
-                            push_indent(out, ind + 1);
-                            item_header(decoder, header, out, offset, depth - 1, Some(ind + 1))?;
+                            item_header(
+                                decoder,
+                                header,
+                                out,
+                                offset,
+                                depth - 1,
+                                None,
+                                key_comments,
+                            )?;
                             out.push_str(": ");
                             let offset = decoder.offset();
                             match decoder.pull()? {
@@ -386,7 +436,8 @@ fn item_header<R: Read>(
                                         out,
                                         offset,
                                         depth - 1,
-                                        Some(ind + 1),
+                                        None,
+                                        key_comments,
                                     )?;
                                 }
                             }
@@ -394,8 +445,90 @@ fn item_header<R: Read>(
                     }
                 }
             }
+            (None, Some(ind)) => {
+                let mut pending: Option<(String, Option<&str>)> = None;
+                loop {
+                    let offset = decoder.offset();
+                    match decoder.pull()? {
+                        Header::Break => {
+                            if let Some((entry, comment)) = pending {
+                                out.push_str(&entry);
+                                if let Some(comment) = comment {
+                                    push_key_comment(out, comment);
+                                }
+                                out.push('\n');
+                                push_indent(out, ind);
+                                out.push('}');
+                            } else {
+                                out.push_str("{_}");
+                            }
+                            return Ok(());
+                        }
+                        header => {
+                            if let Some((entry, comment)) = pending.take() {
+                                out.push_str(&entry);
+                                out.push(',');
+                                if let Some(comment) = comment {
+                                    push_key_comment(out, comment);
+                                }
+                                out.push('\n');
+                            } else {
+                                out.push_str("{_\n");
+                            }
+
+                            let comment = key_comment(header, key_comments);
+                            let mut entry = String::new();
+                            push_indent(&mut entry, ind + 1);
+                            item_header(
+                                decoder,
+                                header,
+                                &mut entry,
+                                offset,
+                                depth - 1,
+                                Some(ind + 1),
+                                key_comments,
+                            )?;
+                            entry.push_str(": ");
+                            let offset = decoder.offset();
+                            match decoder.pull()? {
+                                Header::Break => return Err(Error::Syntax(offset)),
+                                header => {
+                                    item_header(
+                                        decoder,
+                                        header,
+                                        &mut entry,
+                                        offset,
+                                        depth - 1,
+                                        Some(ind + 1),
+                                        key_comments,
+                                    )?;
+                                }
+                            }
+                            pending = Some((entry, comment));
+                        }
+                    }
+                }
+            }
         },
     }
+}
+
+fn key_comment<'a>(header: Header, key_comments: Option<&'a [(&'a str, i128)]>) -> Option<&'a str> {
+    let key = match header {
+        Header::Positive(x) => i128::from(x),
+        Header::Negative(x) => -1 - i128::from(x),
+        _ => return None,
+    };
+
+    key_comments?
+        .iter()
+        .find_map(|(name, mapped)| (*mapped == key).then_some(*name))
+}
+
+fn push_key_comment(out: &mut String, name: &str) {
+    out.push_str(" // \"");
+    escape_into(out, name);
+    out.push('"');
 }
 
 // Renders a definite-length byte string as `h'..'`, reading the body in

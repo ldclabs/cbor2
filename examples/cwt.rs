@@ -174,10 +174,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
          051a5610d9f0061a5610d9f007420b71"
     );
 
-    println!("{}", cbor2::diagnostic(&bytes[..])?);
-    // 61({1: "coap://as.example.com", 2: "erikw",
-    //     3: "coap://light.example.com", 4: 1444064944, 5: 1443944944,
-    //     6: 1443944944, 7: h'0b71'})
+    println!(
+        "{}",
+        cbor2::diagnostic_pretty_with_key_comments(&bytes[..], Claims::KEYS)?
+    );
+    // 61({
+    //   1: "coap://as.example.com", // "iss"
+    //   2: "erikw", // "sub"
+    //   3: "coap://light.example.com", // "aud"
+    //   4: 1444064944, // "exp"
+    //   5: 1443944944, // "nbf"
+    //   6: 1443944944, // "iat"
+    //   7: h'0b71' // "cti"
+    // })
 
     // The same type decodes both the tagged claim set and an untagged one
     // (the tag-61 bytes dropped) — no second struct.
@@ -215,8 +224,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     let minimal_bytes = cbor2::to_canonical_vec(&minimal)?;
-    println!("{}", cbor2::diagnostic(&minimal_bytes[..])?);
-    // 61({1: "me", 4: 1444064944})
+    println!(
+        "{}",
+        cbor2::diagnostic_pretty_with_key_comments(&minimal_bytes[..], Claims::KEYS)?
+    );
+    // 61({
+    //   1: "me", // "iss"
+    //   4: 1444064944 // "exp"
+    // })
     assert_eq!(
         serde_json::to_string(&minimal)?,
         r#"{"iss":"me","exp":1444064944}"#

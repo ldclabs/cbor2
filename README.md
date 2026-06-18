@@ -201,7 +201,9 @@ and canonical encoding.
   human-readable text of RFC 8949 §8 (matching the Appendix A examples
   exactly, indefinite-length markers and all); `Value` implements
   `Display` with the same notation and `Debug` as its indented,
-  multi-line form.
+  multi-line form. For integer-keyed protocol maps, such as CWT claims,
+  `diagnostic_pretty_with_key_comments` can take a `Cbor::KEYS` table and
+  add `// "iss"` style string-key comments beside the wire integer keys.
 * **Allocation-free helpers** — `validate` checks that an input is exactly
   one well-formed CBOR item (RFC 8949 §5.3.1, including text UTF-8),
   `serialized_size` computes the exact encoded size of any serializable
@@ -414,8 +416,24 @@ decoding so one type decodes both tagged and tag-less messages:
 [`examples/cwt.rs`](examples/cwt.rs) is cose2's CWT claims set (RFC 8392): a
 tagged *map* with registered integer claim keys, natural JSON names,
 `skip_serializing_if` claim omission, COSE-label-keyed `#[serde(flatten)]`
-extension claims and the same transparent tag decoding —
-`cargo run --features derive --example cwt`.
+extension claims and the same transparent tag decoding. It also uses
+`diagnostic_pretty_with_key_comments(&bytes[..], Claims::KEYS)` so the
+diagnostic output stays true to the integer-keyed wire shape while showing
+the matching string keys as code comments:
+
+```text
+61({
+  1: "coap://as.example.com", // "iss"
+  2: "erikw", // "sub"
+  3: "coap://light.example.com", // "aud"
+  4: 1444064944, // "exp"
+  5: 1443944944, // "nbf"
+  6: 1443944944, // "iat"
+  7: h'0b71' // "cti"
+})
+```
+
+Run it with `cargo run --features derive --example cwt`.
 
 The derive also implements the `cbor2::Cbor` trait, which exposes the
 declared protocol details at runtime — `T::KEYS`, `T::TAG` and `T::ARRAY` as

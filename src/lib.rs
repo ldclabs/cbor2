@@ -398,6 +398,10 @@ represent: indefinite-length markers, `undefined`, and unassigned simple
 values. `Value` implements [`Display`](std::fmt::Display) with the same
 compact notation, and [`Debug`](std::fmt::Debug) pretty-prints it with
 indentation.
+When integer-keyed maps also have a known string-key table such as
+[`Cbor::KEYS`], [`diagnostic_pretty_with_key_comments`] can annotate the
+pretty output with `// "field"` comments without changing the decoded
+wire item.
 
 ```rust
 let bytes = hex::decode("bf61610161629f0203ffff").unwrap();
@@ -408,6 +412,13 @@ assert_eq!(
 assert_eq!(
     cbor2::diagnostic_pretty(&bytes[..]).unwrap(),
     "{_\n  \"a\": 1,\n  \"b\": [_\n    2,\n    3\n  ]\n}"
+);
+
+let keyed = hex::decode("a201626d6504182a").unwrap();
+let keys = [("iss", 1), ("exp", 4)];
+assert_eq!(
+    cbor2::diagnostic_pretty_with_key_comments(&keyed[..], &keys).unwrap(),
+    "{\n  1: \"me\", // \"iss\"\n  4: 42 // \"exp\"\n}"
 );
 
 let value = cbor2::cbor!({ "k": [1, -2.5, null] }).unwrap();
@@ -539,7 +550,7 @@ pub use crate::de::validate;
 #[doc(inline)]
 pub use crate::de::{from_reader, from_slice};
 #[cfg(feature = "alloc")]
-pub use crate::diag::{diagnostic, diagnostic_pretty};
+pub use crate::diag::{diagnostic, diagnostic_pretty, diagnostic_pretty_with_key_comments};
 #[cfg(feature = "alloc")]
 pub use crate::raw::RawValue;
 #[doc(inline)]

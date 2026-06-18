@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.6] - 2026-06-18
+
+### Added
+
+* Added `diagnostic_pretty_with_key_comments`, which pretty-prints CBOR
+  diagnostic notation while annotating integer map keys with matching
+  string names from a `Cbor::KEYS`-style table.
+* Documented integer-key comment diagnostics in the README, Simplified Chinese
+  README and agent cookbook, and updated the CWT example to show CWT claim
+  names beside their wire integer keys.
+
+### Changed
+
+* Bumped `cbor2` to `1.0.6`.
+
 ## [1.0.5] - 2026-06-15
 
 ### Added

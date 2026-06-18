@@ -4,7 +4,7 @@ members = [".", "cbor2-derive", "cbor2-cli"]
 
 [package]
 name = "cbor2"
-version = "1.0.5"
+version = "1.0.6"
 authors = ["0xZensh <txr1883@gmail.com>"]
 description = "Full-featured CBOR (RFC 8949) for serde: async item I/O, canonical encoding, no_std, Value/RawValue, tags, COSE keys, validation and diagnostics."
 homepage = "https://github.com/ldclabs/cbor2"

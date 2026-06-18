@@ -181,7 +181,9 @@ assert_eq!(photo, back);
   序列（RFC 8742）均可处理；递归有深度限制，伪造的长度无法触发巨量分配。
 * **诊断记法** —— `diagnostic` 将原始 CBOR 渲染为 RFC 8949 §8 的人类可读
   文本（与附录 A 示例完全一致，包含不定长标记等所有细节）；`Value` 以相同
-  的记法实现 `Display`，并以缩进的多行形式实现 `Debug`。
+  的记法实现 `Display`，并以缩进的多行形式实现 `Debug`。对于 CWT claims
+  这类使用整数键的协议 map，`diagnostic_pretty_with_key_comments` 可接收
+  `Cbor::KEYS` 表，并在传输层整数键旁加入 `// "iss"` 形式的字符串键注释。
 * **免分配辅助函数** —— `validate` 检查输入是否恰好为一个格式良好的 CBOR
   项（RFC 8949 §5.3.1，包括文本的 UTF-8 校验），`serialized_size` 计算任意
   可序列化值的精确编码大小，`to_slice` 将编码写入调用方提供的缓冲区；这些
@@ -384,8 +386,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 [`examples/cwt.rs`](examples/cwt.rs) 则是 cose2 的 CWT 声明集（RFC 8392）：
 一个带注册整数声明键的加标签 *map*，配合自然的 JSON 名称、
 `skip_serializing_if` 声明省略、以 COSE label 为键的 `#[serde(flatten)]`
-扩展声明，以及同样的透明标签解码 ——
-`cargo run --features derive --example cwt`。
+扩展声明，以及同样的透明标签解码。它还使用
+`diagnostic_pretty_with_key_comments(&bytes[..], Claims::KEYS)`，让诊断输出
+保持真实的整数键传输形态，同时用代码注释展示对应的字符串键：
+
+```text
+61({
+  1: "coap://as.example.com", // "iss"
+  2: "erikw", // "sub"
+  3: "coap://light.example.com", // "aud"
+  4: 1444064944, // "exp"
+  5: 1443944944, // "nbf"
+  6: 1443944944, // "iat"
+  7: h'0b71' // "cti"
+})
+```
+
+可用 `cargo run --features derive --example cwt` 运行。
 
 该派生宏还实现了 `cbor2::Cbor` trait，在运行时暴露所声明的协议细节 ——
 `T::KEYS`、`T::TAG` 和 `T::ARRAY` 作为免分配常量，以及作为

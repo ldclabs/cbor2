@@ -7,6 +7,11 @@ fn diag(hex: &str) -> String {
     cbor2::diagnostic(&bytes[..]).unwrap()
 }
 
+fn pretty_with_key_comments(hex: &str, keys: &[(&str, i128)]) -> String {
+    let bytes = hex::decode(hex).unwrap();
+    cbor2::diagnostic_pretty_with_key_comments(&bytes[..], keys).unwrap()
+}
+
 #[test]
 fn appendix_a_diagnostic_column() {
     // The complete table from RFC 8949 Appendix A, verbatim.
@@ -243,6 +248,24 @@ fn malformed_input_is_rejected() {
         cbor2::diagnostic(FailReader),
         Err(cbor2::de::Error::Io(..))
     ));
+}
+
+#[test]
+fn pretty_diagnostic_can_comment_integer_keys() {
+    assert_eq!(
+        pretty_with_key_comments("d83da201626d650442dead", &[("iss", 1), ("cti", 4)]),
+        "61({\n  1: \"me\", // \"iss\"\n  4: h'dead' // \"cti\"\n})"
+    );
+
+    assert_eq!(
+        pretty_with_key_comments("bf20636e6567ff", &[("neg", -1)]),
+        "{_\n  -1: \"neg\" // \"neg\"\n}"
+    );
+
+    assert_eq!(
+        pretty_with_key_comments("a12001", &[("line\n\"", -1)]),
+        "{\n  -1: 1 // \"line\\n\\\"\"\n}"
+    );
 }
 
 #[test]

@@ -16,6 +16,7 @@ then gives the correct `cbor2` shape and the mistake to avoid.
 | Preserve one raw item | `cbor2::RawValue` |
 | Work with unknown data | `cbor2::Value` or `cbor2::cbor!` |
 | Produce deterministic bytes | `cbor2::to_canonical_vec(&value)` |
+| Pretty-print integer-keyed maps with names | `cbor2::diagnostic_pretty_with_key_comments(bytes, T::KEYS)` |
 | Read/write one typed value async | `cbor2::async_io::read_value` / `write_value` |
 | Declare COSE-like structs | `#[derive(cbor2::Cbor)]` (feature `derive`) |
 
@@ -210,12 +211,45 @@ text keys, and flattened map key types that serialize as integers or strings
 such as a COSE `Label` / `CoseMap` preserve their integer labels on CBOR
 round trips.
 
+When documenting or debugging an integer-keyed protocol map, keep the raw
+integer keys in diagnostic notation and pass the derived key table to add
+string-key comments:
+
+```rust
+use cbor2::Cbor;
+
+#[derive(Debug, PartialEq, Cbor)]
+#[cbor(tag = 61)]
+struct Claims {
+    #[cbor(key = 1)]
+    #[serde(rename = "iss")]
+    issuer: String,
+    #[cbor(key = 4)]
+    #[serde(rename = "exp")]
+    expiration: u64,
+}
+
+let bytes = cbor2::to_canonical_vec(&Claims {
+    issuer: "me".into(),
+    expiration: 1444064944,
+})
+.unwrap();
+
+let diag = cbor2::diagnostic_pretty_with_key_comments(&bytes[..], Claims::KEYS).unwrap();
+assert_eq!(
+    diag,
+    "61({\n  1: \"me\", // \"iss\"\n  4: 1444064944 // \"exp\"\n})"
+);
+```
+
 Common mistakes:
 
 - Do not also write `#[derive(Serialize, Deserialize)]`; `Cbor` generates
   those impls.
 - Do not use `#[serde(rename = "1")]` for integer keys; that creates a text
   key. Use `#[cbor(key = 1)]`.
+- Do not replace integer keys with text keys just to make diagnostics readable;
+  use `diagnostic_pretty_with_key_comments` with `T::KEYS`.
 - Do not combine `#[cbor(array)]` with per-field integer keys or
   `#[serde(flatten)]`; flatten is for map-shaped structs.
 
