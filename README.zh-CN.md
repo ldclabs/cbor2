@@ -2,7 +2,7 @@
 
 适用于 Rust 的全功能 [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949) CBOR
 实现：异步逐项 I/O、serde 往返、规范化/确定性编码、`Value`/`RawValue`、
-语义标签、COSE 整数键与数组、校验、诊断记法以及 `no_std`。
+COSE 风格整数 map 键、语义标签、诊断记法、`no_std`，以及单独可用的良构性检查。
 
 [![CI](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml/badge.svg)](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/cbor2.svg)](https://crates.io/crates/cbor2)
@@ -22,10 +22,10 @@
 | 稳定的协议字节 | RFC 8949 首选序列化（preferred serialization），外加确定性/规范化编码器和可选的 map 键排序。                    |
 | 协议级 CBOR    | 语义标签、大整数（bignum）、整数 map 键、字段顺序数组，以及通过 `#[derive(cbor2::Cbor)]` 实现的 COSE 风格标签。 |
 | 动态或未知数据 | `Value`、`cbor!` 宏，以及用于已校验透传字节的 `RawValue`。                                                      |
-| 安全的输入处理 | 恰好一项的 `validate`、CBOR 序列迭代、递归深度限制以及受保护的分配大小。                                        |
+| 安全的输入处理 | 恰好一项的良构性检查、CBOR 序列迭代、递归深度限制以及受保护的分配大小。                                        |
 | 异步边界       | `async_io` 读取或写入一个完整的 CBOR 项，而不假装 serde 本身是异步的。                                          |
 | 调试与检查     | RFC 8949 诊断记法、美化诊断输出，以及配套的 `cbor` 命令行工具。                                                 |
-| 嵌入式目标     | `no_std + alloc` 提供完整的基于堆的 API；无 alloc 时仍支持序列化、校验和核心头部编解码器。                      |
+| 嵌入式目标     | `no_std + alloc` 提供完整的基于堆的 API；无 alloc 时仍支持序列化、良构性检查和核心头部编解码器。                 |
 
 以 MIT 许可发布。
 
@@ -145,7 +145,7 @@ assert_eq!(photo, back);
 代码代理应先阅读 [`AGENTS.md`](AGENTS.md) 中压缩后的 API 选择规则，再参考
 [`docs/agent-cookbook.md`](docs/agent-cookbook.md) 中可复制的 recipes 和迁移
 陷阱。可运行示例 [`agent_patterns`](examples/agent_patterns.rs) 覆盖恰好一项
-校验、字节串、借用反序列化、原始值、CBOR 序列和规范化编码。
+良构性检查、字节串、借用反序列化、原始值、CBOR 序列和规范化编码。
 
 ## 特性亮点
 
@@ -166,7 +166,7 @@ assert_eq!(photo, back);
   对于构建在更早的 RFC 7049 §3.9“Canonical CBOR”规则之上的协议（该规则保留为
   RFC 8949 §4.2.3，并被 ciborium 的 canonical 模块采用），`*_with` 变体可接受
   `KeyOrder::LengthFirst`。
-* **整数 map 键、数组与标签（COSE）** —— 启用 `derive` 特性后，
+* **COSE 风格整数 map 键、数组与标签** —— 启用 `derive` 特性后，
   `#[derive(cbor2::Cbor)]` 将结构体字段映射为整数键（`#[cbor(key = 1)]`），
   将具名结构体编码为字段顺序数组（`#[cbor(array)]`），并按 RFC 9052 的要求
   将容器包裹进 CBOR 标签（`#[cbor(tag = 18)]`），且与文本键之间没有歧义。
@@ -187,8 +187,8 @@ assert_eq!(photo, back);
   下依然合法。对于 CWT claims 这类使用整数键的协议 map，
   `diagnostic_pretty_with_key_comments` 可接收 `Cbor::KEYS` 表，并在传输层整数
   键旁加入 `// "iss"` 形式的字符串键注释（CDN 的行尾注释）。
-* **免分配辅助函数** —— `validate` 检查输入是否恰好为一个格式良好的 CBOR
-  项（RFC 8949 §5.3.1，包括文本的 UTF-8 校验），`serialized_size` 计算任意
+* **免分配辅助函数** —— `validate` 是针对恰好一项 CBOR 的良构性检查
+  （RFC 8949 §5.3.1，包括文本的 UTF-8 校验），`serialized_size` 计算任意
   可序列化值的精确编码大小，`to_slice` 将编码写入调用方提供的缓冲区；这些
   均不分配堆内存。
 * **异步逐项 I/O** —— `async_io` 模块在异步字节流上为完整的 CBOR 项划定
@@ -197,7 +197,7 @@ assert_eq!(photo, back);
   供需要精确控制传输格式的应用使用。
 * **`no_std` 支持** —— `default-features = false, features = ["alloc"]` 保留
   完整 API，仅去掉 `std::io` 互操作和 `HashMap` 转换；不启用 `alloc` 时，
-  crate 仍可序列化（`to_writer`/`to_slice`/`serialized_size`）、校验，并使用
+  crate 仍可序列化（`to_writer`/`to_slice`/`serialized_size`）、检查良构性，并使用
   `core` 头部编解码器。
 
 ## Crate 特性
@@ -293,7 +293,7 @@ assert_eq!(packet.payload, &[0xde, 0xad]);
 
 不定长字符串仍被接受，但由于其主体跨多个分段，无法被借用。
 
-### 整数 map 键、数组与标签：用 `#[derive(Cbor)]` 实现 COSE
+### 用 `#[derive(Cbor)]` 实现 COSE 风格整数 map 键、数组与标签
 
 启用 `derive` 特性后，`#[derive(cbor2::Cbor)]` 会连同 CBOR 协议细节一起生成
 serde 的 `Serialize`/`Deserialize` 实现：标注了 `#[cbor(key = ...)]` 的字段

@@ -6,7 +6,7 @@ members = [".", "cbor2-derive", "cbor2-cli"]
 name = "cbor2"
 version = "1.0.6"
 authors = ["0xZensh <txr1883@gmail.com>"]
-description = "Full-featured CBOR (RFC 8949) for serde: async item I/O, canonical encoding, no_std, Value/RawValue, tags, COSE keys, validation and diagnostics."
+description = "Full-featured CBOR (RFC 8949) for serde: async item I/O, canonical encoding, no_std, Value/RawValue, tags, COSE keys, well-formedness checks and diagnostics."
 homepage = "https://github.com/ldclabs/cbor2"
 repository = "https://github.com/ldclabs/cbor2"
 documentation = "https://docs.rs/cbor2"
@@ -25,7 +25,7 @@ default = ["std"]
 std = ["alloc", "serde/std"]
 # Everything that needs a heap: the Value type, the serde deserializer,
 # RawValue, diagnostic notation and the Vec-producing encode functions.
-# Without it the crate is serialization, validation and the core codec only.
+# Without it the crate is serialization, well-formedness checks and the core codec only.
 alloc = ["serde/alloc"]
 # Enables #[derive(cbor2::Cbor)] for integer map keys and CBOR tags.
 derive = ["dep:cbor2-derive", "serde/derive"]

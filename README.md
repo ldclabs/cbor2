@@ -2,8 +2,8 @@
 
 Full-featured [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949) CBOR for
 Rust: async item I/O, serde round trips, canonical/deterministic encoding,
-`Value`/`RawValue`, semantic tags, COSE integer keys and arrays, validation,
-diagnostic notation and `no_std`.
+`Value`/`RawValue`, COSE-style integer map keys, semantic tags,
+diagnostic notation, `no_std`, and a separately available well-formedness check.
 
 [![CI](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml/badge.svg)](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/cbor2.svg)](https://crates.io/crates/cbor2)
@@ -24,10 +24,10 @@ from `std` services down to constrained `no_std` targets.
 | Stable protocol bytes    | RFC 8949 preferred serialization plus deterministic/canonical encoders and selectable map key ordering.                  |
 | Protocol CBOR            | Semantic tags, bignums, integer map keys, field-order arrays and COSE-style tags with `#[derive(cbor2::Cbor)]`.          |
 | Dynamic or unknown data  | `Value`, the `cbor!` macro and `RawValue` for validated pass-through bytes.                                              |
-| Safe input handling      | Exact-one-item `validate`, CBOR sequence iteration, recursion limits and guarded allocation sizes.                       |
+| Safe input handling      | Exact-one-item well-formedness check, CBOR sequence iteration, recursion limits and guarded allocation sizes.            |
 | Async boundaries         | `async_io` reads or writes one complete CBOR item without pretending serde itself is async.                              |
 | Debugging and inspection | RFC 8949 diagnostic notation, pretty diagnostics and the companion `cbor` CLI.                                           |
-| Embedded targets         | `no_std + alloc` for the full heap-backed API, or no allocation for serialization, validation and the core header codec. |
+| Embedded targets         | `no_std + alloc` for the full heap-backed API, or no allocation for serialization, well-formedness checks and the core header codec. |
 
 Licensed under the MIT License.
 
@@ -153,8 +153,8 @@ Code agents should start with [`AGENTS.md`](AGENTS.md) for the compressed API
 selection rules, then use [`docs/agent-cookbook.md`](docs/agent-cookbook.md)
 for copyable recipes and common migration traps. The runnable
 [`agent_patterns`](examples/agent_patterns.rs) example covers exact-item
-validation, byte strings, borrowed deserialization, raw values, CBOR sequences
-and canonical encoding.
+well-formedness checks, byte strings, borrowed deserialization, raw values,
+CBOR sequences and canonical encoding.
 
 ## Highlights
 
@@ -177,7 +177,7 @@ and canonical encoding.
   For protocols built on the older RFC 7049 §3.9 "Canonical CBOR" rule
   (kept as RFC 8949 §4.2.3, and used by ciborium's canonical module), the
   `*_with` variants take `KeyOrder::LengthFirst`.
-* **Integer map keys, arrays and tags (COSE)** — with the `derive` feature,
+* **COSE-style integer map keys, arrays and tags** — with the `derive` feature,
   `#[derive(cbor2::Cbor)]` maps struct fields to integer keys
   (`#[cbor(key = 1)]`), encodes named structs as field-order arrays
   (`#[cbor(array)]`) and wraps containers in CBOR tags
@@ -208,8 +208,8 @@ and canonical encoding.
   protocol maps, such as CWT claims, `diagnostic_pretty_with_key_comments`
   can take a `Cbor::KEYS` table and add `// "iss"` style string-key
   comments (CDN end-of-line comments) beside the wire integer keys.
-* **Allocation-free helpers** — `validate` checks that an input is exactly
-  one well-formed CBOR item (RFC 8949 §5.3.1, including text UTF-8),
+* **Allocation-free helpers** — `validate` is a well-formedness check for exactly
+  one CBOR item (RFC 8949 §5.3.1, including text UTF-8),
   `serialized_size` computes the exact encoded size of any serializable
   value and `to_slice` encodes into a caller-provided buffer; none of them
   allocates heap memory.
@@ -221,7 +221,7 @@ and canonical encoding.
 * **`no_std` support** — `default-features = false, features = ["alloc"]`
   keeps the full API minus `std::io` interop and `HashMap` conversions;
   without `alloc` the crate still serializes (`to_writer`/`to_slice`/
-  `serialized_size`), validates and speaks the `core` header codec.
+  `serialized_size`), checks well-formedness and speaks the `core` header codec.
 
 ## Crate features
 
@@ -321,7 +321,7 @@ assert_eq!(packet.payload, &[0xde, 0xad]);
 Indefinite-length strings are still accepted, but they cannot be borrowed
 because their body is split across segments.
 
-### Integer map keys, arrays and tags: COSE with `#[derive(Cbor)]`
+### COSE-style integer map keys, arrays and tags with `#[derive(Cbor)]`
 
 With the `derive` feature, `#[derive(cbor2::Cbor)]` generates the serde
 `Serialize`/`Deserialize` impls with CBOR protocol details: fields
