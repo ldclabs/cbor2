@@ -181,7 +181,8 @@ assert_eq!(photo, back);
   序列（RFC 8742）均可处理；递归有深度限制，伪造的长度无法触发巨量分配。
 * **诊断记法** —— `diagnostic` 将原始 CBOR 渲染为 RFC 8949 §8 的人类可读
   文本（与附录 A 示例完全一致，包含不定长标记等所有细节）；`Value` 以相同
-  的记法实现 `Display`，并以缩进的多行形式实现 `Debug`。RFC 8949 §8 正由
+  的记法实现 `Display`，并以缩进的多行形式实现 `Debug`；超大的 bignum
+  payload 会退回为显式 tag/bytes 记法，避免昂贵的十进制渲染。RFC 8949 §8 正由
   IETF “Concise Diagnostic Notation” 草案（CDN，`draft-ietf-cbor-edn-literals`，
   一个向后兼容的超集）正式化并取代；cbor2 仅输出其核心写法，这些写法在 CDN
   下依然合法。对于 CWT claims 这类使用整数键的协议 map，
@@ -192,7 +193,8 @@ assert_eq!(photo, back);
   可序列化值的精确编码大小，`to_slice` 将编码写入调用方提供的缓冲区；这些
   均不分配堆内存。
 * **异步逐项 I/O** —— `async_io` 模块在异步字节流上为完整的 CBOR 项划定
-  边界，一旦项被缓冲，便复用常规的同步 serde API。
+  边界，一旦项被缓冲，便复用常规的同步 serde API；面向不可信 stream 时可使用
+  带大小上限的读取辅助函数。
 * **底层头部编解码器** —— `core` 模块暴露 pull/push 式的 `Header` 接口，
   供需要精确控制传输格式的应用使用。
 * **`no_std` 支持** —— `default-features = false, features = ["alloc"]` 保留
@@ -527,6 +529,16 @@ CBOR 项读入缓冲区，校验与 `validate` 相同的结构，然后让你对
 let item = cbor2::async_io::read_item(reader).await?;
 let value: cbor2::Value = cbor2::from_slice(&item)?;
 # Ok(())
+# }
+```
+
+面向不可信 peer 时，如果外层传输没有已经强制消息大小上限，请使用
+`read_item_with_limit` 或 `read_value_with_limit`：
+
+```rust
+# async fn bounded<R: cbor2::async_io::AsyncRead + ?Sized>(reader: &mut R) -> Result<cbor2::Value, cbor2::de::Error> {
+let value: cbor2::Value = cbor2::async_io::read_value_with_limit(reader, 1 << 20).await?;
+# Ok(value)
 # }
 ```
 

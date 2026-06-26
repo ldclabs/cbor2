@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.0.7] - 2026-06-26
+
+### Added
+
+* Added bounded async read helpers: `async_io::read_item_with_limit` and
+  `async_io::read_value_with_limit`, plus matching `tokio` and `futures`
+  adapter functions, for reading one complete CBOR item from untrusted streams
+  with an exact encoded-size limit.
+
+### Fixed
+
+* Diagnostic rendering of very large bignum payloads now falls back to explicit
+  tag/bytes notation instead of performing expensive arbitrary-precision
+  decimal conversion, while preserving lossless output.
+* `deserialize_ignored_any` now skips and validates ignored CBOR items without
+  materializing large byte or text string payloads.
+* Primitive integer deserialization now rejects oversized bignum payloads before
+  reading the full body for fixed-width integer targets.
+
+### Changed
+
+* Documented bounded async reads for untrusted peers in the README, Simplified
+  Chinese README, `AGENTS.md` and agent cookbook.
+* Clarified diagnostic notation and well-formedness wording in the crate docs
+  and README files.
+* Bumped `cbor2` to `1.0.7`.
+
 ## [1.0.6] - 2026-06-18
 
 ### Added

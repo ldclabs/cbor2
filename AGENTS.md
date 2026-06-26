@@ -39,6 +39,7 @@ feature is the most common compile failure — set the manifest first.
 | Deterministic bytes for signatures | `to_canonical_vec` / `to_canonical_writer` | Plain `to_vec` on maps with unspecified order |
 | COSE integer keys, arrays, or tags | `#[derive(cbor2::Cbor)]` (feature `derive`) | `serde(rename = "1")` for integer keys |
 | Async read/write of a typed value | `cbor2::async_io::{read_value, write_value}` | Treating serde itself as async |
+| Async read from an untrusted stream | `cbor2::async_io::read_value_with_limit` / `read_item_with_limit` | Unbounded helpers without an outer message limit |
 | Async item when you must borrow or inspect raw bytes | `cbor2::async_io::read_item` then `from_slice` | `read_value` when the buffer must outlive the call |
 
 ## CLI Selection
@@ -82,6 +83,9 @@ For agent-generated examples, prefer `cbor encode --hex` over raw
 - `async_io::read_value`/`write_value` frame and (de)serialize one CBOR item in
   a single call. Drop to `read_item`/`write_item` only to borrow from or inspect
   the raw item bytes; serde itself stays synchronous on the buffered item.
+- For untrusted async peers, prefer `read_value_with_limit` or
+  `read_item_with_limit` unless an outer transport layer already enforces a
+  message size limit.
 - The bare `async_io` traits have no impls of their own. Enable `tokio` or
   `futures` and call `async_io::tokio::*` / `async_io::futures::*` to drive real
   `tokio::io` / `futures_io` streams.

@@ -47,7 +47,7 @@ fn show_preserves_wire_details() {
     let out = ok(&[], &hex("f7c074323031332d30332d32315432303a30343a30305a"));
     assert_eq!(out, b"undefined\n0(\"2013-03-21T20:04:00Z\")\n");
 
-    // Bignums print as plain integers (RFC 8949 Appendix A).
+    // Small bignums print as plain integers (RFC 8949 Appendix A).
     let out = ok(&[], &hex("c249010000000000000000"));
     assert_eq!(out, b"18446744073709551616\n");
 }

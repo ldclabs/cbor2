@@ -158,6 +158,15 @@ fn beyond_the_appendix() {
     assert_eq!(diag("c201"), "2(1)");
     assert_eq!(diag("c36161"), "3(\"a\")");
 
+    // Oversized bignums stay lossless but fall back to tag/bytes notation
+    // instead of running the CPU-heavy arbitrary precision decimal renderer.
+    let large_payload = vec![0xabu8; 1100];
+    let large_bignum = Value::Tag(2, Box::new(Value::Bytes(large_payload.clone())));
+    let bytes = cbor2::to_vec(&large_bignum).unwrap();
+    let out = cbor2::diagnostic(&bytes[..]).unwrap();
+    assert_eq!(out, format!("2(h'{}')", "ab".repeat(large_payload.len())));
+    assert_eq!(large_bignum.to_string(), out);
+
     // Nested tags.
     assert_eq!(diag("c1c24102"), "1(2)");
     assert_eq!(diag("d9d9f780"), "55799([])");

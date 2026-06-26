@@ -160,17 +160,6 @@ impl Expected for Header {
     }
 }
 
-// A parsed integer item: either a (possibly negative) integer that was
-// encoded with major type 0 or 1, or a bignum (tag 2 or 3) whose payload is
-// given with leading zeros stripped.
-#[cfg(feature = "alloc")]
-enum Num {
-    Pos(u64),
-    Neg(u64),
-    BigPos(Vec<u8>),
-    BigNeg(Vec<u8>),
-}
-
 // Interprets a stripped bignum payload as a `u128`, if it fits.
 #[cfg(feature = "alloc")]
 fn big_to_u128(bytes: &[u8]) -> Option<u128> {
@@ -181,6 +170,40 @@ fn big_to_u128(bytes: &[u8]) -> Option<u128> {
     let mut buffer = [0u8; 16];
     buffer[16 - bytes.len()..].copy_from_slice(bytes);
     Some(u128::from_be_bytes(buffer))
+}
+
+#[cfg(feature = "alloc")]
+struct BignumAccumulator {
+    value: u128,
+    significant: usize,
+    max_bytes: usize,
+    too_large: &'static str,
+}
+
+#[cfg(feature = "alloc")]
+impl BignumAccumulator {
+    fn new(max_bytes: usize, too_large: &'static str) -> Self {
+        Self {
+            value: 0,
+            significant: 0,
+            max_bytes,
+            too_large,
+        }
+    }
+
+    fn push(&mut self, byte: u8) -> Result<(), Error> {
+        if self.significant == 0 && byte == 0 {
+            return Ok(());
+        }
+
+        self.significant += 1;
+        if self.significant > self.max_bytes {
+            return Err(de::Error::custom(self.too_large));
+        }
+
+        self.value = (self.value << 8) | u128::from(byte);
+        Ok(())
+    }
 }
 
 // The identifier form of an integer map key that no field maps to. It can
@@ -245,6 +268,10 @@ pub trait Source: sealed::Sealed {
     #[doc(hidden)]
     fn text_body(&mut self, len: Option<usize>, out: &mut String)
         -> Result<(), crate::core::Error>;
+    #[doc(hidden)]
+    fn read_exact(&mut self, data: &mut [u8]) -> Result<(), Error>;
+    #[doc(hidden)]
+    fn skip_item(&mut self, recurse: usize) -> Result<(), Error>;
     // Captures the wire bytes of the next item, byte for byte, while
     // validating that it is well-formed (including text UTF-8). Used by
     // `RawValue`.
@@ -306,6 +333,16 @@ impl<R: Read> Source for ReaderSource<R> {
         out: &mut String,
     ) -> Result<(), crate::core::Error> {
         self.0.text_body(len, out)
+    }
+
+    #[inline]
+    fn read_exact(&mut self, data: &mut [u8]) -> Result<(), Error> {
+        self.0.read_exact(data).map_err(Error::Io)
+    }
+
+    #[inline]
+    fn skip_item(&mut self, recurse: usize) -> Result<(), Error> {
+        validate_item(&mut self.0, recurse)
     }
 
     fn capture(&mut self, recurse: usize) -> Result<Vec<u8>, Error> {
@@ -392,6 +429,16 @@ impl Source for SliceSource<'_> {
             }
             None => self.0.text_body(None, out),
         }
+    }
+
+    #[inline]
+    fn read_exact(&mut self, data: &mut [u8]) -> Result<(), Error> {
+        self.0.read_exact(data).map_err(Error::Io)
+    }
+
+    #[inline]
+    fn skip_item(&mut self, recurse: usize) -> Result<(), Error> {
+        validate_item(&mut self.0, recurse)
     }
 
     fn capture(&mut self, recurse: usize) -> Result<Vec<u8>, Error> {
@@ -564,29 +611,6 @@ impl<S: Source> Deserializer<S> {
         self.source.capture(self.recurse)
     }
 
-    // Pulls the next integer item, skipping any tags other than the bignum
-    // tags.
-    fn number(&mut self) -> Result<Num, Error> {
-        loop {
-            let header = self.source.pull()?;
-
-            let neg = match header {
-                Header::Positive(x) => return Ok(Num::Pos(x)),
-                Header::Negative(x) => return Ok(Num::Neg(x)),
-                Header::Tag(tag::BIGPOS) => false,
-                Header::Tag(tag::BIGNEG) => true,
-                Header::Tag(..) => continue,
-                header => return Err(header.expected("integer")),
-            };
-
-            let bytes = self.bignum()?;
-            return Ok(match neg {
-                false => Num::BigPos(bytes),
-                true => Num::BigNeg(bytes),
-            });
-        }
-    }
-
     // Reads the byte string payload following a bignum tag (2 or 3) and
     // strips its leading zeros: an empty result encodes zero (RFC 8949
     // §3.4.3). The payload is owned, so it is always copied.
@@ -602,11 +626,55 @@ impl<S: Source> Deserializer<S> {
         Ok(bytes)
     }
 
+    // Reads the byte string payload following a bignum tag into a bounded
+    // integer accumulator. This is used only for fixed-width primitive
+    // integer targets; dynamic `Value` and `deserialize_any` keep using
+    // `bignum()` so they can preserve arbitrary-width payloads.
+    fn bounded_bignum(&mut self, max_bytes: usize, too_large: &'static str) -> Result<u128, Error> {
+        let mut acc = BignumAccumulator::new(max_bytes, too_large);
+        match self.source.pull()? {
+            Header::Bytes(Some(len)) => self.read_bignum_segment(len, &mut acc)?,
+            Header::Bytes(None) => loop {
+                let offset = self.source.offset();
+                match self.source.pull()? {
+                    Header::Break => break,
+                    Header::Bytes(Some(len)) => self.read_bignum_segment(len, &mut acc)?,
+                    _ => return Err(Error::Syntax(offset)),
+                }
+            },
+            header => return Err(header.expected("bytes")),
+        }
+        Ok(acc.value)
+    }
+
+    fn read_bignum_segment(
+        &mut self,
+        mut len: usize,
+        acc: &mut BignumAccumulator,
+    ) -> Result<(), Error> {
+        let mut buffer = [0u8; 64];
+        while len > 0 {
+            let n = len.min(buffer.len());
+            self.source.read_exact(&mut buffer[..n])?;
+            for &byte in &buffer[..n] {
+                acc.push(byte)?;
+            }
+            len -= n;
+        }
+        Ok(())
+    }
+
     fn unsigned(&mut self) -> Result<u128, Error> {
-        match self.number()? {
-            Num::Pos(x) => Ok(x.into()),
-            Num::BigPos(b) => big_to_u128(&b).ok_or_else(|| de::Error::custom("bigint too large")),
-            _ => Err(de::Error::custom("unexpected negative integer")),
+        loop {
+            return match self.source.pull()? {
+                Header::Positive(x) => Ok(x.into()),
+                Header::Tag(tag::BIGPOS) => self.bounded_bignum(16, "bigint too large"),
+                Header::Tag(tag::BIGNEG) | Header::Negative(..) => {
+                    Err(de::Error::custom("unexpected negative integer"))
+                }
+                Header::Tag(..) => continue,
+                header => Err(header.expected("integer")),
+            };
         }
     }
 
@@ -623,10 +691,8 @@ impl<S: Source> Deserializer<S> {
             return match self.source.pull()? {
                 Header::Positive(x) => Ok(x),
                 Header::Tag(tag::BIGPOS) => {
-                    let bytes = self.bignum()?;
-                    big_to_u128(&bytes)
-                        .and_then(|x| u64::try_from(x).ok())
-                        .ok_or_else(|| de::Error::custom("integer too large"))
+                    let raw = self.bounded_bignum(8, "integer too large")?;
+                    u64::try_from(raw).map_err(|_| de::Error::custom("integer too large"))
                 }
                 Header::Tag(tag::BIGNEG) | Header::Negative(..) => {
                     Err(de::Error::custom("unexpected negative integer"))
@@ -638,22 +704,25 @@ impl<S: Source> Deserializer<S> {
     }
 
     fn signed(&mut self) -> Result<i128, Error> {
-        let raw = match self.number()? {
-            Num::Pos(x) => return Ok(x.into()),
-            Num::Neg(x) => return Ok(x as i128 ^ !0),
-            Num::BigPos(b) => {
-                return big_to_u128(&b)
-                    .and_then(|x| i128::try_from(x).ok())
-                    .ok_or_else(|| de::Error::custom("integer too large"));
-            }
-            Num::BigNeg(b) => {
-                big_to_u128(&b).ok_or_else(|| Error::semantic(None, "integer too large"))?
-            }
-        };
-
-        match i128::try_from(raw) {
-            Ok(x) => Ok(x ^ !0),
-            Err(..) => Err(de::Error::custom("integer too large")),
+        loop {
+            return match self.source.pull()? {
+                Header::Positive(x) => Ok(x.into()),
+                Header::Negative(x) => Ok(x as i128 ^ !0),
+                Header::Tag(tag::BIGPOS) => {
+                    self.bounded_bignum(16, "integer too large").and_then(|x| {
+                        i128::try_from(x).map_err(|_| de::Error::custom("integer too large"))
+                    })
+                }
+                Header::Tag(tag::BIGNEG) => {
+                    let raw = self.bounded_bignum(16, "integer too large")?;
+                    match i128::try_from(raw) {
+                        Ok(x) => Ok(x ^ !0),
+                        Err(..) => Err(de::Error::custom("integer too large")),
+                    }
+                }
+                Header::Tag(..) => continue,
+                header => Err(header.expected("integer")),
+            };
         }
     }
 
@@ -681,15 +750,11 @@ impl<S: Source> Deserializer<S> {
                     i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
                 }
                 Header::Tag(tag::BIGPOS) => {
-                    let bytes = self.bignum()?;
-                    big_to_u128(&bytes)
-                        .and_then(|x| i64::try_from(x).ok())
-                        .ok_or_else(|| de::Error::custom("integer too large"))
+                    let raw = self.bounded_bignum(8, "integer too large")?;
+                    i64::try_from(raw).map_err(|_| de::Error::custom("integer too large"))
                 }
                 Header::Tag(tag::BIGNEG) => {
-                    let bytes = self.bignum()?;
-                    let raw = big_to_u128(&bytes)
-                        .ok_or_else(|| Error::semantic(None, "integer too large"))?;
+                    let raw = self.bounded_bignum(8, "integer too large")?;
                     let value = -1
                         - i128::try_from(raw)
                             .map_err(|_| Error::semantic(None, "integer too large"))?;
@@ -1177,7 +1242,8 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
         self,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        self.deserialize_any(visitor)
+        self.source.skip_item(self.recurse)?;
+        visitor.visit_unit()
     }
 
     #[inline]

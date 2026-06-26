@@ -348,7 +348,8 @@ impl Value {
 ///
 /// Byte strings appear as `h'..'`, text is escaped to pure ASCII in the
 /// style of RFC 8949 Appendix A, floats always carry a decimal point or
-/// exponent and bignum tags (2 and 3) are written as plain integers.
+/// exponent, small bignum tags (2 and 3) are written as plain integers,
+/// and very large bignum payloads fall back to explicit tag/bytes notation.
 ///
 /// ```
 /// use cbor2::{cbor, Value};

@@ -226,12 +226,13 @@ assert!(cbor2::validate(&stream[..]).is_err()); // not exactly one item
 
 Serde itself is synchronous. The [`async_io`] module handles the async
 transport boundary by reading or writing one complete CBOR item; once an item
-is buffered, use the regular serde API:
+is buffered, use the regular serde API. For untrusted peers, use
+`read_item_with_limit` or `read_value_with_limit` unless an outer transport
+layer already enforces a message size limit:
 
 ```rust
 # async fn example<R: cbor2::async_io::AsyncRead + ?Sized>(reader: &mut R) -> Result<(), cbor2::de::Error> {
-let item = cbor2::async_io::read_item(reader).await?;
-let value: cbor2::Value = cbor2::from_slice(&item)?;
+let value: cbor2::Value = cbor2::async_io::read_value_with_limit(reader, 1 << 20).await?;
 # let _ = value;
 # Ok(())
 # }
@@ -395,9 +396,10 @@ assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
 of RFC 8949 §8; [`diagnostic_pretty`] does the same with two-space
 indentation. Both work on the wire and preserve what a [`Value`] cannot
 represent: indefinite-length markers, `undefined`, and unassigned simple
-values. `Value` implements [`Display`](std::fmt::Display) with the same
-compact notation, and [`Debug`](std::fmt::Debug) pretty-prints it with
-indentation.
+values. Very large bignum payloads fall back to explicit tag/bytes notation
+instead of expensive decimal rendering. `Value` implements
+[`Display`](std::fmt::Display) with the same compact notation, and
+[`Debug`](std::fmt::Debug) pretty-prints it with indentation.
 When integer-keyed maps also have a known string-key table such as
 [`Cbor::KEYS`], [`diagnostic_pretty_with_key_comments`] can annotate the
 pretty output with `// "field"` comments without changing the decoded

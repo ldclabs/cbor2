@@ -18,6 +18,7 @@ then gives the correct `cbor2` shape and the mistake to avoid.
 | Produce deterministic bytes | `cbor2::to_canonical_vec(&value)` |
 | Pretty-print integer-keyed maps with names | `cbor2::diagnostic_pretty_with_key_comments(bytes, T::KEYS)` |
 | Read/write one typed value async | `cbor2::async_io::read_value` / `write_value` |
+| Read from an untrusted async stream | `cbor2::async_io::read_value_with_limit` / `read_item_with_limit` |
 | Declare COSE-like structs | `#[derive(cbor2::Cbor)]` (feature `derive`) |
 
 ## Decode a Buffer That Must Contain One Item
@@ -261,6 +262,16 @@ complete CBOR item on an async stream and (de)serialize it in a single call:
 ```rust
 # async fn example<R: cbor2::async_io::AsyncRead + ?Sized>(reader: &mut R) -> Result<cbor2::Value, cbor2::de::Error> {
 let value: cbor2::Value = cbor2::async_io::read_value(reader).await?;
+# Ok(value)
+# }
+```
+
+For untrusted peers, use a bounded reader unless an outer protocol already
+enforces a message size:
+
+```rust
+# async fn example<R: cbor2::async_io::AsyncRead + ?Sized>(reader: &mut R) -> Result<cbor2::Value, cbor2::de::Error> {
+let value: cbor2::Value = cbor2::async_io::read_value_with_limit(reader, 1 << 20).await?;
 # Ok(value)
 # }
 ```

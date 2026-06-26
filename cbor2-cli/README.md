@@ -71,7 +71,8 @@ and it is exact: every item is captured as its wire bytes, so
 indefinite-length items keep their `_` markers, segmented strings appear
 as `(_ ...)`, `undefined` and unassigned simple values appear as
 themselves, byte strings render as `h'...'` and bignums print as plain
-integers, exactly as in RFC 8949 Appendix A.
+integers, exactly as in RFC 8949 Appendix A. Very large bignum payloads
+fall back to explicit tag/bytes notation to keep rendering bounded.
 
 ```bash
 $ cbor a201020326                  # hex, pasted straight from a spec

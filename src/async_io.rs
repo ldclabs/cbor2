@@ -142,6 +142,19 @@ pub mod futures {
         super::read_item(&mut reader).await
     }
 
+    /// Reads one complete, well-formed CBOR item from a futures reader,
+    /// rejecting items larger than `max_len` bytes.
+    pub async fn read_item_with_limit<R>(
+        reader: &mut R,
+        max_len: usize,
+    ) -> Result<alloc::vec::Vec<u8>, Error>
+    where
+        R: futures_io::AsyncRead + Unpin + Send + ?Sized,
+    {
+        let mut reader = Reader(reader);
+        super::read_item_with_limit(&mut reader, max_len).await
+    }
+
     /// Reads one complete CBOR item from a futures reader and deserializes it.
     pub async fn read_value<T, R>(reader: &mut R) -> Result<T, Error>
     where
@@ -150,6 +163,17 @@ pub mod futures {
     {
         let mut reader = Reader(reader);
         super::read_value(&mut reader).await
+    }
+
+    /// Reads one complete bounded CBOR item from a futures reader and
+    /// deserializes it.
+    pub async fn read_value_with_limit<T, R>(reader: &mut R, max_len: usize) -> Result<T, Error>
+    where
+        T: de::DeserializeOwned,
+        R: futures_io::AsyncRead + Unpin + Send + ?Sized,
+    {
+        let mut reader = Reader(reader);
+        super::read_value_with_limit(&mut reader, max_len).await
     }
 
     /// Writes one already-encoded CBOR item to a futures writer.
@@ -223,6 +247,19 @@ pub mod tokio {
         super::read_item(&mut reader).await
     }
 
+    /// Reads one complete, well-formed CBOR item from a Tokio reader,
+    /// rejecting items larger than `max_len` bytes.
+    pub async fn read_item_with_limit<R>(
+        reader: &mut R,
+        max_len: usize,
+    ) -> Result<alloc::vec::Vec<u8>, Error>
+    where
+        R: ::tokio::io::AsyncRead + Unpin + Send + ?Sized,
+    {
+        let mut reader = Reader(reader);
+        super::read_item_with_limit(&mut reader, max_len).await
+    }
+
     /// Reads one complete CBOR item from a Tokio reader and deserializes it.
     pub async fn read_value<T, R>(reader: &mut R) -> Result<T, Error>
     where
@@ -231,6 +268,17 @@ pub mod tokio {
     {
         let mut reader = Reader(reader);
         super::read_value(&mut reader).await
+    }
+
+    /// Reads one complete bounded CBOR item from a Tokio reader and
+    /// deserializes it.
+    pub async fn read_value_with_limit<T, R>(reader: &mut R, max_len: usize) -> Result<T, Error>
+    where
+        T: de::DeserializeOwned,
+        R: ::tokio::io::AsyncRead + Unpin + Send + ?Sized,
+    {
+        let mut reader = Reader(reader);
+        super::read_value_with_limit(&mut reader, max_len).await
     }
 
     /// Writes one already-encoded CBOR item to a Tokio writer.
@@ -261,7 +309,31 @@ pub mod tokio {
 pub async fn read_item<R: AsyncRead + ?Sized>(reader: &mut R) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
     let mut offset = 0;
-    read_item_inner(reader, &mut out, &mut offset, DEFAULT_RECURSION_LIMIT).await?;
+    read_item_inner(reader, &mut out, &mut offset, DEFAULT_RECURSION_LIMIT, None).await?;
+    Ok(out)
+}
+
+/// Reads one complete, well-formed CBOR item from an async reader,
+/// rejecting items larger than `max_len` bytes.
+///
+/// The limit is checked against the exact encoded item length, including
+/// headers and string bodies. Use this for untrusted async streams when an
+/// external transport or framing layer does not already impose a message
+/// size limit.
+pub async fn read_item_with_limit<R: AsyncRead + ?Sized>(
+    reader: &mut R,
+    max_len: usize,
+) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::new();
+    let mut offset = 0;
+    read_item_inner(
+        reader,
+        &mut out,
+        &mut offset,
+        DEFAULT_RECURSION_LIMIT,
+        Some(max_len),
+    )
+    .await?;
     Ok(out)
 }
 
@@ -277,6 +349,19 @@ where
     R: AsyncRead + ?Sized,
 {
     let item = read_item(reader).await?;
+    crate::from_slice(&item)
+}
+
+/// Reads one bounded CBOR item and deserializes it into an owned value.
+///
+/// This is the bounded counterpart of [`read_value`]; see
+/// [`read_item_with_limit`] for the limit semantics.
+pub async fn read_value_with_limit<T, R>(reader: &mut R, max_len: usize) -> Result<T, Error>
+where
+    T: de::DeserializeOwned,
+    R: AsyncRead + ?Sized,
+{
+    let item = read_item_with_limit(reader, max_len).await?;
     crate::from_slice(&item)
 }
 
@@ -345,10 +430,21 @@ async fn read_exact_record<R: AsyncRead + ?Sized>(
     out: &mut Vec<u8>,
     offset: &mut usize,
     buf: &mut [u8],
+    max_len: Option<usize>,
 ) -> Result<(), Error> {
+    check_size_limit(*offset, buf.len(), max_len)?;
     reader.read_exact(buf).await.map_err(Error::Io)?;
     *offset += buf.len();
     out.extend_from_slice(buf);
+    Ok(())
+}
+
+fn check_size_limit(offset: usize, additional: usize, max_len: Option<usize>) -> Result<(), Error> {
+    if let Some(max_len) = max_len {
+        if additional > max_len.saturating_sub(offset) {
+            return Err(Error::semantic(offset, "CBOR item exceeds size limit"));
+        }
+    }
     Ok(())
 }
 
@@ -356,10 +452,11 @@ async fn pull_header<R: AsyncRead + ?Sized>(
     reader: &mut R,
     out: &mut Vec<u8>,
     offset: &mut usize,
+    max_len: Option<usize>,
 ) -> Result<(Header, usize), Error> {
     let start = *offset;
     let mut prefix = [0u8; 1];
-    read_exact_record(reader, out, offset, &mut prefix).await?;
+    read_exact_record(reader, out, offset, &mut prefix, max_len).await?;
 
     let major = prefix[0] >> 5;
     let minor = prefix[0] & 0b00011111;
@@ -368,22 +465,22 @@ async fn pull_header<R: AsyncRead + ?Sized>(
         x @ 0..=23 => Arg::This(x),
         24 => {
             let mut b = [0u8; 1];
-            read_exact_record(reader, out, offset, &mut b).await?;
+            read_exact_record(reader, out, offset, &mut b, max_len).await?;
             Arg::Next1(b[0])
         }
         25 => {
             let mut b = [0u8; 2];
-            read_exact_record(reader, out, offset, &mut b).await?;
+            read_exact_record(reader, out, offset, &mut b, max_len).await?;
             Arg::Next2(u16::from_be_bytes(b))
         }
         26 => {
             let mut b = [0u8; 4];
-            read_exact_record(reader, out, offset, &mut b).await?;
+            read_exact_record(reader, out, offset, &mut b, max_len).await?;
             Arg::Next4(u32::from_be_bytes(b))
         }
         27 => {
             let mut b = [0u8; 8];
-            read_exact_record(reader, out, offset, &mut b).await?;
+            read_exact_record(reader, out, offset, &mut b, max_len).await?;
             Arg::Next8(u64::from_be_bytes(b))
         }
         31 => Arg::Indefinite,
@@ -417,16 +514,12 @@ async fn read_body<R: AsyncRead + ?Sized>(
     out: &mut Vec<u8>,
     offset: &mut usize,
     mut remaining: usize,
+    max_len: Option<usize>,
 ) -> Result<(), Error> {
     let mut buffer = [0u8; CHUNK];
     while remaining > 0 {
         let n = remaining.min(buffer.len());
-        reader
-            .read_exact(&mut buffer[..n])
-            .await
-            .map_err(Error::Io)?;
-        *offset += n;
-        out.extend_from_slice(&buffer[..n]);
+        read_exact_record(reader, out, offset, &mut buffer[..n], max_len).await?;
         remaining -= n;
     }
     Ok(())
@@ -437,10 +530,11 @@ async fn read_text_body<R: AsyncRead + ?Sized>(
     out: &mut Vec<u8>,
     offset: &mut usize,
     len: usize,
+    max_len: Option<usize>,
 ) -> Result<(), Error> {
     let body_offset = *offset;
     let start = out.len();
-    read_body(reader, out, offset, len).await?;
+    read_body(reader, out, offset, len, max_len).await?;
     core::str::from_utf8(&out[start..]).map_err(|_| Error::Syntax(body_offset))?;
     Ok(())
 }
@@ -470,6 +564,7 @@ async fn read_item_inner<R: AsyncRead + ?Sized>(
     out: &mut Vec<u8>,
     offset: &mut usize,
     limit: usize,
+    max_len: Option<usize>,
 ) -> Result<(), Error> {
     // The initial one-item frame is the budget for the single top-level item.
     let mut stack = Vec::with_capacity(8);
@@ -489,7 +584,7 @@ async fn read_item_inner<R: AsyncRead + ?Sized>(
             _ => {}
         }
 
-        let (header, start) = pull_header(reader, out, offset).await?;
+        let (header, start) = pull_header(reader, out, offset, max_len).await?;
 
         if header == Header::Break {
             match stack.last().expect("non-empty") {
@@ -526,10 +621,10 @@ async fn read_item_inner<R: AsyncRead + ?Sized>(
 
             Header::Break => unreachable!("handled above"),
 
-            Header::Bytes(Some(len)) => read_body(reader, out, offset, len).await?,
-            Header::Text(Some(len)) => read_text_body(reader, out, offset, len).await?,
-            Header::Bytes(None) => read_indef_string(reader, out, offset, false).await?,
-            Header::Text(None) => read_indef_string(reader, out, offset, true).await?,
+            Header::Bytes(Some(len)) => read_body(reader, out, offset, len, max_len).await?,
+            Header::Text(Some(len)) => read_text_body(reader, out, offset, len, max_len).await?,
+            Header::Bytes(None) => read_indef_string(reader, out, offset, false, max_len).await?,
+            Header::Text(None) => read_indef_string(reader, out, offset, true, max_len).await?,
 
             Header::Tag(..) => push(&mut stack, Frame::Array(1), limit)?,
             Header::Array(Some(len)) => push(&mut stack, Frame::Array(len), limit)?,
@@ -566,13 +661,18 @@ async fn read_indef_string<R: AsyncRead + ?Sized>(
     out: &mut Vec<u8>,
     offset: &mut usize,
     text: bool,
+    max_len: Option<usize>,
 ) -> Result<(), Error> {
     loop {
-        let (header, start) = pull_header(reader, out, offset).await?;
+        let (header, start) = pull_header(reader, out, offset, max_len).await?;
         match header {
             Header::Break => return Ok(()),
-            Header::Text(Some(len)) if text => read_text_body(reader, out, offset, len).await?,
-            Header::Bytes(Some(len)) if !text => read_body(reader, out, offset, len).await?,
+            Header::Text(Some(len)) if text => {
+                read_text_body(reader, out, offset, len, max_len).await?
+            }
+            Header::Bytes(Some(len)) if !text => {
+                read_body(reader, out, offset, len, max_len).await?
+            }
             _ => return Err(Error::Syntax(start)),
         }
     }

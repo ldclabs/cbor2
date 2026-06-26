@@ -199,9 +199,11 @@ CBOR sequences and canonical encoding.
   huge allocations.
 * **Diagnostic notation** — `diagnostic` renders raw CBOR as the
   human-readable text of RFC 8949 §8 (matching the Appendix A examples
-  exactly, indefinite-length markers and all); `Value` implements
-  `Display` with the same notation and `Debug` as its indented,
-  multi-line form. RFC 8949 §8 is being formalized, and obsoleted, by the
+  exactly, indefinite-length markers and all); very large bignum payloads
+  fall back to explicit tag/bytes notation instead of expensive decimal
+  rendering. `Value` implements `Display` with the same notation and `Debug`
+  as its indented, multi-line form. RFC 8949 §8 is being formalized, and
+  obsoleted, by the
   IETF "Concise Diagnostic Notation" draft (CDN,
   `draft-ietf-cbor-edn-literals`), a backward-compatible superset; cbor2
   emits the core forms only, which stay valid CDN. For integer-keyed
@@ -215,7 +217,7 @@ CBOR sequences and canonical encoding.
   allocates heap memory.
 * **Async item I/O** — the `async_io` module frames complete CBOR items on
   async byte streams, then reuses the normal synchronous serde API once an
-  item is buffered.
+  item is buffered. Bounded read helpers are available for untrusted streams.
 * **A low-level header codec** — the `core` module exposes the pull/push
   `Header` interface for applications that need precise wire control.
 * **`no_std` support** — `default-features = false, features = ["alloc"]`
@@ -562,6 +564,16 @@ buffer, validates the same structure as `validate`, and then lets you call
 let item = cbor2::async_io::read_item(reader).await?;
 let value: cbor2::Value = cbor2::from_slice(&item)?;
 # Ok(())
+# }
+```
+
+For untrusted peers, use `read_item_with_limit` or `read_value_with_limit`
+unless an outer transport layer already enforces a message size limit:
+
+```rust
+# async fn bounded<R: cbor2::async_io::AsyncRead + ?Sized>(reader: &mut R) -> Result<cbor2::Value, cbor2::de::Error> {
+let value: cbor2::Value = cbor2::async_io::read_value_with_limit(reader, 1 << 20).await?;
+# Ok(value)
 # }
 ```
 

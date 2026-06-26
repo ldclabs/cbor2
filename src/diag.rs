@@ -3,9 +3,10 @@
 //! Diagnostic notation is a human-readable, JSON-like text form of CBOR
 //! meant for documentation and debugging; it is produced, never parsed.
 //! The output of this module matches the diagnostic column of RFC 8949
-//! Appendix A exactly, including the extended forms of §8.1: the `_`
-//! marker for indefinite-length items and `(_ ...)` for segmented
-//! strings.
+//! Appendix A exactly for ordinary items, including the extended forms of
+//! §8.1: the `_` marker for indefinite-length items and `(_ ...)` for
+//! segmented strings. Very large bignum payloads fall back to explicit
+//! tag/bytes notation to keep rendering bounded.
 //!
 //! The notation of RFC 8949 §8 is being formalized, and §8 obsoleted, by
 //! the IETF draft "Concise Diagnostic Notation" (CDN,
@@ -23,6 +24,11 @@ use crate::de::{expect_eof, Error, DEFAULT_RECURSION_LIMIT};
 use crate::io::Read;
 use crate::value::Value;
 
+// Decimal conversion for arbitrary-width bignums is intentionally bounded.
+// Larger payloads still render losslessly, but as explicit tag/bytes notation
+// so diagnostic output stays linear in the input size.
+const BIGNUM_DECIMAL_BYTE_LIMIT: usize = 1024;
+
 /// Renders one CBOR item from a reader in diagnostic notation
 /// (RFC 8949 §8).
 ///
@@ -30,8 +36,9 @@ use crate::value::Value;
 /// [`Value`] cannot represent: indefinite-length items are rendered with
 /// the `_` marker of §8.1 (`[_ 1, 2]`, `{_ "k": 1}`, `(_ h'01', h'02')`),
 /// `undefined` and unassigned simple values appear as themselves, and
-/// bignums (tags 2 and 3) are written as plain integers, exactly as in
-/// RFC 8949 Appendix A.
+/// ordinary bignums (tags 2 and 3) are written as plain integers, exactly
+/// as in RFC 8949 Appendix A. Very large bignum payloads fall back to
+/// explicit tag/bytes notation.
 ///
 /// Printable non-ASCII characters (e.g. CJK, emoji) are emitted
 /// directly for readability; only control characters are escaped with
@@ -181,15 +188,15 @@ fn item_header<'a, R: Read>(
 
         Header::Break => Err(Error::Syntax(offset)),
 
-        // Bignums render as plain integers, like in Appendix A; any other
-        // payload falls back to the generic tag form.
+        // Small bignums render as plain integers, like in Appendix A; very
+        // large or non-bytes payloads fall back to the generic tag form.
         Header::Tag(t @ (tag::BIGPOS | tag::BIGNEG)) => {
             let offset = decoder.offset();
             match decoder.pull()? {
                 Header::Bytes(len) => {
                     let mut payload = Vec::new();
                     decoder.bytes_body(len, &mut payload)?;
-                    write_bignum(out, t == tag::BIGNEG, &payload);
+                    write_bignum(out, t, &payload);
                     Ok(())
                 }
                 header => {
@@ -715,11 +722,16 @@ fn write_digits(out: &mut String, mantissa: &str, exp: i32) {
     }
 }
 
-// Renders the payload of a bignum tag (2 or 3) as a decimal integer of
-// arbitrary precision, as in RFC 8949 Appendix A. The represented value
-// is the big-endian unsigned `payload` for tag 2 and `-1 - payload` for
-// tag 3.
-pub(crate) fn write_bignum(out: &mut String, negative: bool, payload: &[u8]) {
+// Renders the payload of a small bignum tag (2 or 3) as a decimal integer,
+// as in RFC 8949 Appendix A. Very large payloads fall back to explicit
+// tag/bytes notation to avoid CPU-heavy decimal conversion on untrusted input.
+pub(crate) fn write_bignum(out: &mut String, tag_number: u64, payload: &[u8]) {
+    if payload.len() > BIGNUM_DECIMAL_BYTE_LIMIT {
+        write_tagged_bytes(out, tag_number, payload);
+        return;
+    }
+
+    let negative = tag_number == tag::BIGNEG;
     let mut work: Vec<u8> = payload.iter().copied().skip_while(|&b| b == 0).collect();
 
     if negative {
@@ -762,6 +774,14 @@ pub(crate) fn write_bignum(out: &mut String, negative: bool, payload: &[u8]) {
     }
 }
 
+fn write_tagged_bytes(out: &mut String, tag: u64, payload: &[u8]) {
+    let _ = write!(out, "{tag}(h'");
+    for b in payload {
+        let _ = write!(out, "{b:02x}");
+    }
+    out.push_str("')");
+}
+
 // Renders a `Value` in diagnostic notation; backs `Display for Value`.
 pub(crate) fn write_value(out: &mut String, value: &Value) {
     match value {
@@ -790,7 +810,7 @@ pub(crate) fn write_value(out: &mut String, value: &Value) {
         Value::Null => out.push_str("null"),
 
         Value::Tag(t @ (tag::BIGPOS | tag::BIGNEG), inner) => match inner.as_ref() {
-            Value::Bytes(payload) => write_bignum(out, *t == tag::BIGNEG, payload),
+            Value::Bytes(payload) => write_bignum(out, *t, payload),
             inner => {
                 let _ = write!(out, "{t}(");
                 write_value(out, inner);

@@ -82,6 +82,37 @@ fn read_value_deserializes_owned_values() {
 }
 
 #[test]
+fn read_item_with_limit_enforces_total_item_size() {
+    let mut bytes = vec![0x58, 0x20]; // h'..' with a one-byte length argument.
+    bytes.extend(std::iter::repeat_n(0xab, 32));
+
+    let mut reader = Cursor::new(bytes.clone());
+    let item = block_on(async_io::read_item_with_limit(&mut reader, bytes.len())).unwrap();
+    assert_eq!(item, bytes);
+    assert_eq!(reader.pos, bytes.len());
+
+    let mut reader = Cursor::new(bytes);
+    let err = block_on(async_io::read_item_with_limit(&mut reader, 8)).unwrap_err();
+    assert!(err.to_string().contains("exceeds size limit"), "{err}");
+    assert_eq!(
+        reader.pos, 2,
+        "body bytes must not be read after limit failure"
+    );
+}
+
+#[test]
+fn read_value_with_limit_deserializes_owned_values() {
+    let bytes = cbor2::to_vec(&7u8).unwrap();
+    let mut reader = Cursor::new(bytes.clone());
+    let out: u8 = block_on(async_io::read_value_with_limit(&mut reader, bytes.len())).unwrap();
+    assert_eq!(out, 7);
+
+    let mut reader = Cursor::new(bytes);
+    assert!(block_on(async_io::read_value_with_limit::<u8, _>(&mut reader, 0)).is_err());
+    assert_eq!(reader.pos, 0);
+}
+
+#[test]
 fn read_item_validates_text_and_structure() {
     let mut invalid_text = Cursor::new(hex::decode("62fffe").unwrap());
     assert!(matches!(
@@ -243,9 +274,22 @@ fn futures_async_traits_are_supported() {
     let item = block_on(async_io::futures::read_item(&mut reader)).unwrap();
     assert_eq!(item, first);
 
+    let mut reader = FuturesCursor(Cursor::new(first.clone()));
+    let item = block_on(async_io::futures::read_item_with_limit(
+        &mut reader,
+        first.len(),
+    ))
+    .unwrap();
+    assert_eq!(item, first);
+
     let mut reader = FuturesCursor(Cursor::new(cbor2::to_vec(&"owned").unwrap()));
     let value: String = block_on(async_io::futures::read_value(&mut reader)).unwrap();
     assert_eq!(value, "owned");
+
+    let mut reader = FuturesCursor(Cursor::new(cbor2::to_vec(&"bounded").unwrap()));
+    let value: String =
+        block_on(async_io::futures::read_value_with_limit(&mut reader, 16)).unwrap();
+    assert_eq!(value, "bounded");
 
     let mut sink = FuturesSink::default();
     block_on(async_io::futures::write_value(&mut sink, &("ok", 9u8))).unwrap();
@@ -318,9 +362,21 @@ fn tokio_async_traits_are_supported() {
     let item = block_on(async_io::tokio::read_item(&mut reader)).unwrap();
     assert_eq!(item, first);
 
+    let mut reader = TokioCursor(Cursor::new(first.clone()));
+    let item = block_on(async_io::tokio::read_item_with_limit(
+        &mut reader,
+        first.len(),
+    ))
+    .unwrap();
+    assert_eq!(item, first);
+
     let mut reader = TokioCursor(Cursor::new(cbor2::to_vec(&"owned").unwrap()));
     let value: String = block_on(async_io::tokio::read_value(&mut reader)).unwrap();
     assert_eq!(value, "owned");
+
+    let mut reader = TokioCursor(Cursor::new(cbor2::to_vec(&"bounded").unwrap()));
+    let value: String = block_on(async_io::tokio::read_value_with_limit(&mut reader, 16)).unwrap();
+    assert_eq!(value, "bounded");
 
     let mut sink = TokioSink::default();
     block_on(async_io::tokio::write_value(&mut sink, &("ok", 9u8))).unwrap();

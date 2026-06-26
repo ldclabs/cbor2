@@ -18,6 +18,29 @@ enum Enum {
     Struct { x: u32 },
 }
 
+#[derive(Debug, PartialEq)]
+struct IgnoredUnit;
+
+impl<'de> Deserialize<'de> for IgnoredUnit {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct UnitOnly;
+
+        impl<'de> serde::de::Visitor<'de> for UnitOnly {
+            type Value = IgnoredUnit;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("ignored value")
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(IgnoredUnit)
+            }
+        }
+
+        deserializer.deserialize_ignored_any(UnitOnly)
+    }
+}
+
 #[test]
 fn type_mismatches() {
     // Every typed entry point rejects a fundamentally wrong item.
@@ -123,6 +146,91 @@ fn bignum_errors() {
     let msg = de::<u64>("20").unwrap_err().to_string();
     assert!(msg.contains("unexpected negative"), "{msg}");
     assert!(de::<u128>("c34101").is_err());
+}
+
+#[test]
+fn primitive_bignum_range_rejection_stops_before_large_body() {
+    struct CountingReader {
+        data: Vec<u8>,
+        pos: usize,
+    }
+
+    impl std::io::Read for CountingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.pos == self.data.len() {
+                return Ok(0);
+            }
+
+            let n = buf.len().min(self.data.len() - self.pos);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    fn huge_bignum(tag: u8) -> CountingReader {
+        let mut data = vec![tag, 0x5a, 0x00, 0x10, 0x00, 0x00]; // tag(h'..' 1 MiB)
+        data.extend(vec![0xff; 1 << 20]);
+        CountingReader { data, pos: 0 }
+    }
+
+    let mut reader = huge_bignum(0xc2);
+    let msg = cbor2::from_reader::<u64, _>(&mut reader)
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("integer too large"), "{msg}");
+    assert!(
+        reader.pos < 1024,
+        "reader consumed {} bytes before rejecting",
+        reader.pos
+    );
+
+    let mut reader = huge_bignum(0xc3);
+    let msg = cbor2::from_reader::<i64, _>(&mut reader)
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("integer too large"), "{msg}");
+    assert!(
+        reader.pos < 1024,
+        "reader consumed {} bytes before rejecting",
+        reader.pos
+    );
+}
+
+#[test]
+fn ignored_any_skips_strings_without_materializing_them() {
+    let bytes = cbor2::to_vec(&serde_bytes::ByteBuf::from(vec![0xabu8; 4096])).unwrap();
+    assert_eq!(
+        cbor2::from_slice::<IgnoredUnit>(&bytes).unwrap(),
+        IgnoredUnit
+    );
+
+    let text = cbor2::to_vec(&"a".repeat(4096)).unwrap();
+    assert_eq!(
+        cbor2::from_slice::<IgnoredUnit>(&text).unwrap(),
+        IgnoredUnit
+    );
+
+    let mut indef_bytes = vec![0x5f, 0x59, 0x10, 0x00];
+    indef_bytes.extend(vec![0xcd; 4096]);
+    indef_bytes.push(0xff);
+    assert_eq!(
+        cbor2::from_slice::<IgnoredUnit>(&indef_bytes).unwrap(),
+        IgnoredUnit
+    );
+
+    let mut indef_text = vec![0x7f];
+    indef_text.extend(cbor2::to_vec(&"b".repeat(4096)).unwrap());
+    indef_text.push(0xff);
+    assert_eq!(
+        cbor2::from_slice::<IgnoredUnit>(&indef_text).unwrap(),
+        IgnoredUnit
+    );
+
+    assert!(matches!(
+        de::<IgnoredUnit>("62fffe"),
+        Err(Error::Syntax(..))
+    ));
 }
 
 #[test]
