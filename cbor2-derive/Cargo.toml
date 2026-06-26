@@ -1,17 +1,18 @@
 [package]
 name = "cbor2-derive"
-version = "1.0.5"
-authors = ["0xZensh <txr1883@gmail.com>"]
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "Derive cbor2 serde impls for CBOR protocols: integer map keys, semantic tags and inspectable COSE metadata."
-homepage = "https://github.com/ldclabs/cbor2"
-repository = "https://github.com/ldclabs/cbor2"
 documentation = "https://docs.rs/cbor2-derive"
 readme = "README.md"
 keywords = ["cbor", "serde", "cose", "derive", "tags"]
 categories = ["encoding"]
-license = "MIT"
-edition = "2021"
-rust-version = "1.85"
+
 
 [lib]
 proc-macro = true

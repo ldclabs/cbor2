@@ -177,7 +177,8 @@ fn big_to_u128(bytes: &[u8]) -> Option<u128> {
 #[cfg(feature = "alloc")]
 struct BignumAccumulator {
     value: u128,
-    significant: usize,
+    significant: bool,
+    payload_len: usize,
     max_bytes: usize,
     too_large: &'static str,
 }
@@ -187,24 +188,29 @@ impl BignumAccumulator {
     fn new(max_bytes: usize, too_large: &'static str) -> Self {
         Self {
             value: 0,
-            significant: 0,
+            significant: false,
+            payload_len: 0,
             max_bytes,
             too_large,
         }
     }
 
-    fn push(&mut self, byte: u8) -> Result<(), Error> {
-        if self.significant == 0 && byte == 0 {
-            return Ok(());
-        }
-
-        self.significant += 1;
-        if self.significant > self.max_bytes {
+    fn accept_segment(&mut self, len: usize) -> Result<(), Error> {
+        if len > self.max_bytes.saturating_sub(self.payload_len) {
             return Err(de::Error::custom(self.too_large));
         }
 
-        self.value = (self.value << 8) | u128::from(byte);
+        self.payload_len += len;
         Ok(())
+    }
+
+    fn push(&mut self, byte: u8) {
+        if !self.significant && byte == 0 {
+            return;
+        }
+
+        self.significant = true;
+        self.value = (self.value << 8) | u128::from(byte);
     }
 }
 
@@ -629,9 +635,11 @@ impl<S: Source> Deserializer<S> {
     }
 
     // Reads the byte string payload following a bignum tag into a bounded
-    // integer accumulator. This is used only for fixed-width primitive
-    // integer targets; dynamic `Value` and `deserialize_any` keep using
-    // `bignum()` so they can preserve arbitrary-width payloads.
+    // integer accumulator. The bound applies to the encoded payload length,
+    // not just significant bytes, so leading-zero padding cannot force
+    // primitive integer targets to scan an arbitrary body. Dynamic `Value`
+    // and `deserialize_any` keep using `bignum()` so they can preserve
+    // arbitrary-width payloads.
     fn bounded_bignum(&mut self, max_bytes: usize, too_large: &'static str) -> Result<u128, Error> {
         let mut acc = BignumAccumulator::new(max_bytes, too_large);
         match self.source.pull()? {
@@ -654,12 +662,14 @@ impl<S: Source> Deserializer<S> {
         mut len: usize,
         acc: &mut BignumAccumulator,
     ) -> Result<(), Error> {
+        acc.accept_segment(len)?;
+
         let mut buffer = [0u8; 64];
         while len > 0 {
             let n = len.min(buffer.len());
             self.source.read_exact(&mut buffer[..n])?;
             for &byte in &buffer[..n] {
-                acc.push(byte)?;
+                acc.push(byte);
             }
             len -= n;
         }

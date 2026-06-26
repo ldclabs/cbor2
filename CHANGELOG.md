@@ -10,16 +10,21 @@
   `cbor2::Simple` also captures the built-in simple values 20 through 23.
   The existing `cbor!` macro can construct these keys by inlining
   `Simple::new(N).unwrap()` as an expression.
+* `cbor2-cli` now renders generic simple values as `"simple(N)"` strings when
+  converting CBOR to JSON.
 
 ### Fixed
 
 * `core::Encoder::push(Header::Simple(24..=31))` now rejects reserved simple
   values instead of emitting malformed `0xf8` encodings that conforming
   decoders reject.
+* Primitive integer deserialization now rejects oversized bignum payloads
+  before reading the body even when the payload is padded entirely with leading
+  zeroes.
 
 ### Changed
 
-* Bumped `cbor2` to `1.1.0`.
+* Bumped `cbor2`, `cbor2-cli`, and `cbor2-derive` to `1.1.0`.
 
 ## [1.0.7] - 2026-06-26
 

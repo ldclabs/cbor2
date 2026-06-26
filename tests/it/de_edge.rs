@@ -168,13 +168,20 @@ fn primitive_bignum_range_rejection_stops_before_large_body() {
         }
     }
 
-    fn huge_bignum(tag: u8) -> CountingReader {
+    fn huge_bignum(tag: u8, fill: u8) -> CountingReader {
         let mut data = vec![tag, 0x5a, 0x00, 0x10, 0x00, 0x00]; // tag(h'..' 1 MiB)
-        data.extend(vec![0xff; 1 << 20]);
+        data.extend(vec![fill; 1 << 20]);
         CountingReader { data, pos: 0 }
     }
 
-    let mut reader = huge_bignum(0xc2);
+    fn huge_segmented_bignum(tag: u8, fill: u8) -> CountingReader {
+        let mut data = vec![tag, 0x5f, 0x5a, 0x00, 0x10, 0x00, 0x00]; // tag((_ h'..') 1 MiB)
+        data.extend(vec![fill; 1 << 20]);
+        data.push(0xff);
+        CountingReader { data, pos: 0 }
+    }
+
+    let mut reader = huge_bignum(0xc2, 0xff);
     let msg = cbor2::from_reader::<u64, _>(&mut reader)
         .unwrap_err()
         .to_string();
@@ -185,8 +192,30 @@ fn primitive_bignum_range_rejection_stops_before_large_body() {
         reader.pos
     );
 
-    let mut reader = huge_bignum(0xc3);
+    let mut reader = huge_bignum(0xc3, 0xff);
     let msg = cbor2::from_reader::<i64, _>(&mut reader)
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("integer too large"), "{msg}");
+    assert!(
+        reader.pos < 1024,
+        "reader consumed {} bytes before rejecting",
+        reader.pos
+    );
+
+    let mut reader = huge_bignum(0xc2, 0x00);
+    let msg = cbor2::from_reader::<u64, _>(&mut reader)
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("integer too large"), "{msg}");
+    assert!(
+        reader.pos < 1024,
+        "reader consumed {} bytes before rejecting",
+        reader.pos
+    );
+
+    let mut reader = huge_segmented_bignum(0xc2, 0x00);
+    let msg = cbor2::from_reader::<u64, _>(&mut reader)
         .unwrap_err()
         .to_string();
     assert!(msg.contains("integer too large"), "{msg}");

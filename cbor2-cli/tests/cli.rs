@@ -87,6 +87,10 @@ fn decode_pretty_prints_json() {
     let out = ok(&["decode"], &hex("c11a514b67b0"));
     assert_eq!(out, b"1363896240\n");
 
+    // Generic simple values survive JSON conversion as explicit strings.
+    let out = ok(&["decode"], &hex("f83b"));
+    assert_eq!(out, b"\"simple(59)\"\n");
+
     // The flexible input forms apply to decode as well.
     let out = ok(&["decode", "a1616101"], b"");
     assert_eq!(out, b"{\n  \"a\": 1\n}\n");

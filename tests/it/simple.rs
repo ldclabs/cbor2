@@ -99,6 +99,25 @@ fn value_bridge_preserves_simple_values() {
 }
 
 #[test]
+fn value_bridge_decodes_builtin_simple_values() {
+    assert_eq!(
+        Value::Bool(false).deserialized::<Simple>().unwrap(),
+        Simple::FALSE
+    );
+    assert_eq!(
+        Value::Bool(true).deserialized::<Simple>().unwrap(),
+        Simple::TRUE
+    );
+    assert_eq!(Value::Null.deserialized::<Simple>().unwrap(), Simple::NULL);
+    assert_eq!(
+        Value::Simple(Simple::UNDEFINED)
+            .deserialized::<Simple>()
+            .unwrap(),
+        Simple::UNDEFINED
+    );
+}
+
+#[test]
 fn canonical_encoding_sorts_simple_keys_by_encoded_bytes() {
     let mut value = Value::Map(vec![
         (Value::Simple(Simple::new(59).unwrap()), Value::Null),

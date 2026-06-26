@@ -587,6 +587,9 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
 
             return match value {
                 Value::Simple(x) => visitor.visit_enum(SimpleAccess::new(*x)),
+                Value::Bool(false) => visitor.visit_enum(SimpleAccess::new(crate::Simple::FALSE)),
+                Value::Bool(true) => visitor.visit_enum(SimpleAccess::new(crate::Simple::TRUE)),
+                Value::Null => visitor.visit_enum(SimpleAccess::new(crate::Simple::NULL)),
                 _ => Err(de::Error::invalid_type(value.into(), &"simple value")),
             };
         }
