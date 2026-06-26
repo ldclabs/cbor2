@@ -1,34 +1,32 @@
 # cbor2-derive
 
-为 [`cbor2`](https://crates.io/crates/cbor2) 提供面向协议形态 CBOR 的派生
-支持。
+为 [`cbor2`](https://crates.io/crates/cbor2) 提供符合协议格式的 CBOR 派生（derive）支持。
 
 [English](README.md) | 简体中文
 
-大多数用户不应直接依赖本 crate，而应在 `cbor2` 上启用 `derive` 特性：
+大多数用户不需要直接依赖此 crate。请改为启用 `cbor2` 的 `derive` 特性：
 
 ```toml
 [dependencies]
 cbor2 = { version = "1", features = ["derive"] }
-serde_bytes = "0.11" # 仅在如下例的二进制字段中需要
+serde_bytes = "0.11" # 仅针对如下方示例中的二进制字段才需要
 ```
 
 ## 为什么选择 cbor2-derive
 
-`serde` 派生对常见数据模型非常出色，但某些 CBOR 协议需要 serde 属性无法直接
-表达的传输细节：整数 map 键、字段顺序数组、语义标签和 COSE 风格的紧凑结构。
-`#[derive(cbor2::Cbor)]` 为这类形态生成 serde 实现。
+`serde` 的派生宏对于常规数据模型表现优异，但某些 CBOR 协议需要一些 `serde` 属性无法直接表达的传输格式细节：整数 map 键、字段顺序数组、语义标签和 COSE 风格的紧凑结构。
+`#[derive(cbor2::Cbor)]` 为这些格式生成对应的 `serde` 实现。
 
-| 需求         | 内置能力                                                                                 |
-| ------------ | ---------------------------------------------------------------------------------------- |
-| 整数 map 键  | `#[cbor(key = 1)]` 写入真正的 CBOR 整数键，而非文本键 `"1"`。                            |
-| 字段顺序数组 | `#[cbor(array)]` 将具名结构体编码为紧凑的 CBOR 数组，同时保留 Rust 字段名。              |
-| 语义标签     | `#[cbor(tag = 18)]` 将编码后的项包裹进一个 CBOR 标签，并在解码时接受带或不带标签的输入。 |
-| COSE 易用性  | 紧凑的 RFC 9052 结构可直接在 Rust 结构体和元组结构体上声明。                             |
-| JSON 兼容性  | 字段名和类型名保持不变，因此 `serde_json` 仍使用自然名称且没有 CBOR 标签。               |
-| 运行时元数据 | 生成的 `cbor2::Cbor` 实现暴露 `T::KEYS`、`T::TAG`、`T::ARRAY` 和 `value.keys()`。        |
-| Serde 属性   | 诸如 `default`、`skip`、`alias` 和 `with = "serde_bytes"` 等字段级属性仍然有效。         |
-| 扁平扩展字段 | map 形态结构体上的 `#[serde(flatten)]` 可承载扩展字段，包括 COSE 风格的整数/text 标签键。 |
+| 需求         | 内置支持                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------------ |
+| 整数 map 键  | `#[cbor(key = 1)]` 会写入真正的 CBOR 整数键，而不是文本键 `"1"`。                                            |
+| 字段顺序数组 | `#[cbor(array)]` 会将命名的结构体编码为紧凑的 CBOR 数组，同时在 Rust 中保留结构体的字段名。                  |
+| 语义标签     | `#[cbor(tag = 18)]` 会将编码后的数据项包装在 CBOR 标签中，并在反序列化（解码）时兼容带标签或不带标签的输入。 |
+| COSE 易用性  | 可以在 Rust 结构体和元组结构体上直接声明紧凑的 RFC 9052 结构。                                               |
+| JSON 兼容性  | 字段名和类型名保持不变，因此 `serde_json` 仍然可以使用自然名称，且不含 CBOR 标签。                           |
+| 运行时元数据 | 生成的 `cbor2::Cbor` 实现公开了 `T::KEYS`、`T::TAG`、`T::ARRAY` 和 `value.keys()`。                          |
+| Serde 属性   | 字段级属性（如 `default`、`skip`、`alias` 和 `with = "serde_bytes"`）可以继续正常工作。                      |
+| 扁平化 map   | map 格式的结构体上的 `#[serde(flatten)]` 可以承载扩展字段，包括 COSE 风格的整数/文本标签。                   |
 
 ## 示例
 
@@ -49,7 +47,7 @@ assert_eq!(CoseHeader::KEYS, &[("alg", 1), ("kid", 4)]);
 assert_eq!(CoseHeader::TAG, Some(18));
 ```
 
-对于传输形态为数组、但带具名 Rust 字段的 COSE 消息：
+对于带有 Rust 命名字段的 COSE 数组格式消息：
 
 ```rust
 use cbor2::Cbor;
@@ -69,7 +67,7 @@ struct Sign1 {
 assert!(Sign1::ARRAY);
 ```
 
-对于 CWT 这类带扩展 claim 的 map 形态协议：
+对于带有扩展声明的 map 格式协议，例如 CWT：
 
 ```rust
 use std::collections::BTreeMap;
@@ -87,17 +85,12 @@ struct Claims {
 }
 ```
 
-已声明字段仍使用对应的 CBOR 整数键，扁平 map 中的扩展字段保留普通文本键。
-如果扁平 map 的键类型会序列化为整数或字符串，例如 COSE `Label` / `CoseMap`，
-CBOR 往返时也会保留这些整数键。`#[serde(flatten)]` 支持具名的 map 结构体；
-不要与 `#[cbor(array)]` 混用。
+声明的字段仍使用其 CBOR 整数键，而扁平化 map 会保留普通的文本键。对于键类型可以序列化为整数或字符串的扁平化 map（例如 COSE `Label` / `CoseMap`），在 CBOR 往返编解码中仍能保留这些整数键。命名 map 结构体支持使用 `#[serde(flatten)]`；请勿将其与 `#[cbor(array)]` 混用。
 
-该宏会生成 `serde::Serialize`、`serde::Deserialize` 和 `cbor2::Cbor`。请勿
-在同一类型上同时派生 serde 的 `Serialize` 或 `Deserialize`；那些实现会冲突。
+该宏会自动生成 `serde::Serialize`、`serde::Deserialize` 以及 `cbor2::Cbor` 的实现。请勿在同一类型上同时派生 serde 的 `Serialize` 或 `Deserialize`，否则这些实现会发生冲突。
 
-完整的 COSE 示例参见主
-[`cbor2` README](https://github.com/ldclabs/cbor2#integer-map-keys-and-tags-cose-with-derivecbor)。
+完整的 COSE 示例请参阅 [`cbor2` 主 README](https://github.com/ldclabs/cbor2#integer-map-keys-and-tags-cose-with-derivecbor)。
 
-## 许可
+## 许可协议
 
-以 MIT 许可发布。
+采用 MIT 许可协议。
