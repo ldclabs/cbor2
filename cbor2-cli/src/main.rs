@@ -1,10 +1,11 @@
 //! `cbor` — the command line CBOR converter and inspector.
 //!
-//! Without a command, shows every CBOR item in the input as one line of
-//! diagnostic notation (RFC 8949 §8), exactly as it appears on the wire.
+//! Without a command, shows every CBOR item in the input as pretty diagnostic
+//! notation (RFC 8949 §8), exactly as it appears on the wire.
 //! `decode` converts CBOR items into pretty-printed JSON or — with
 //! `--diag` — pretty-printed diagnostic notation; `encode` converts JSON
-//! values into CBOR items, optionally as copyable hex text with `--hex`;
+//! values, or CDN text with `--diag`, into CBOR items, optionally as
+//! copyable hex text with `--hex`;
 //! `validate` checks one or more complete CBOR items. Data errors exit with
 //! status 1, usage errors with status 2.
 //!
@@ -28,13 +29,13 @@ const USAGE: &str = "\
 Usage: cbor [COMMAND] [INPUT]
 
 Shows, decodes and encodes CBOR (RFC 8949). Without a command, every
-CBOR item in INPUT is shown as one line of diagnostic notation (\u{a7}8),
+CBOR item in INPUT is shown as pretty diagnostic notation (\u{a7}8),
 exactly as it appears on the wire.
 
 Commands:
   decode  Convert CBOR items to pretty-printed JSON, or to
           pretty-printed diagnostic notation with --diag
-  encode  Convert JSON values to CBOR items
+  encode  Convert JSON values, or CDN text with --diag, to CBOR items
   validate
           Validate one or more complete CBOR items
 
@@ -42,10 +43,12 @@ Input:
   INPUT is a file path, a hex string (optionally 0x-prefixed), a base64
   or base64url string, or `-` for stdin; stdin is the default. An
   argument containing a path separator is always a file path. `encode`
-  reads JSON text, from a file or stdin only. Output goes to stdout.
+  reads JSON text, or CDN text with --diag, from a file or stdin only.
+  Output goes to stdout.
 
 Options:
   -d, --diag     With `decode`: print diagnostic notation instead of JSON
+                 With `encode`: read Concise Diagnostic Notation, not JSON
       --hex      With `encode`: print lowercase hex text instead of raw bytes
   -h, --help     Print this help
   -V, --version  Print the version
@@ -53,6 +56,7 @@ Options:
 Examples:
   cbor a201020326                  # show hex CBOR
   cbor decode message.cbor         # CBOR file -> pretty JSON
+  printf \"{1: h'dead'}\" | cbor encode --diag --hex
   echo '{\"a\": 1}' | cbor encode --hex
   echo '{\"a\": 1}' | cbor encode    # JSON -> CBOR bytes";
 
@@ -75,7 +79,7 @@ fn main() {
     let result = match command {
         Command::Show => show(open_cbor_input(input.as_deref())),
         Command::Decode => decode(open_cbor_input(input.as_deref()), diag),
-        Command::Encode => encode(open_json_input(input.as_deref()), encode_output),
+        Command::Encode => encode(open_text_input(input.as_deref()), encode_output, diag),
         Command::Validate => validate(open_cbor_input(input.as_deref())),
     };
 
@@ -132,8 +136,10 @@ fn parse_args() -> (Command, bool, EncodeOutput, Option<String>) {
     if positional.next().is_some() {
         usage_error(format_args!("at most one INPUT argument"));
     }
-    if diag && !matches!(command, Command::Decode) {
-        usage_error(format_args!("`--diag` only applies to `decode`"));
+    if diag && !matches!(command, Command::Decode | Command::Encode) {
+        usage_error(format_args!(
+            "`--diag` only applies to `decode` or `encode`"
+        ));
     }
     if encode_output == EncodeOutput::Hex && !matches!(command, Command::Encode) {
         usage_error(format_args!("`--hex` only applies to `encode`"));
@@ -182,9 +188,8 @@ fn open_cbor_input(arg: Option<&str>) -> Box<dyn Read> {
     ));
 }
 
-// Opens the input of `encode`: stdin (absent or `-`) or a file of JSON
-// text.
-fn open_json_input(arg: Option<&str>) -> Box<dyn Read> {
+// Opens the input of `encode`: stdin (absent or `-`) or a text file.
+fn open_text_input(arg: Option<&str>) -> Box<dyn Read> {
     match arg {
         None | Some("-") => Box::new(BufReader::new(io::stdin().lock())),
         Some(path) => match File::open(path) {
@@ -204,7 +209,7 @@ fn show(input: Box<dyn Read>) -> Result<(), Error> {
     let mut stdout = stdout.lock();
 
     for item in cbor2::de::Deserializer::from_reader(input).into_iter::<RawValue>() {
-        let diag = cbor2::diagnostic_pretty(item?.as_ref())?;
+        let diag = cbor2::to_cdn_pretty(item?.as_ref())?;
         writeln!(stdout, "{diag}")?;
     }
 
@@ -221,7 +226,7 @@ fn decode(input: Box<dyn Read>, diag: bool) -> Result<(), Error> {
 
     if diag {
         for item in cbor2::de::Deserializer::from_reader(input).into_iter::<RawValue>() {
-            let text = cbor2::diagnostic_pretty(item?.as_ref())?;
+            let text = cbor2::to_cdn_pretty(item?.as_ref())?;
             writeln!(stdout, "{text}")?;
         }
     } else {
@@ -253,13 +258,27 @@ fn validate(input: Box<dyn Read>) -> Result<(), Error> {
     Ok(stdout.flush()?)
 }
 
-// Reads a stream of JSON values and writes each of them to stdout as a
-// CBOR item. Raw output streams bytes; hex output streams one copyable
-// lowercase hex string for the complete CBOR sequence.
-fn encode(input: Box<dyn Read>, output: EncodeOutput) -> Result<(), Error> {
+// Reads a stream of JSON values, or CDN values with `--diag`, and writes
+// them to stdout as CBOR items. Raw output streams bytes; hex output streams
+// one copyable lowercase hex string for the complete CBOR sequence.
+fn encode(mut input: Box<dyn Read>, output: EncodeOutput, diag: bool) -> Result<(), Error> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     let mut wrote_hex = false;
+
+    if diag {
+        let mut text = String::new();
+        input.read_to_string(&mut text)?;
+        let bytes = cbor2::cdn_sequence_to_vec(&text)?;
+        match output {
+            EncodeOutput::Raw => stdout.write_all(&bytes)?,
+            EncodeOutput::Hex => {
+                write!(stdout, "{}", hex(&bytes))?;
+                stdout.write_all(b"\n")?;
+            }
+        }
+        return Ok(stdout.flush()?);
+    }
 
     for value in serde_json::Deserializer::from_reader(input).into_iter::<serde_json::Value>() {
         match output {

@@ -4,6 +4,17 @@
 
 ### Added
 
+* Added Concise Diagnostic Notation (CDN) input support:
+  `cdn_to_vec`, `cdn_sequence_to_vec` and `from_cdn`
+  parse CDN text into CBOR bytes or serde values. The parser covers comments,
+  optional separator commas, base-encoded byte strings, embedded CBOR
+  sequences, encoding indicators, tags, simple values, raw strings, and the
+  mandatory `dt`, `ip`, `b1` and `t1` application extensions.
+* Added CDN-named output helpers: `to_cdn`, `to_cdn_pretty` and
+  `to_cdn_pretty_with_key_comments`. The existing `diagnostic*` names remain
+  available as compatibility aliases.
+* `cbor2-cli` now accepts `cbor encode --diag` to convert CDN text to CBOR;
+  combine it with `--hex` for copyable fixture bytes.
 * Added full CBOR simple value support through `cbor2::Simple` and
   `Value::Simple`, including values used as map keys. Decoding generic simple
   values now preserves them in `Value`, while explicitly decoding

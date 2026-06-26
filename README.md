@@ -200,19 +200,20 @@ CBOR sequences and canonical encoding.
   duplicate map keys, unknown tags and CBOR sequences (RFC 8742) are all
   handled; recursion is depth-limited and forged lengths cannot trigger
   huge allocations.
-* **Diagnostic notation** — `diagnostic` renders raw CBOR as the
-  human-readable text of RFC 8949 §8 (matching the Appendix A examples
-  exactly, indefinite-length markers and all); very large bignum payloads
-  fall back to explicit tag/bytes notation instead of expensive decimal
-  rendering. `Value` implements `Display` with the same notation and `Debug`
-  as its indented, multi-line form. RFC 8949 §8 is being formalized, and
-  obsoleted, by the
-  IETF "Concise Diagnostic Notation" draft (CDN,
-  `draft-ietf-cbor-edn-literals`), a backward-compatible superset; cbor2
-  emits the core forms only, which stay valid CDN. For integer-keyed
-  protocol maps, such as CWT claims, `diagnostic_pretty_with_key_comments`
-  can take a `Cbor::KEYS` table and add `// "iss"` style string-key
-  comments (CDN end-of-line comments) beside the wire integer keys.
+* **Concise Diagnostic Notation** — `to_cdn` renders raw CBOR as the
+  human-readable text form formalized by the IETF Concise Diagnostic
+  Notation draft (CDN, `draft-ietf-cbor-edn-literals`), matching the RFC
+  8949 Appendix A examples for ordinary items while preserving
+  indefinite-length markers. The API names keep direction explicit:
+  `to_cdn*` renders CBOR bytes to CDN text, while `cdn_to_vec`,
+  `cdn_sequence_to_vec` and `from_cdn` parse CDN text to CBOR bytes or serde
+  values; the older `diagnostic*` names remain as compatibility aliases. CDN
+  input covers comments, base-encoded byte strings, embedded CBOR sequences,
+  encoding indicators, tags, simple values and the mandatory `dt`, `ip`, `b1`
+  and `t1` extensions. `Value` implements `Display` with the same notation and
+  `Debug` as its indented form. For integer-keyed protocol maps,
+  `to_cdn_pretty_with_key_comments` can add CDN `// "iss"` comments beside the
+  wire integer keys.
 * **Allocation-free helpers** — `validate` is a well-formedness check for exactly
   one CBOR item (RFC 8949 §5.3.1, including text UTF-8),
   `serialized_size` computes the exact encoded size of any serializable
@@ -399,7 +400,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
          5974e1b99a3a4cc09a659aa2e9e7fff161d38ce71cb45ce460ffb569"
     );
 
-    println!("{}", cbor2::diagnostic(&bytes[..])?);
+    println!("{}", cbor2::to_cdn(&bytes[..])?);
     // 16([h'a1010a', {5: h'89f52f65a1c580933b5261a78c'},
     //     h'5974e1b99a3a4cc09a659aa2e9e7fff161d38ce71cb45ce460ffb569'])
 
@@ -426,7 +427,7 @@ decoding so one type decodes both tagged and tag-less messages:
 tagged *map* with registered integer claim keys, natural JSON names,
 `skip_serializing_if` claim omission, COSE-label-keyed `#[serde(flatten)]`
 extension claims and the same transparent tag decoding. It also uses
-`diagnostic_pretty_with_key_comments(&bytes[..], Claims::KEYS)` so the
+`to_cdn_pretty_with_key_comments(&bytes[..], Claims::KEYS)` so the
 diagnostic output stays true to the integer-keyed wire shape while showing
 the matching string keys as code comments:
 
@@ -655,9 +656,9 @@ The workspace ships a `cbor` command line tool in
 [`cbor2-cli`](cbor2-cli/README.md). Bare `cbor` shows any CBOR — from a
 file, stdin, a hex string or a base64 string — as diagnostic notation
 (RFC 8949 §8, formalized as CDN); `decode` converts to pretty JSON (or pretty diagnostic
-with `--diag`), `encode` converts JSON to CBOR, `encode --hex` prints
-copyable CBOR hex for agents and docs, and `validate` checks complete
-CBOR input:
+with `--diag`), `encode` converts JSON to CBOR, `encode --diag` converts CDN
+text to CBOR, `encode --hex` prints copyable CBOR hex for agents and docs,
+and `validate` checks complete CBOR input:
 
 ```bash
 brew install ldclabs/tap/cbor2-cli   # Homebrew

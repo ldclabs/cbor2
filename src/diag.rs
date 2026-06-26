@@ -1,7 +1,9 @@
 //! CBOR diagnostic notation (RFC 8949 §8).
 //!
-//! Diagnostic notation is a human-readable, JSON-like text form of CBOR
-//! meant for documentation and debugging; it is produced, never parsed.
+//! This module is the output side: it renders CBOR bytes as Concise
+//! Diagnostic Notation (CDN) text for documentation and debugging. The
+//! historical `diagnostic*` function names are retained; the `to_cdn*` names
+//! are the explicit CDN-oriented aliases.
 //! The output of this module matches the diagnostic column of RFC 8949
 //! Appendix A exactly for ordinary items, including the extended forms of
 //! §8.1: the `_` marker for indefinite-length items and `(_ ...)` for
@@ -55,6 +57,14 @@ const BIGNUM_DECIMAL_BYTE_LIMIT: usize = 1024;
 /// );
 /// ```
 pub fn diagnostic<R: Read>(reader: R) -> Result<String, Error> {
+    to_cdn(reader)
+}
+
+/// Renders one CBOR item from a reader as Concise Diagnostic Notation (CDN).
+///
+/// This is the same operation as [`diagnostic`], named for the formal CDN
+/// terminology in `draft-ietf-cbor-edn-literals`.
+pub fn to_cdn<R: Read>(reader: R) -> Result<String, Error> {
     let mut decoder = Decoder::from(reader);
     let mut out = String::new();
     item(&mut decoder, &mut out, DEFAULT_RECURSION_LIMIT, None, None)?;
@@ -73,6 +83,12 @@ pub fn diagnostic<R: Read>(reader: R) -> Result<String, Error> {
 /// );
 /// ```
 pub fn diagnostic_pretty<R: Read>(reader: R) -> Result<String, Error> {
+    to_cdn_pretty(reader)
+}
+
+/// Like [`to_cdn`], but pretty-prints arrays and maps with two-space
+/// indentation, one element per line.
+pub fn to_cdn_pretty<R: Read>(reader: R) -> Result<String, Error> {
     let mut decoder = Decoder::from(reader);
     let mut out = String::new();
     item(
@@ -107,6 +123,18 @@ pub fn diagnostic_pretty<R: Read>(reader: R) -> Result<String, Error> {
 /// );
 /// ```
 pub fn diagnostic_pretty_with_key_comments<R: Read>(
+    reader: R,
+    keys: &[(&str, i128)],
+) -> Result<String, Error> {
+    to_cdn_pretty_with_key_comments(reader, keys)
+}
+
+/// Like [`to_cdn_pretty`], but annotates integer map keys with matching
+/// string keys as `// "key"` comments.
+///
+/// This is the CDN-named alias of
+/// [`diagnostic_pretty_with_key_comments`].
+pub fn to_cdn_pretty_with_key_comments<R: Read>(
     reader: R,
     keys: &[(&str, i128)],
 ) -> Result<String, Error> {

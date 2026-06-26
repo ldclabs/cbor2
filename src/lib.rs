@@ -394,41 +394,55 @@ assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
 * **`tokio`** — adds `async_io::tokio` adapters for
   `tokio::io::AsyncRead`/`tokio::io::AsyncWrite`. Implies `std`.
 
-# Diagnostic notation
+# Concise Diagnostic Notation
 
-[`diagnostic`] renders raw CBOR as the compact human-readable text form
-of RFC 8949 §8; [`diagnostic_pretty`] does the same with two-space
-indentation. Both work on the wire and preserve what a [`Value`] cannot
-represent: indefinite-length markers, `undefined`, and unassigned simple
-values. Very large bignum payloads fall back to explicit tag/bytes notation
-instead of expensive decimal rendering. `Value` implements
+The API names keep the two directions separate:
+
+* [`to_cdn`] and [`to_cdn_pretty`] render CBOR bytes **to** CDN text.
+* `cdn*` and [`from_cdn`] parse CDN text **to** CBOR bytes or serde values.
+* The historical `diagnostic*` names remain available as compatibility
+  aliases for the corresponding `to_cdn*` functions.
+
+[`to_cdn`] renders raw CBOR as the compact human-readable text form
+formalized by the IETF Concise Diagnostic Notation draft
+(`draft-ietf-cbor-edn-literals`); [`to_cdn_pretty`] does the same with
+two-space indentation. Both work on the wire and preserve what a [`Value`]
+cannot represent: indefinite-length markers, `undefined`, and unassigned
+simple values. [`cdn_to_vec`] parses CDN text into CBOR bytes, including
+comments, byte-string literals, embedded CBOR sequences, encoding indicators,
+tags, simple values and the mandatory CDN application extensions. `Value`
+implements
 [`Display`](std::fmt::Display) with the same compact notation, and
 [`Debug`](std::fmt::Debug) pretty-prints it with indentation.
 When integer-keyed maps also have a known string-key table such as
-[`Cbor::KEYS`], [`diagnostic_pretty_with_key_comments`] can annotate the
+[`Cbor::KEYS`], [`to_cdn_pretty_with_key_comments`] can annotate the
 pretty output with `// "field"` comments without changing the decoded
 wire item.
 
 ```rust
 let bytes = hex::decode("bf61610161629f0203ffff").unwrap();
 assert_eq!(
-    cbor2::diagnostic(&bytes[..]).unwrap(),
+    cbor2::to_cdn(&bytes[..]).unwrap(),
     r#"{_ "a": 1, "b": [_ 2, 3]}"#
 );
 assert_eq!(
-    cbor2::diagnostic_pretty(&bytes[..]).unwrap(),
+    cbor2::to_cdn_pretty(&bytes[..]).unwrap(),
     "{_\n  \"a\": 1,\n  \"b\": [_\n    2,\n    3\n  ]\n}"
 );
 
 let keyed = hex::decode("a201626d6504182a").unwrap();
 let keys = [("iss", 1), ("exp", 4)];
 assert_eq!(
-    cbor2::diagnostic_pretty_with_key_comments(&keyed[..], &keys).unwrap(),
+    cbor2::to_cdn_pretty_with_key_comments(&keyed[..], &keys).unwrap(),
     "{\n  1: \"me\", // \"iss\"\n  4: 42 // \"exp\"\n}"
 );
 
 let value = cbor2::cbor!({ "k": [1, -2.5, null] }).unwrap();
 assert_eq!(value.to_string(), r#"{"k": [1, -2.5, null]}"#);
+
+let cdn = r#"{ /kty/ 1: 4, /k/ -1: h'6684523a' }"#;
+let bytes = cbor2::cdn_to_vec(cdn).unwrap();
+assert_eq!(cbor2::to_cdn(&bytes[..]).unwrap(), "{1: 4, -1: h'6684523a'}");
 ```
 
 # Low-level headers
@@ -538,6 +552,8 @@ extern crate alloc;
 
 #[cfg(all(feature = "alloc", feature = "std"))]
 pub mod async_io;
+#[cfg(feature = "alloc")]
+mod cdn;
 pub mod core;
 pub mod de;
 #[cfg(feature = "alloc")]
@@ -551,13 +567,18 @@ pub mod tag;
 #[cfg(feature = "alloc")]
 pub mod value;
 
+#[cfg(feature = "alloc")]
+pub use crate::cdn::{cdn_sequence_to_vec, cdn_to_vec, from_cdn};
 #[doc(inline)]
 pub use crate::de::validate;
 #[cfg(feature = "alloc")]
 #[doc(inline)]
 pub use crate::de::{from_reader, from_slice};
 #[cfg(feature = "alloc")]
-pub use crate::diag::{diagnostic, diagnostic_pretty, diagnostic_pretty_with_key_comments};
+pub use crate::diag::{
+    diagnostic, diagnostic_pretty, diagnostic_pretty_with_key_comments, to_cdn, to_cdn_pretty,
+    to_cdn_pretty_with_key_comments,
+};
 #[cfg(feature = "alloc")]
 pub use crate::raw::RawValue;
 #[doc(inline)]

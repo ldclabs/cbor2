@@ -135,6 +135,21 @@ fn encode_can_emit_copyable_hex() {
 }
 
 #[test]
+fn encode_diag_reads_cdn_text() {
+    assert_eq!(
+        ok(&["encode", "--diag", "--hex"], br#"{ /k/ 1: h'dead' }"#),
+        b"a10142dead\n"
+    );
+
+    // CDN input can be a sequence, matching the rest of the CLI's CBOR
+    // sequence handling.
+    assert_eq!(ok(&["encode", "--diag", "--hex"], br#"1 "x""#), b"016178\n");
+
+    let raw = ok(&["encode", "--diag"], br#"[_0 false, true]"#);
+    assert_eq!(raw, hex("9802f4f5"));
+}
+
+#[test]
 fn validate_reports_complete_cbor_sequences() {
     assert_eq!(ok(&["validate", "a1616101"], b""), b"valid\n");
     assert_eq!(ok(&["validate"], &hex("01a16374776f02")), b"valid\n");
@@ -183,6 +198,7 @@ fn help_and_version_print_and_exit_cleanly() {
         let text = String::from_utf8(out.stdout).unwrap();
         assert!(text.contains("Usage: cbor [COMMAND] [INPUT]"), "{text}");
         assert!(text.contains("--hex"), "{text}");
+        assert!(text.contains("Concise Diagnostic Notation"), "{text}");
         assert!(text.contains("validate"), "{text}");
     }
 
@@ -200,7 +216,6 @@ fn usage_errors_exit_with_status_2() {
         &["--bogus"][..],
         &["decode", "a1616101", "01"][..],
         &["--diag", "01"][..],
-        &["encode", "--diag"][..],
         &["--hex", "01"][..],
         &["decode", "--hex", "01"][..],
         &["/nonexistent/cbor_cli_test"][..],

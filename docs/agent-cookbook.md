@@ -16,8 +16,11 @@ then gives the correct `cbor2` shape and the mistake to avoid.
 | Preserve one raw item | `cbor2::RawValue` |
 | Work with unknown data | `cbor2::Value` or `cbor2::cbor!` |
 | Preserve CBOR simple values | `cbor2::Simple` or `Value::Simple` |
+| Render CBOR as CDN text | `cbor2::to_cdn(bytes)` / `to_cdn_pretty(bytes)` |
+| Encode Concise Diagnostic Notation | `cbor2::cdn_to_vec(cdn)` |
+| Deserialize Concise Diagnostic Notation | `cbor2::from_cdn::<T>(cdn)` |
 | Produce deterministic bytes | `cbor2::to_canonical_vec(&value)` |
-| Pretty-print integer-keyed maps with names | `cbor2::diagnostic_pretty_with_key_comments(bytes, T::KEYS)` |
+| Pretty-print integer-keyed maps with names | `cbor2::to_cdn_pretty_with_key_comments(bytes, T::KEYS)` |
 | Read/write one typed value async | `cbor2::async_io::read_value` / `write_value` |
 | Read from an untrusted async stream | `cbor2::async_io::read_value_with_limit` / `read_item_with_limit` |
 | Declare COSE-like structs | `#[derive(cbor2::Cbor)]` (feature `derive`) |
@@ -57,6 +60,26 @@ let items: Vec<cbor2::Value> = cbor2::de::Deserializer::from_reader(&stream[..])
     .unwrap();
 assert_eq!(items.len(), 2);
 assert!(cbor2::validate(&stream[..]).is_err());
+```
+
+## Encode CDN Fixtures
+
+Use `cdn_to_vec` when a test vector is clearer as Concise Diagnostic
+Notation than as JSON. CDN can express integer map keys, byte strings, tags,
+simple values, comments and encoding indicators directly.
+
+```rust
+let bytes = cbor2::cdn_to_vec(r#"{ /kty/ 1: 4, /k/ -1: h'6684523a' }"#).unwrap();
+assert_eq!(hex::encode(bytes), "a2010420446684523a");
+
+let value: cbor2::Value = cbor2::from_cdn(r#"{1: [2, 3]}"#).unwrap();
+assert_eq!(value.to_string(), "{1: [2, 3]}");
+```
+
+For terminal workflows, prefer copyable hex:
+
+```bash
+printf "{1: h'dead'}" | cbor encode --diag --hex
 ```
 
 ## Borrow Text and Bytes From Input
@@ -259,7 +282,7 @@ let bytes = cbor2::to_canonical_vec(&Claims {
 })
 .unwrap();
 
-let diag = cbor2::diagnostic_pretty_with_key_comments(&bytes[..], Claims::KEYS).unwrap();
+let diag = cbor2::to_cdn_pretty_with_key_comments(&bytes[..], Claims::KEYS).unwrap();
 assert_eq!(
     diag,
     "61({\n  1: \"me\", // \"iss\"\n  4: 1444064944 // \"exp\"\n})"
@@ -273,7 +296,7 @@ Common mistakes:
 - Do not use `#[serde(rename = "1")]` for integer keys; that creates a text
   key. Use `#[cbor(key = 1)]`.
 - Do not replace integer keys with text keys just to make diagnostics readable;
-  use `diagnostic_pretty_with_key_comments` with `T::KEYS`.
+  use `to_cdn_pretty_with_key_comments` with `T::KEYS`.
 - Do not combine `#[cbor(array)]` with per-field integer keys or
   `#[serde(flatten)]`; flatten is for map-shaped structs.
 
