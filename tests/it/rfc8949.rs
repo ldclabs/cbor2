@@ -256,14 +256,17 @@ fn undefined_decodes_as_null() {
 
 #[test]
 fn simple_values() {
-    // Unassigned simple values are rejected by the serde layer (a `Value`
-    // has no representation for them)...
-    for hex in ["f0", "f818", "f8ff"] {
-        let bytes = hex::decode(hex).unwrap();
-        assert!(cbor2::from_slice::<Value>(&bytes).is_err(), "{hex}");
-    }
+    // Unassigned simple values are preserved by the dynamic layer.
+    assert_eq!(
+        cbor2::from_slice::<Value>(&hex::decode("f0").unwrap()).unwrap(),
+        Value::Simple(cbor2::Simple::new(16).unwrap())
+    );
+    assert_eq!(
+        cbor2::from_slice::<Value>(&hex::decode("f8ff").unwrap()).unwrap(),
+        Value::Simple(cbor2::Simple::new(255).unwrap())
+    );
 
-    // ...and two-byte encodings of values below 32 are not well-formed.
+    // Two-byte encodings of values below 32 are not well-formed.
     for x in 0u8..32 {
         let err = cbor2::from_slice::<Value>(&[0xf8, x]).unwrap_err();
         assert!(matches!(err, cbor2::de::Error::Syntax(0)), "f8{x:02x}");

@@ -31,6 +31,7 @@ impl ser::Serialize for Value {
             Value::Bool(x) => serializer.serialize_bool(*x),
             Value::Text(x) => serializer.serialize_str(x),
             Value::Null => serializer.serialize_unit(),
+            Value::Simple(x) => serde::Serialize::serialize(x, serializer),
 
             Value::Tag(t, v) => {
                 let mut acc = serializer.serialize_tuple_variant(
@@ -230,6 +231,11 @@ impl ser::Serializer for Serializer<()> {
         value: &U,
     ) -> Result<Value, Error> {
         Ok(match (name, variant) {
+            (crate::simple::NAME, crate::simple::VALUE) => Value::Simple(
+                value
+                    .serialize(crate::simple::SimpleValueSerializer)
+                    .map_err(|_| ser::Error::custom("expected CBOR simple value"))?,
+            ),
             (crate::tag::NAME, crate::tag::UNTAGGED) => Value::serialized(value)?,
             _ => vec![(variant.into(), Value::serialized(value)?)].into(),
         })

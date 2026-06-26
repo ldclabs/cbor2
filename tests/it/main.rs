@@ -17,6 +17,7 @@ mod markers;
 mod raw;
 mod rfc8949;
 mod roundtrip;
+mod simple;
 mod size;
 mod tag;
 mod validate;

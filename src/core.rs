@@ -125,8 +125,7 @@ pub enum Header {
     /// A simple value (major type 7).
     ///
     /// Values 24 to 31 (inclusive) are reserved by RFC 8949 §3.3 and have no
-    /// well-formed encoding; pushing such a header produces output that any
-    /// conforming decoder (including this one) rejects.
+    /// well-formed encoding; pushing such a header returns an error.
     Simple(u8),
 
     /// A tag (major type 6).
@@ -245,6 +244,7 @@ impl<W: Write> Encoder<W> {
     pub(crate) fn simple(&mut self, value: u8) -> Result<(), crate::io::Error> {
         match value {
             0..=23 => self.0.write_all(&[0xe0 | value]),
+            24..=31 => Err(crate::io::ErrorKind::Other.into()),
             value => self.0.write_all(&[0xf8, value]),
         }
     }

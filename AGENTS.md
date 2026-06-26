@@ -7,9 +7,9 @@ CBOR examples.
 ## Cargo Setup
 
 The default build (`cbor2 = "1"`) is `std` and already covers `to_vec`,
-`to_writer`, `from_slice`, `from_reader`, `validate`, `Value`, `RawValue`,
-`cbor!`, the canonical encoders, diagnostics and the synchronous `async_io`
-helpers. Add a feature only for the rows that need one:
+`to_writer`, `from_slice`, `from_reader`, `validate`, `Value`, `Simple`,
+`RawValue`, `cbor!`, the canonical encoders, diagnostics and the synchronous
+`async_io` helpers. Add a feature only for the rows that need one:
 
 | Need | Manifest line |
 | --- | --- |
@@ -36,6 +36,7 @@ feature is the most common compile failure — set the manifest first.
 | Decode a CBOR sequence | `cbor2::de::Deserializer::into_iter` | Repeated `from_slice` on the same buffer |
 | Preserve exact encoded bytes | `cbor2::RawValue` | Decode/re-encode through typed structs |
 | Dynamic or unknown shape | `cbor2::Value` or `cbor2::cbor!` | Untyped maps of JSON strings |
+| Preserve CBOR simple values | `cbor2::Simple` or `Value::Simple` | Collapsing registered simple values into ad hoc integers |
 | Deterministic bytes for signatures | `to_canonical_vec` / `to_canonical_writer` | Plain `to_vec` on maps with unspecified order |
 | COSE integer keys, arrays, or tags | `#[derive(cbor2::Cbor)]` (feature `derive`) | `serde(rename = "1")` for integer keys |
 | Async read/write of a typed value | `cbor2::async_io::{read_value, write_value}` | Treating serde itself as async |
@@ -80,6 +81,9 @@ For agent-generated examples, prefer `cbor encode --hex` over raw
 - `#[cbor(tag = N)]` wraps the container in CBOR tag `N` on encode and treats
   tag layers as transparent on decode, so the same type accepts tagged *or*
   untagged input — no separate "bare" struct plus a `From` impl.
+- Generic CBOR simple values are represented by `cbor2::Simple` and
+  `Value::Simple`. Use `Simple::new(N)` when a registered simple value such as
+  SD-CWT `simple(59)` must appear as a map key.
 - `async_io::read_value`/`write_value` frame and (de)serialize one CBOR item in
   a single call. Drop to `read_item`/`write_item` only to borrow from or inspect
   the raw item bytes; serde itself stays synchronous on the buffered item.

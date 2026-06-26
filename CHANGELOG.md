@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.1.0] - 2026-06-26
+
+### Added
+
+* Added full CBOR simple value support through `cbor2::Simple` and
+  `Value::Simple`, including values used as map keys. Decoding generic simple
+  values now preserves them in `Value`, while explicitly decoding
+  `cbor2::Simple` also captures the built-in simple values 20 through 23.
+  The existing `cbor!` macro can construct these keys by inlining
+  `Simple::new(N).unwrap()` as an expression.
+
+### Fixed
+
+* `core::Encoder::push(Header::Simple(24..=31))` now rejects reserved simple
+  values instead of emitting malformed `0xf8` encodings that conforming
+  decoders reject.
+
+### Changed
+
+* Bumped `cbor2` to `1.1.0`.
+
 ## [1.0.7] - 2026-06-26
 
 ### Added

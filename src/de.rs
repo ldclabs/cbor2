@@ -16,6 +16,8 @@ use crate::core::{simple, tag};
 use crate::core::{Decoder, Header};
 use crate::io::Read;
 #[cfg(feature = "alloc")]
+use crate::simple::SimpleAccess;
+#[cfg(feature = "alloc")]
 use crate::tag::TagAccess;
 
 /// An error that occurred during deserialization.
@@ -816,6 +818,16 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
             };
         }
 
+        if let Header::Simple(x) = header {
+            if !matches!(
+                x,
+                simple::FALSE | simple::TRUE | simple::NULL | simple::UNDEFINED
+            ) {
+                let simple = crate::Simple::new(x).expect("decoder returns valid simple values");
+                return visitor.visit_enum(SimpleAccess::new(simple));
+            }
+        }
+
         self.source.push(header);
 
         match header {
@@ -1302,6 +1314,20 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
         _variants: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
+        if name == crate::simple::NAME {
+            loop {
+                return match self.source.pull()? {
+                    Header::Tag(..) => continue,
+                    Header::Simple(x) => {
+                        let simple =
+                            crate::Simple::new(x).expect("decoder returns valid simple values");
+                        visitor.visit_enum(SimpleAccess::new(simple))
+                    }
+                    header => Err(header.expected("simple value")),
+                };
+            }
+        }
+
         if name == crate::tag::NAME {
             let tag = match self.source.pull()? {
                 Header::Tag(x) => Some(x),

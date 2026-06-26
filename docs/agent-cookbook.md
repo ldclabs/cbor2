@@ -15,6 +15,7 @@ then gives the correct `cbor2` shape and the mistake to avoid.
 | Read adjacent CBOR items | `cbor2::de::Deserializer::from_reader(reader).into_iter()` |
 | Preserve one raw item | `cbor2::RawValue` |
 | Work with unknown data | `cbor2::Value` or `cbor2::cbor!` |
+| Preserve CBOR simple values | `cbor2::Simple` or `Value::Simple` |
 | Produce deterministic bytes | `cbor2::to_canonical_vec(&value)` |
 | Pretty-print integer-keyed maps with names | `cbor2::diagnostic_pretty_with_key_comments(bytes, T::KEYS)` |
 | Read/write one typed value async | `cbor2::async_io::read_value` / `write_value` |
@@ -140,6 +141,28 @@ assert_eq!(decoded.payload.as_bytes(), signed.payload.as_bytes());
 Common mistake: decoding a signed payload into a typed struct and then
 re-encoding it before verification. That can change map order, integer width,
 or definite/indefinite structure.
+
+## Preserve CBOR Simple Values
+
+Use `Simple` when a protocol registers a CBOR simple value outside serde's
+built-in bool/null shapes. `Value::Simple` can also appear as a map key.
+
+```rust
+use cbor2::{cbor, Simple, Value};
+
+let redacted_claim_keys = Simple::new(59).unwrap(); // SD-CWT #7.59
+let claims = cbor!({
+    (redacted_claim_keys) => [Value::Bytes(vec![0xde, 0xad, 0xbe, 0xef])],
+})
+.unwrap();
+
+let bytes = cbor2::to_vec(&claims).unwrap();
+assert_eq!(cbor2::from_slice::<Simple>(&[0xf8, 0x3b]).unwrap(), redacted_claim_keys);
+assert_eq!(cbor2::from_slice::<Value>(&bytes).unwrap(), claims);
+```
+
+Common mistake: representing a simple value as the integer `59`. CBOR
+`simple(59)` is major type 7 (`f8 3b`), not unsigned integer 59 (`18 3b`).
 
 ## Generate Deterministic Bytes
 

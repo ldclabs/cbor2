@@ -62,7 +62,8 @@ impl serde::ser::Error for Error {
 /// byte-level spelling. For example, indefinite-length strings are decoded
 /// into the same variants as definite-length strings, while unknown tags
 /// remain as [`Value::Tag`] and oversized bignums stay as tagged byte
-/// strings.
+/// strings. Generic simple values that do not have a dedicated serde shape are
+/// preserved as [`Value::Simple`].
 #[non_exhaustive]
 #[derive(Clone, PartialEq, PartialOrd)]
 pub enum Value {
@@ -92,6 +93,9 @@ pub enum Value {
 
     /// A map (major type 5).
     Map(Vec<(Value, Value)>),
+
+    /// A CBOR simple value (major type 7).
+    Simple(crate::Simple),
 }
 
 /// Formats the value as indented CBOR diagnostic notation (RFC 8949 §8).
@@ -267,6 +271,32 @@ impl Value {
         matches!(self, Value::Null)
     }
 
+    /// Returns true if the value is a CBOR simple value.
+    #[inline]
+    pub fn is_simple(&self) -> bool {
+        matches!(self, Value::Simple(..))
+    }
+
+    /// If the value is a CBOR simple value, returns it. Returns `None`
+    /// otherwise.
+    #[inline]
+    pub fn as_simple(&self) -> Option<crate::Simple> {
+        match self {
+            Value::Simple(x) => Some(*x),
+            _ => None,
+        }
+    }
+
+    /// If the value is a CBOR simple value, returns it as `Ok`. Returns
+    /// `Err(self)` otherwise.
+    #[inline]
+    pub fn into_simple(self) -> Result<crate::Simple, Self> {
+        match self {
+            Value::Simple(x) => Ok(x),
+            other => Err(other),
+        }
+    }
+
     /// Returns true if the value is a tag.
     #[inline]
     pub fn is_tag(&self) -> bool {
@@ -399,6 +429,7 @@ implfrom! {
     Text(&str),
 
     Bool(bool),
+    Simple(crate::Simple),
 
     Array(&[Value]),
     Array(Vec<Value>),
@@ -583,6 +614,7 @@ tryfrom_value! {
     f64: Float => "float",
     String: Text => "text",
     bool: Bool => "bool",
+    crate::Simple: Simple => "simple",
     Vec<Value>: Array => "array",
     Vec<(Value, Value)>: Map => "map",
 }

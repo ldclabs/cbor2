@@ -1,6 +1,6 @@
 //! Tests for diagnostic notation (RFC 8949 §8).
 
-use cbor2::{cbor, Value};
+use cbor2::{cbor, Simple, Value};
 
 fn diag(hex: &str) -> String {
     let bytes = hex::decode(hex).unwrap();
@@ -292,6 +292,10 @@ fn value_display_is_diagnostic_notation() {
     assert_eq!(Value::Bool(true).to_string(), "true");
     assert_eq!(Value::Null.to_string(), "null");
     assert_eq!(
+        Value::Simple(Simple::new(59).unwrap()).to_string(),
+        "simple(59)"
+    );
+    assert_eq!(
         Value::Tag(32, Box::new(Value::from("x"))).to_string(),
         "32(\"x\")"
     );
@@ -330,6 +334,7 @@ fn value_display_is_diagnostic_notation() {
         cbor!([1, "two", h_bytes(), 3.5]).unwrap(),
         cbor!({ "deep" => { 1 => [null, true] } }).unwrap(),
         Value::Tag(1, Box::new(Value::from(1363896240))),
+        Value::Simple(Simple::new(59).unwrap()),
     ] {
         let bytes = cbor2::to_vec(&value).unwrap();
         assert_eq!(cbor2::diagnostic(&bytes[..]).unwrap(), value.to_string());
@@ -369,6 +374,10 @@ fn value_debug_is_indented_diagnostic_notation() {
     assert_eq!(format!("{:?}", Value::Float(1.5)), "1.5");
     assert_eq!(format!("{:?}", Value::Bool(true)), "true");
     assert_eq!(format!("{:?}", Value::Null), "null");
+    assert_eq!(
+        format!("{:?}", Value::Simple(Simple::new(59).unwrap())),
+        "simple(59)"
+    );
     assert_eq!(format!("{:?}", Value::Bytes(vec![1, 2])), "h'0102'");
     assert_eq!(
         format!("{:?}", Value::from(u64::MAX as u128 + 1)),

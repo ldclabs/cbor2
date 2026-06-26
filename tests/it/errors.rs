@@ -148,17 +148,13 @@ fn encoder_helpers() {
     encoder.flush().unwrap();
     assert_eq!(buffer, b"\x42hi");
 
-    // Reserved simple values 24-31 encode to a two-byte form that any
-    // conforming decoder rejects (RFC 8949 §3.3).
+    // Reserved simple values 24-31 have no well-formed encoding
+    // (RFC 8949 §3.3).
     let mut buffer = Vec::new();
-    cbor2::core::Encoder::from(&mut buffer)
+    assert!(cbor2::core::Encoder::from(&mut buffer)
         .push(cbor2::core::Header::Simple(30))
-        .unwrap();
-    assert_eq!(buffer, [0xf8, 30]);
-    assert!(matches!(
-        cbor2::from_slice::<cbor2::Value>(&buffer),
-        Err(cbor2::de::Error::Syntax(0))
-    ));
+        .is_err());
+    assert!(buffer.is_empty());
 }
 
 #[test]

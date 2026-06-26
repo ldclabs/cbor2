@@ -808,6 +808,9 @@ pub(crate) fn write_value(out: &mut String, value: &Value) {
         Value::Bool(false) => out.push_str("false"),
         Value::Bool(true) => out.push_str("true"),
         Value::Null => out.push_str("null"),
+        Value::Simple(x) => {
+            let _ = write!(out, "simple({})", x.value());
+        }
 
         Value::Tag(t @ (tag::BIGPOS | tag::BIGNEG), inner) => match inner.as_ref() {
             Value::Bytes(payload) => write_bignum(out, *t, payload),

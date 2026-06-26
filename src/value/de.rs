@@ -6,6 +6,7 @@ use serde::de::{self, Deserializer as _};
 use super::{Error, Integer, Value};
 use crate::core::tag;
 use crate::ser::StructShape;
+use crate::simple::SimpleAccess;
 use crate::tag::TagAccess;
 
 impl From<Integer> for de::Unexpected<'_> {
@@ -33,6 +34,7 @@ impl<'a> From<&'a Value> for de::Unexpected<'a> {
             Value::Array(..) => Self::Seq,
             Value::Map(..) => Self::Map,
             Value::Null => Self::Other("null"),
+            Value::Simple(..) => Self::Other("simple"),
             Value::Tag(..) => Self::Other("tag"),
         }
     }
@@ -135,8 +137,8 @@ impl<'de> de::Visitor<'de> for Visitor {
         Ok(Value::Map(map))
     }
 
-    // The only enum a `Value` can absorb is the internal tag protocol; see
-    // the `tag` module.
+    // The only enums a `Value` can absorb are this crate's internal CBOR
+    // extension protocols; see the `tag` and `simple` modules.
     #[inline]
     fn visit_enum<A: de::EnumAccess<'de>>(self, acc: A) -> Result<Self::Value, A::Error> {
         use de::VariantAccess;
@@ -163,8 +165,15 @@ impl<'de> de::Visitor<'de> for Visitor {
         }
 
         let (name, data): (String, _) = acc.variant()?;
+        if name == crate::simple::VALUE {
+            let value = data.newtype_variant::<u8>()?;
+            let simple = crate::Simple::new(value)
+                .ok_or_else(|| de::Error::custom("invalid CBOR simple value"))?;
+            return Ok(Value::Simple(simple));
+        }
+
         if name != crate::tag::TAGGED {
-            return Err(de::Error::custom("expected tag"));
+            return Err(de::Error::custom("expected tag or simple value"));
         }
 
         data.tuple_variant(2, Inner)
@@ -259,6 +268,7 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
             Value::Map(x) => visitor.visit_map(self.nested(x.iter().peekable())),
             Value::Bool(x) => visitor.visit_bool(*x),
             Value::Null => visitor.visit_none(),
+            Value::Simple(x) => visitor.visit_enum(SimpleAccess::new(*x)),
 
             Value::Tag(t, v) => {
                 let parent = self.nested(v.as_ref());
@@ -569,6 +579,18 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
         variants: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
+        if name == crate::simple::NAME {
+            let mut value = self.0;
+            while let Value::Tag(.., v) = value {
+                value = v;
+            }
+
+            return match value {
+                Value::Simple(x) => visitor.visit_enum(SimpleAccess::new(*x)),
+                _ => Err(de::Error::invalid_type(value.into(), &"simple value")),
+            };
+        }
+
         if name == crate::tag::NAME {
             let (tag, val) = match self.0 {
                 Value::Tag(t, v) => (Some(*t), v.as_ref()),

@@ -433,6 +433,13 @@ impl<'a, W: Write> ser::Serializer for &'a mut Serializer<W> {
         variant: &'static str,
         value: &U,
     ) -> Result<(), Error> {
+        if name == crate::simple::NAME && variant == crate::simple::VALUE {
+            let simple = value
+                .serialize(crate::simple::SimpleValueSerializer)
+                .map_err(|_| Error::msg("expected CBOR simple value"))?;
+            return Ok(self.0.simple(simple.value())?);
+        }
+
         if name != crate::tag::NAME || variant != crate::tag::UNTAGGED {
             self.0.map(Some(1))?;
             self.serialize_str(variant)?;

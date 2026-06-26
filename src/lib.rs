@@ -9,8 +9,8 @@ implementation size, message size and extensibility.
 
 Feature coverage includes ordinary serde encode/decode, RFC 8949 preferred
 serialization, deterministic/canonical encoders, a dynamic [`Value`] type,
-validated [`RawValue`] pass-through bytes, semantic tags, bignums, COSE-style
-integer map keys, arrays and tags through `#[derive(Cbor)]`, CBOR
+validated [`RawValue`] pass-through bytes, CBOR simple values, semantic tags,
+bignums, COSE-style integer map keys, arrays and tags through `#[derive(Cbor)]`, CBOR
 sequences, async item I/O through [`async_io`], diagnostic notation,
 exact-one-item [`validate`], allocation-free serialization helpers and
 `no_std` modes.
@@ -138,17 +138,21 @@ When the shape of the data is not known in advance, decode into a
 builds `Value`s with a JSON-like syntax:
 
 ```rust
-use cbor2::{cbor, Value};
+use cbor2::{cbor, Simple, Value};
 
 let value = cbor!({
     "code": 415,
     "message": null,
     "tags": ["legacy", 1.5],
+    (Simple::new(59).unwrap()) => [Value::Bytes(vec![0xde, 0xad])],
 }).unwrap();
 
 let bytes = cbor2::to_vec(&value).unwrap();
 let back: Value = cbor2::from_slice(&bytes).unwrap();
 assert_eq!(value, back);
+
+let simple: Simple = cbor2::from_slice(&[0xf8, 0x3b]).unwrap();
+assert_eq!(simple, Simple::new(59).unwrap());
 ```
 
 `Value::serialized` and `Value::deserialized` convert between `Value` and
@@ -542,6 +546,7 @@ pub mod io;
 #[cfg(feature = "alloc")]
 mod raw;
 pub mod ser;
+pub mod simple;
 pub mod tag;
 #[cfg(feature = "alloc")]
 pub mod value;
@@ -562,6 +567,7 @@ pub use crate::ser::{serialized_size, to_slice, to_writer};
 pub use crate::ser::{
     to_canonical_vec, to_canonical_vec_with, to_canonical_writer, to_canonical_writer_with, to_vec,
 };
+pub use crate::simple::Simple;
 #[cfg(feature = "alloc")]
 #[doc(inline)]
 pub use crate::value::{KeyOrder, Value};

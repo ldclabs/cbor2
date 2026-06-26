@@ -284,8 +284,9 @@ fn encode(input: Box<dyn Read>, output: EncodeOutput) -> Result<(), Error> {
 // CBOR constructs that have no JSON equivalent are converted as follows:
 // byte strings become lowercase hex strings, non-string map keys are
 // JSON-encoded into strings, non-finite floats become null, tags are
-// dropped (the inner value is kept), integers beyond the 64-bit ranges
-// become strings and the "undefined" simple value becomes null.
+// dropped (the inner value is kept), generic simple values become
+// `simple(N)` strings, integers beyond the 64-bit ranges become strings
+// and the "undefined" simple value becomes null.
 fn to_json(value: Value) -> serde_json::Value {
     use serde_json::Value as Json;
 
@@ -301,6 +302,7 @@ fn to_json(value: Value) -> serde_json::Value {
         Value::Float(x) => serde_json::Number::from_f64(x).map_or(Json::Null, Json::Number),
         Value::Bytes(x) => Json::String(hex(&x)),
         Value::Text(x) => Json::String(x),
+        Value::Simple(x) => Json::String(format!("simple({})", x.value())),
         Value::Tag(_, x) => to_json(*x),
         Value::Array(x) => Json::Array(x.into_iter().map(to_json).collect()),
         Value::Map(x) => Json::Object(

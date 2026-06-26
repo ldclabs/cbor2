@@ -1,7 +1,7 @@
 //! Exhaustive tests for `Value` accessors, conversions and `Integer`.
 
 use cbor2::value::Integer;
-use cbor2::Value;
+use cbor2::{Simple, Value};
 
 #[test]
 fn accessors_match_their_variant() {
@@ -15,6 +15,7 @@ fn accessors_match_their_variant() {
     assert!(v.as_bytes().is_none() && v.as_bytes_mut().is_none());
     assert!(v.as_float().is_none() && v.as_text().is_none());
     assert!(v.as_text_mut().is_none() && v.as_bool().is_none());
+    assert!(v.as_simple().is_none() && !v.is_simple());
     assert!(v.as_tag().is_none() && v.as_tag_mut().is_none());
     assert!(v.as_array().is_none() && v.as_array_mut().is_none());
     assert!(v.as_map().is_none() && v.as_map_mut().is_none());
@@ -44,6 +45,11 @@ fn accessors_match_their_variant() {
 
     assert!(Value::Null.is_null());
     assert!(!Value::Bool(false).is_null());
+
+    let v = Value::Simple(Simple::new(59).unwrap());
+    assert!(v.is_simple());
+    assert_eq!(v.as_simple(), Some(Simple::new(59).unwrap()));
+    assert_eq!(v.clone().into_simple(), Ok(Simple::new(59).unwrap()));
 
     let mut v = Value::Tag(7, Box::new(Value::Null));
     assert!(v.is_tag());
@@ -76,6 +82,7 @@ fn into_conversions_return_self_on_mismatch() {
     assert_eq!(v.clone().into_float(), Err(Value::Null));
     assert_eq!(v.clone().into_text(), Err(Value::Null));
     assert_eq!(v.clone().into_bool(), Err(Value::Null));
+    assert_eq!(v.clone().into_simple(), Err(Value::Null));
     assert_eq!(v.clone().into_tag(), Err(Value::Null));
     assert_eq!(v.clone().into_array(), Err(Value::Null));
     assert_eq!(v.into_map(), Err(Value::Null));
@@ -104,6 +111,10 @@ fn from_impls() {
     assert_eq!(Value::from('水'), Value::Text("水".into()));
 
     assert_eq!(Value::from(true), Value::Bool(true));
+    assert_eq!(
+        Value::from(Simple::new(59).unwrap()),
+        Value::Simple(Simple::new(59).unwrap())
+    );
 
     let items = [Value::Null];
     assert_eq!(Value::from(&items[..]), Value::Array(vec![Value::Null]));
@@ -272,6 +283,10 @@ fn std_scalar_conversions() {
     assert_eq!(String::try_from(Value::from("hi")).unwrap(), "hi");
     assert_eq!(Vec::<u8>::try_from(Value::from(b"ab")).unwrap(), b"ab");
     assert!(bool::try_from(Value::from(true)).unwrap());
+    assert_eq!(
+        Simple::try_from(Value::Simple(Simple::new(59).unwrap())).unwrap(),
+        Simple::new(59).unwrap()
+    );
     assert_eq!(f64::try_from(Value::from(1.5)).unwrap(), 1.5);
     assert_eq!(char::try_from(Value::from('x')).unwrap(), 'x');
     assert_eq!(Integer::try_from(Value::from(7)).unwrap(), Integer::from(7));

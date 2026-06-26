@@ -2,7 +2,7 @@
 
 Full-featured [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949) CBOR for
 Rust: async item I/O, serde round trips, canonical/deterministic encoding,
-`Value`/`RawValue`, COSE-style integer map keys, semantic tags,
+`Value`/`RawValue`, CBOR simple values, COSE-style integer map keys, semantic tags,
 diagnostic notation, `no_std`, and a separately available well-formedness check.
 
 [![CI](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml/badge.svg)](https://github.com/ldclabs/cbor2/actions/workflows/ci.yml)
@@ -22,7 +22,7 @@ from `std` services down to constrained `no_std` targets.
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
 | Serde encode/decode      | `to_vec`, `to_writer`, borrowing `from_slice`, `from_reader` and direct support for derived serde types.                 |
 | Stable protocol bytes    | RFC 8949 preferred serialization plus deterministic/canonical encoders and selectable map key ordering.                  |
-| Protocol CBOR            | Semantic tags, bignums, integer map keys, field-order arrays and COSE-style tags with `#[derive(cbor2::Cbor)]`.          |
+| Protocol CBOR            | Simple values, semantic tags, bignums, integer map keys, field-order arrays and COSE-style tags with `#[derive(cbor2::Cbor)]`. |
 | Dynamic or unknown data  | `Value`, the `cbor!` macro and `RawValue` for validated pass-through bytes.                                              |
 | Safe input handling      | Exact-one-item well-formedness check, CBOR sequence iteration, recursion limits and guarded allocation sizes.            |
 | Async boundaries         | `async_io` reads or writes one complete CBOR item without pretending serde itself is async.                              |
@@ -167,6 +167,9 @@ CBOR sequences and canonical encoding.
   encoded in their smallest lossless form, including half-precision floats.
 * **A dynamic `Value` type** — the CBOR analogue of `serde_json::Value`,
   with a `cbor!` macro for building values in JSON-like syntax.
+* **CBOR simple values** — `Simple` and `Value::Simple` preserve registered
+  and unassigned simple values beyond serde's built-in bool/null shapes,
+  including map keys such as SD-CWT's `simple(59)`.
 * **Tag support** — capture and emit semantic tags (RFC 8949 §3.4) through
   the wrapper types in the `tag` module; `u128`/`i128` map to bignum tags
   automatically.
@@ -486,17 +489,21 @@ assert!(Sign1::ARRAY);
 ### Dynamic values
 
 ```rust
-use cbor2::{cbor, Value};
+use cbor2::{cbor, Simple, Value};
 
 let value = cbor!({
     "code": 415,
     "message": null,
     "extra": { "numbers": [8.2341e+4, 0.251425] },
+    (Simple::new(59).unwrap()) => [Value::Bytes(vec![0xde, 0xad, 0xbe, 0xef])],
 }).unwrap();
 
 let bytes = cbor2::to_vec(&value).unwrap();
 let back: Value = cbor2::from_slice(&bytes).unwrap();
 assert_eq!(value, back);
+
+let simple: Simple = cbor2::from_slice(&[0xf8, 0x3b]).unwrap();
+assert_eq!(simple, Simple::new(59).unwrap());
 ```
 
 ### Raw values
