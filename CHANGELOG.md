@@ -2,14 +2,23 @@
 
 ## [1.1.2] - 2026-06-28
 
+### Added
+
+* Added Windows x86_64 release artifacts for `cbor2-cli`, including a
+  `Cbor2CliSetup-windows-x86_64.exe` installer that installs `cbor.exe`, adds
+  the install directory to the user `PATH`, and provides an uninstall shortcut.
+* Added optional Azure Artifact Signing integration for Windows release
+  binaries and installers, with signature verification when signing is
+  configured.
+
 ### Changed
 
 * `cbor decode` now prints lossless diagnostic notation by default. Use
-  `cbor decode --json` for the lossy JSON projection; `--diag` remains accepted
-  as an explicit spelling of the default.
+  `cbor decode --json` for the lossy JSON projection; `--diag` and `--cdn` are
+  accepted as explicit spellings of the default.
 * `cbor encode` now accepts JSON-compatible values and CDN text by default. Use
   `--json` to force strict JSON input, or `--diag`/`--cdn` to force CDN input.
-* Updated the optional CDN hash dependencies to `sha2` 0.11 and `sha3` 0.12.
+* Updated the optional CDN hash dependencies to `sha2` 0.11 and `shake` 0.1.
 * Bumped `cbor2`, `cbor2-cli` and `cbor2-derive` to `1.1.2`.
 
 ## [1.1.1] - 2026-06-28

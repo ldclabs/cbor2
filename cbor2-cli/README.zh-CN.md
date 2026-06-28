@@ -14,6 +14,10 @@ cargo install cbor2-cli   # 安装 cbor 二进制文件
 brew install ldclabs/tap/cbor2-cli   # 安装 cbor 二进制文件
 ```
 
+Windows 安装包会随 GitHub Release 发布：
+[`Cbor2CliSetup-windows-x86_64.exe`](https://github.com/ldclabs/cbor2/releases/latest/download/Cbor2CliSetup-windows-x86_64.exe)。
+安装程序会把 `%LOCALAPPDATA%\Programs\cbor2-cli` 加入用户 `PATH`；安装后请打开新的终端再运行 `cbor`。
+
 ```text
 用法: cbor [COMMAND] [INPUT]
 
@@ -105,7 +109,7 @@ $ cbor bf61610161629f0203ffff      # 传输细节得以保留
 
 ## decode
 
-`cbor decode` 默认将每个数据项美化输出为带缩进的诊断表示法。添加 `--json` 才会使用有损的 JSON 投影。诊断表示法路径会读取原始数据项字节，因此它保留了不定长度和其他传输细节；JSON 路径则通过 `Value` 进行解码，因此使用的是兼容 JSON 的拼写方式。`-d`/`--diag` 仍可作为默认行为的显式写法。
+`cbor decode` 默认将每个数据项美化输出为带缩进的诊断表示法/CDN。添加 `--json` 才会使用有损的 JSON 投影。诊断表示法/CDN 路径会读取原始数据项字节，因此它保留了不定长度和其他传输细节；JSON 路径则通过 `Value` 进行解码，因此使用的是兼容 JSON 的拼写方式。`-d`/`--diag` 和 `--cdn` 仍可作为默认行为的显式写法。
 
 ```bash
 $ cbor decode a1018202036466697665f5

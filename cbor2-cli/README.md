@@ -17,6 +17,11 @@ Or install it from the ldclabs Homebrew tap:
 brew install ldclabs/tap/cbor2-cli   # installs the `cbor` binary
 ```
 
+Windows installers are attached to GitHub releases:
+[`Cbor2CliSetup-windows-x86_64.exe`](https://github.com/ldclabs/cbor2/releases/latest/download/Cbor2CliSetup-windows-x86_64.exe).
+The installer adds `%LOCALAPPDATA%\Programs\cbor2-cli` to the user `PATH`;
+open a new terminal before running `cbor`.
+
 ```text
 Usage: cbor [COMMAND] [INPUT]
 
@@ -125,10 +130,10 @@ $ cbor bf61610161629f0203ffff      # wire details survive
 
 `cbor decode` pretty-prints each item as indented diagnostic notation by
 default. Add `--json` to use the lossy JSON projection instead. The
-diagnostic path reads raw item bytes, so it preserves indefinite lengths and
-other wire details; the JSON path decodes through `Value` and therefore uses
-JSON-compatible spelling. `-d`/`--diag` remains available as an explicit
-spelling of the default.
+diagnostic/CDN path reads raw item bytes, so it preserves indefinite lengths
+and other wire details; the JSON path decodes through `Value` and therefore
+uses JSON-compatible spelling. `-d`/`--diag` and `--cdn` remain available as
+explicit spellings of the default.
 
 ```bash
 $ cbor decode a1018202036466697665f5

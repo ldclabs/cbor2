@@ -99,6 +99,10 @@ brew install ldclabs/tap/cbor2-cli   # Homebrew，安装 cbor
 cargo install cbor2-cli              # Cargo，安装 cbor
 ```
 
+Windows 用户可以从最新 GitHub Release 下载
+[`Cbor2CliSetup-windows-x86_64.exe`](https://github.com/ldclabs/cbor2/releases/latest/download/Cbor2CliSetup-windows-x86_64.exe)。
+安装程序会将 `cbor.exe` 放到 `%LOCALAPPDATA%\Programs\cbor2-cli`，并把该目录加入用户 `PATH`；安装后请打开新的终端再运行 `cbor`。
+
 ```rust
 use serde::{Deserialize, Serialize};
 
@@ -507,12 +511,16 @@ cargo run --features derive --example cwt
 
 ## 命令行工具
 
-工作区在 [`cbor2-cli`](cbor2-cli/README.md) 中提供了一个 `cbor` 命令行工具。原生的 `cbor` 命令可将任何 CBOR（来自文件、标准输入、十六进制字符串或 base64 字符串）显示为诊断表示法（RFC 8949 §8，规范化为 CDN）；`decode` 默认显示美化诊断表示法，并使用 `--json` 转换为易读但有损的 JSON，`encode` 将 JSON 兼容值或 CDN 文本转换为 CBOR，`encode --json` 强制使用严格 JSON 输入，`encode --diag`/`--cdn` 强制使用 CDN 输入，`encode --hex` 打印可复制的 CBOR 十六进制以用于智能体和文档，而 `validate` 则用于验证完整的 CBOR 输入：
+工作区在 [`cbor2-cli`](cbor2-cli/README.md) 中提供了一个 `cbor` 命令行工具。原生的 `cbor` 命令可将任何 CBOR（来自文件、标准输入、十六进制字符串或 base64 字符串）显示为诊断表示法（RFC 8949 §8，规范化为 CDN）；`decode` 默认显示美化诊断表示法，并使用 `--json` 转换为易读但有损的 JSON，`encode` 将 JSON 兼容值或 CDN 文本转换为 CBOR，`encode --json` 强制使用严格 JSON 输入，`decode`/`encode --diag`/`--cdn` 使用 CDN 表示法，`encode --hex` 打印可复制的 CBOR 十六进制以用于智能体和文档，而 `validate` 则用于验证完整的 CBOR 输入：
 
 ```bash
 brew install ldclabs/tap/cbor2-cli   # Homebrew
 cargo install cbor2-cli              # Cargo
 ```
+
+Windows 用户可以下载最新的
+[`Cbor2CliSetup-windows-x86_64.exe`](https://github.com/ldclabs/cbor2/releases/latest/download/Cbor2CliSetup-windows-x86_64.exe)
+安装包；安装完成后打开新的终端并运行 `cbor --help`。
 
 ```bash
 $ cbor bf61610161629f0203ffff

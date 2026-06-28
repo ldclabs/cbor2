@@ -92,7 +92,7 @@ fn hash_alg_from_name(name: &str, offset: usize) -> Result<HashAlg, Error> {
 #[cfg(feature = "cdn")]
 pub(super) fn hash_atom(data: Vec<u8>, alg: Option<HashAlg>, offset: usize) -> Result<Atom, Error> {
     use sha2::{Digest, Sha256, Sha384, Sha512, Sha512_256};
-    use sha3::{
+    use shake::{
         digest::{ExtendableOutput, Update, XofReader},
         Shake128, Shake256,
     };

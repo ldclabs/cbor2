@@ -106,6 +106,10 @@ fn decode_pretty_prints_diagnostic_notation_by_default() {
     let out = ok(&["decode", "--diag", "01"], b"");
     assert_eq!(out, b"1\n");
 
+    // `--cdn` is the same explicit spelling, using the current CDN name.
+    let out = ok(&["decode", "--cdn", "01"], b"");
+    assert_eq!(out, b"1\n");
+
     // The wire-level path preserves indefinite-length markers; `-d` is the
     // short form.
     let out = ok(&["decode", "-d", "bf0101ff"], b"");
@@ -233,12 +237,12 @@ fn usage_errors_exit_with_status_2() {
         &["--bogus"][..],
         &["decode", "a1616101", "01"][..],
         &["decode", "--diag", "--json", "01"][..],
+        &["decode", "--cdn", "--json", "01"][..],
         &["--diag", "01"][..],
         &["--json", "01"][..],
         &["--cdn", "01"][..],
         &["--hex", "01"][..],
         &["decode", "--hex", "01"][..],
-        &["decode", "--cdn", "01"][..],
         &["encode", "--json", "--diag"][..],
         &["encode", "--json", "--cdn"][..],
         &["/nonexistent/cbor_cli_test"][..],

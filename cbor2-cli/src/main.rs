@@ -3,10 +3,11 @@
 //! Without a command, shows every CBOR item in the input as pretty diagnostic
 //! notation (RFC 8949 §8), exactly as it appears on the wire.
 //! `decode` shows CBOR items as pretty-printed diagnostic notation, or
-//! converts them to pretty-printed JSON with `--json`; `encode` converts
-//! JSON-compatible values or CDN text into CBOR items, optionally restricted
-//! with `--json`, `--diag` or `--cdn`, and optionally as copyable hex text
-//! with `--hex`;
+//! converts them to pretty-printed JSON with `--json`; `--diag` and `--cdn`
+//! are explicit spellings of the default diagnostic/CDN output. `encode`
+//! converts JSON-compatible values or CDN text into CBOR items, optionally
+//! restricted with `--json`, `--diag` or `--cdn`, and optionally as copyable
+//! hex text with `--hex`;
 //! `validate` checks one or more complete CBOR items. Data errors exit with
 //! status 1, usage errors with status 2.
 //!
@@ -51,7 +52,8 @@ Input:
 Options:
   -d, --diag     With `decode`: print diagnostic notation (the default)
                  With `encode`: read only Concise Diagnostic Notation
-      --cdn      With `encode`: read only Concise Diagnostic Notation
+      --cdn      With `decode`: print Concise Diagnostic Notation (the default)
+                 With `encode`: read only Concise Diagnostic Notation
       --json     With `decode`: print pretty JSON instead of diagnostic notation
                  With `encode`: read only JSON text
       --hex      With `encode`: print lowercase hex text instead of raw bytes
@@ -179,12 +181,12 @@ fn parse_args() -> (
             "`--diag` only applies to `decode` or `encode`"
         ));
     }
-    if cdn && !matches!(command, Command::Encode) {
-        usage_error(format_args!("`--cdn` only applies to `encode`"));
+    if cdn && !matches!(command, Command::Decode | Command::Encode) {
+        usage_error(format_args!("`--cdn` only applies to `decode` or `encode`"));
     }
-    if matches!(command, Command::Decode) && diag && json {
+    if matches!(command, Command::Decode) && json && (diag || cdn) {
         usage_error(format_args!(
-            "`--diag` and `--json` cannot be used together"
+            "`--json` cannot be combined with `--diag` or `--cdn`"
         ));
     }
     if matches!(command, Command::Encode) && json && (diag || cdn) {

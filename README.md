@@ -121,6 +121,12 @@ brew install ldclabs/tap/cbor2-cli   # Homebrew, installs `cbor`
 cargo install cbor2-cli              # Cargo, installs `cbor`
 ```
 
+On Windows, download
+[`Cbor2CliSetup-windows-x86_64.exe`](https://github.com/ldclabs/cbor2/releases/latest/download/Cbor2CliSetup-windows-x86_64.exe)
+from the latest GitHub release. The installer places `cbor.exe` under
+`%LOCALAPPDATA%\Programs\cbor2-cli`, adds that directory to the user `PATH`,
+and requires opening a new terminal before running `cbor`.
+
 ```rust
 use serde::{Deserialize, Serialize};
 
@@ -664,13 +670,17 @@ file, stdin, a hex string or a base64 string — as diagnostic notation
 (RFC 8949 §8, formalized as CDN); `decode` shows pretty diagnostic notation
 by default and converts to pretty JSON with `--json`, `encode` converts
 JSON-compatible values or CDN text to CBOR, `encode --json` forces strict JSON
-input, `encode --diag`/`--cdn` force CDN input, `encode --hex` prints copyable
+input, `decode`/`encode --diag`/`--cdn` use CDN notation, `encode --hex` prints copyable
 CBOR hex for agents and docs, and `validate` checks complete CBOR input:
 
 ```bash
 brew install ldclabs/tap/cbor2-cli   # Homebrew
 cargo install cbor2-cli              # Cargo
 ```
+
+On Windows, download the latest
+[`Cbor2CliSetup-windows-x86_64.exe`](https://github.com/ldclabs/cbor2/releases/latest/download/Cbor2CliSetup-windows-x86_64.exe)
+installer, then open a new terminal and run `cbor --help`.
 
 ```bash
 $ cbor bf61610161629f0203ffff
