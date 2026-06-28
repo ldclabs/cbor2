@@ -143,6 +143,20 @@ fn parses_application_extensions() {
     );
     assert_eq!(hex("float'fe00'"), "f9fe00");
     assert_eq!(hex("float'fe00'_2"), "faffc00000");
+    assert_eq!(hex("bytes<<>>"), "40");
+    assert_eq!(hex("bytes`text1`"), "457465787431");
+    assert_eq!(hex(r#"bytes<<"1", "2">>"#), "423132");
+    assert_eq!(hex(r#"bytes<<"ä", h'2f'>>"#), "43c3a42f");
+    assert_eq!(
+        hex("same<< float'47110815', 37128.08203125, 0x1.22102ap+15 >>"),
+        "fa47110815"
+    );
+    assert_eq!(
+        hex("same<< h'a10101', <<{/alg/ 1: 1 /AES-GCM 128/}>> >>"),
+        "43a10101"
+    );
+    assert_eq!(hex("same<<1>>"), "01");
+    assert_eq!(hex("same<<1, 1_1>>"), "01");
 }
 
 #[cfg(feature = "cdn")]
@@ -449,6 +463,40 @@ fn draft26_float_examples() {
 }
 
 #[test]
+fn draft_bormann_edn_app_ext_examples() {
+    // Examples from draft-bormann-cbor-edn-app-ext-01.
+    assert_cdn_eq("bytes<<>>", "h''");
+    assert_cdn_eq("bytes`text1`", "h'7465787431'");
+    assert_cdn_eq(r#"bytes<<"1", "2">>"#, "h'3132'");
+    assert_cdn_eq(r#"bytes<<"ä", h'2f'>>"#, "h'C3A42F'");
+    assert_cdn_eq(r#"bytes<<"ä", h'2f'>>"#, "'ä/'");
+    assert_hex(r#"bytes<<"1", "2">>_1"#, "5900023132");
+
+    assert_cdn_eq(
+        "same<< float'47110815', 37128.08203125, 0x1.22102ap+15 >>",
+        "float'47110815'",
+    );
+    assert_cdn_eq(
+        "same<< h'a10101', <<{/alg/ 1: 1 /AES-GCM 128/}>> >>",
+        "h'A10101'",
+    );
+    assert_cdn_eq("same<<1>>", "1");
+    assert_cdn_eq("same<<1, 1_1>>", "1");
+    assert!(cdn_to_vec("same<< float'47110815', 37128.08203126 >>").is_err());
+
+    assert_hex("[float'fe00', float'47110815']", "82f9fe00fa47110815");
+    assert_cdn_eq(
+        "same<< float'47110815', 0x1.22102ap+15 >>",
+        "float'47110815'",
+    );
+
+    assert!(cdn_to_vec("same<<>>").is_err());
+    assert!(cdn_to_vec("same<<1, 2>>").is_err());
+    assert!(cdn_to_vec("bytes<<1>>").is_err());
+    assert!(cdn_to_vec("bytes<<...>>").is_err());
+}
+
+#[test]
 fn draft26_elision_examples() {
     assert_cdn_eq("[1, 2, ..., 3]", "[1, 2, 888(null), 3]");
     assert_cdn_eq(
@@ -567,6 +615,17 @@ fn parses_sequences_and_deserializes() {
     );
     let value: Value = from_cdn("{1: [2, 3]}").unwrap();
     assert_eq!(value.to_string(), "{1: [2, 3]}");
+}
+
+#[test]
+fn public_cdn_module_exports_input_and_output_helpers() {
+    let result: Result<Vec<u8>, crate::cdn::Error> = crate::cdn::cdn_to_vec(r#"{1: "one"}"#);
+    let bytes = result.unwrap();
+    assert_eq!(crate::cdn::to_cdn(&bytes[..]).unwrap(), r#"{1: "one"}"#);
+    assert_eq!(
+        crate::cdn::cdn_sequence_to_vec(r#"1 "two""#).unwrap(),
+        Vec::from([0x01, 0x63, b't', b'w', b'o'])
+    );
 }
 
 #[test]

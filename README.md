@@ -210,8 +210,12 @@ CBOR sequences and canonical encoding.
   values; the older `diagnostic*` names remain as compatibility aliases. CDN
   input covers comments, base-encoded byte strings, embedded CBOR sequences,
   encoding indicators, tags, simple values and CDN application extensions such
-  as `dt`, `ip`, `b1` and `t1`; enable the `cdn` feature for `hash`, `cri` and
-  `CRI`. `Value` implements `Display` with the same notation and `Debug` as
+  as `dt`/`DT`, `ip`/`IP`, `b1`/`t1`, `ilbs`/`ilts`, `bytes`, `same` and
+  `float`; enable the `cdn` feature for `hash`, `cri` and `CRI`.
+  `bytes<<"ä", h'2f'>>` produces `h'c3a42f'`, while
+  `same<< float'47110815', 0x1.22102ap+15 >>` checks alternate spellings of
+  the same item and emits the first one. `Value` implements `Display` with
+  the same notation and `Debug` as
   its indented form. For integer-keyed protocol maps,
   `to_cdn_pretty_with_key_comments` can add CDN `// "iss"` comments beside the
   wire integer keys.
@@ -679,6 +683,9 @@ $ echo '{"name": "example", "ok": true}' | cbor encode | cbor decode
 
 $ echo '{"name": "example", "ok": true}' | cbor encode --hex
 a2646e616d65676578616d706c65626f6bf5
+
+$ printf "bytes<<\"hi\", h'2f'>>" | cbor encode --diag --hex
+4368692f
 
 $ cbor validate a2646e616d65676578616d706c65626f6bf5
 valid

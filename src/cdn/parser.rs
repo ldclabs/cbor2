@@ -8,8 +8,9 @@ use crate::core::{f64_to_f16, tag, Encoder, Header};
 use crate::de::{Error, DEFAULT_RECURSION_LIMIT};
 
 use super::applications::{
-    append_indefinite_string_chunk, base64_content, concat_app_strings, hex_atom, hex_content,
-    one_bytes_arg, one_text_arg, unresolved_app_sequence, unresolved_app_string,
+    append_indefinite_string_chunk, base64_content, concat_app_strings, concat_bytes, hex_atom,
+    hex_content, one_bytes_arg, one_text_arg, same_args, unresolved_app_sequence,
+    unresolved_app_string,
 };
 #[cfg(feature = "cdn")]
 use super::cri::cri_atom;
@@ -915,6 +916,7 @@ impl<'a> Parser<'a> {
                 out.push(0xff);
                 Ok(Atom::Raw(out))
             }
+            "bytes" => Ok(Atom::Bytes(content.into_bytes())),
             "float" => float_atom(hex_content(&content, self.pos)?, self.pos),
             _ => unresolved_app_string(prefix, content, self.pos),
         }
@@ -931,6 +933,8 @@ impl<'a> Parser<'a> {
                 ip_atom(&content, prefix == "IP", self.pos)
             }
             "b1" | "t1" => concat_app_strings(prefix, args, self.pos),
+            "bytes" => concat_bytes(args, self.pos),
+            "same" => same_args(args, self.pos),
             "ilbs" | "ilts" => {
                 let want_major = if prefix == "ilbs" { 2 } else { 3 };
                 let mut out = Vec::new();

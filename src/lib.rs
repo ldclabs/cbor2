@@ -401,7 +401,8 @@ assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
 The API names keep the two directions separate:
 
 * [`to_cdn`] and [`to_cdn_pretty`] render CBOR bytes **to** CDN text.
-* `cdn*` and [`from_cdn`] parse CDN text **to** CBOR bytes or serde values.
+* [`cdn_to_vec`], [`cdn_sequence_to_vec`] and [`from_cdn`] parse CDN text
+  **to** CBOR bytes or serde values.
 * The historical `diagnostic*` names remain available as compatibility
   aliases for the corresponding `to_cdn*` functions.
 
@@ -556,7 +557,7 @@ extern crate alloc;
 #[cfg(all(feature = "alloc", feature = "std"))]
 pub mod async_io;
 #[cfg(feature = "alloc")]
-mod cdn;
+pub mod cdn;
 pub mod core;
 pub mod de;
 #[cfg(feature = "alloc")]
@@ -571,17 +572,17 @@ pub mod tag;
 pub mod value;
 
 #[cfg(feature = "alloc")]
-pub use crate::cdn::{cdn_sequence_to_vec, cdn_to_vec, from_cdn};
+pub use crate::cdn::{
+    cdn_sequence_to_vec, cdn_to_vec, from_cdn, to_cdn, to_cdn_pretty,
+    to_cdn_pretty_with_key_comments,
+};
 #[doc(inline)]
 pub use crate::de::validate;
 #[cfg(feature = "alloc")]
 #[doc(inline)]
 pub use crate::de::{from_reader, from_slice};
 #[cfg(feature = "alloc")]
-pub use crate::diag::{
-    diagnostic, diagnostic_pretty, diagnostic_pretty_with_key_comments, to_cdn, to_cdn_pretty,
-    to_cdn_pretty_with_key_comments,
-};
+pub use crate::diag::{diagnostic, diagnostic_pretty, diagnostic_pretty_with_key_comments};
 #[cfg(feature = "alloc")]
 pub use crate::raw::RawValue;
 #[doc(inline)]

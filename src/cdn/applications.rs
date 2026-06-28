@@ -160,6 +160,70 @@ fn collect_string_arg(
     Ok(())
 }
 
+pub(super) fn concat_bytes(args: Vec<Arg>, offset: usize) -> Result<Atom, Error> {
+    let mut out = Vec::new();
+
+    for arg in args {
+        match arg.value {
+            Value::Text(text) => out.extend_from_slice(text.as_bytes()),
+            Value::Bytes(bytes) => out.extend_from_slice(&bytes),
+            _ => return Err(Error::semantic(offset, "bytes arguments must be strings")),
+        }
+    }
+
+    Ok(Atom::Bytes(out))
+}
+
+pub(super) fn same_args(args: Vec<Arg>, offset: usize) -> Result<Atom, Error> {
+    let mut args = args.into_iter();
+    let Some(first) = args.next() else {
+        return Err(Error::semantic(
+            offset,
+            "same expects at least one argument",
+        ));
+    };
+
+    for arg in args {
+        if !values_same(&first.value, &arg.value) {
+            return Err(Error::semantic(offset, "same arguments are not equal"));
+        }
+    }
+
+    // `same` checks data model equality but preserves the first spelling.
+    Ok(Atom::Raw(first.encoded))
+}
+
+fn values_same(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Integer(left), Value::Integer(right)) => left == right,
+        (Value::Bytes(left), Value::Bytes(right)) => left == right,
+        (Value::Float(left), Value::Float(right)) => left.to_bits() == right.to_bits(),
+        (Value::Text(left), Value::Text(right)) => left == right,
+        (Value::Bool(left), Value::Bool(right)) => left == right,
+        (Value::Null, Value::Null) => true,
+        (Value::Tag(left_tag, left), Value::Tag(right_tag, right)) => {
+            left_tag == right_tag && values_same(left, right)
+        }
+        (Value::Array(left), Value::Array(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right.iter())
+                    .all(|(left, right)| values_same(left, right))
+        }
+        (Value::Map(left), Value::Map(right)) => {
+            left.len() == right.len()
+                && left.iter().zip(right.iter()).all(
+                    |((left_key, left_value), (right_key, right_value))| {
+                        values_same(left_key, right_key) && values_same(left_value, right_value)
+                    },
+                )
+        }
+        (Value::Simple(left), Value::Simple(right)) => left == right,
+        _ => false,
+    }
+}
+
 fn flatten_elision_value(
     prefix: &str,
     value: Value,

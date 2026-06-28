@@ -1,10 +1,11 @@
-//! Concise Diagnostic Notation (CDN) input support.
+//! Concise Diagnostic Notation (CDN) input helpers and output re-exports.
 
 use alloc::vec::Vec;
 
 use serde::de::DeserializeOwned;
 
-use crate::de::Error;
+pub use crate::de::Error;
+pub use crate::diag::{to_cdn, to_cdn_pretty, to_cdn_pretty_with_key_comments};
 
 mod applications;
 #[cfg(feature = "cdn")]
@@ -29,9 +30,10 @@ mod types;
 /// embedded CBOR sequence literals (`<<..>>`), tags, simple values, the core
 /// encoding indicators (`_i`, `_0` through `_3`, and indefinite arrays or
 /// maps with `[_` / `{_`), and the application extensions implemented by this
-/// crate. Enabling the `cdn` feature also enables the `hash`, `cri`, and `CRI`
-/// application extensions that require external crates. The default encoding
-/// is preferred serialization.
+/// crate. The built-in extensions include `dt`/`DT`, `ip`/`IP`, `b1`/`t1`,
+/// `ilbs`/`ilts`, `bytes`, `same`, and `float`; enabling the `cdn` feature
+/// also enables the `hash`, `cri`, and `CRI` extensions that require external
+/// crates. The default encoding is preferred serialization.
 ///
 /// ```rust
 /// let bytes = cbor2::cdn_to_vec(r#"{ /kty/ 1: 4, "kid": h'deadbeef' }"#).unwrap();

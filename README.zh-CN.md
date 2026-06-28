@@ -138,7 +138,7 @@ assert_eq!(photo, back);
 * **COSE 风格的整数 map 键、数组和带有 `#[derive(Cbor)]` 的标签** —— 启用 `derive` 特性后，`#[derive(cbor2::Cbor)]` 会生成带有 CBOR 协议细节的 serde `Serialize`/`Deserialize` 实现：标注了 `#[cbor(key = ...)]` 的字段在编码时使用整数 map 键，且容器在编码时会被包装在 CBOR 标签（`#[cbor(tag = ...)]`）中。标签层在解码时是透明的，因此同一类型可以处理包含或不包含标签的协议，而无需定义第二个“裸”结构体并实现 `From`。命名的结构体还可以使用 `#[cbor(array)]` 编码为紧凑的字段顺序 CBOR 数组，同时在 JSON 和代码中保持 Rust 字段名。字段名和类型名保持不变，因此相同的类型仍然可以平滑地序列化为普通 JSON —— `serde_json::to_string(&v)` 可以直接工作，保持原始字段名且不带标签。声明的键、数组形状和标签在运行时仍可通过 `cbor2::Cbor` 特征（trait）进行检查。
 * **原始值** —— `RawValue` 延迟解码并保留单个数据项的精确传输字节：序列化时将它们原封不动地拼接进流中，反序列化时则逐字节捕获，适用于签名负载、透传项和延迟解码。`TryFrom` 可在 `RawValue` 和 `Value` 之间进行双向转换。
 * **鲁棒的解码** —— 妥善处理不定长数据项、分段字符串、重复 map 键、未知标签和 CBOR 序列（RFC 8742）；限制递归深度，并防止伪造的长度触发巨额内存分配。
-* **简明诊断表示法 (Concise Diagnostic Notation)** —— `to_cdn` 可以将原始 CBOR 渲染为由 IETF 简明诊断表示法草案（CDN，`draft-ietf-cbor-edn-literals`）规范化的易读文本形式，在保留不定长标记的同时，与 RFC 8949 附录 A 的普通数据项示例相匹配。API 命名保持了显式的方向性：`to_cdn*` 将 CBOR 字节渲染为 CDN 文本，而 `cdn_to_vec`、`cdn_sequence_to_vec` 和 `from_cdn` 则将 CDN 文本解析为 CBOR 字节或 serde 值；较旧的 `diagnostic*` 名称作为兼容类别名予以保留。CDN 输入支持注释、基于编码的字节字符串、嵌入式 CBOR 序列、编码指示器、标签、简单值以及强制性的 `dt`、`ip`、`b1` 和 `t1` 扩展。`Value` 通过相同的表示法实现 `Display`，并将其缩进形式作为 `Debug` 实现。对于整数键协议 map，`to_cdn_pretty_with_key_comments` 可以在传输整数键旁边添加 CDN `// "iss"` 类似的注释。
+* **简明诊断表示法 (Concise Diagnostic Notation)** —— `to_cdn` 可以将原始 CBOR 渲染为由 IETF 简明诊断表示法草案（CDN，`draft-ietf-cbor-edn-literals`）规范化的易读文本形式，在保留不定长标记的同时，与 RFC 8949 附录 A 的普通数据项示例相匹配。API 命名保持了显式的方向性：`to_cdn*` 将 CBOR 字节渲染为 CDN 文本，而 `cdn_to_vec`、`cdn_sequence_to_vec` 和 `from_cdn` 则将 CDN 文本解析为 CBOR 字节或 serde 值；较旧的 `diagnostic*` 名称作为兼容类别名予以保留。CDN 输入支持注释、基于编码的字节字符串、嵌入式 CBOR 序列、编码指示器、标签、简单值，以及 `dt`/`DT`、`ip`/`IP`、`b1`/`t1`、`ilbs`/`ilts`、`bytes`、`same` 和 `float` 等应用扩展；启用 `cdn` 特性后还会添加依赖外部 crate 的 `hash`、`cri` 和 `CRI`。`bytes<<"ä", h'2f'>>` 会生成 `h'c3a42f'`，而 `same<< float'47110815', 0x1.22102ap+15 >>` 会校验同一数据项的不同写法并输出第一个实参。`Value` 通过相同的表示法实现 `Display`，并将其缩进形式作为 `Debug` 实现。对于整数键协议 map，`to_cdn_pretty_with_key_comments` 可以在传输整数键旁边添加 CDN `// "iss"` 类似的注释。
 * **无分配辅助函数** —— `validate` 是针对单个 CBOR 数据项的格式完好性检查（RFC 8949 §5.3.1，包括文本 UTF-8），`serialized_size` 计算任何可序列化值的精确编码大小，而 `to_slice` 则将数据编码到调用者提供的缓冲区中；这些操作均不分配堆内存。
 * **异步项 I/O** —— `async_io` 模块在异步字节流上对完整的 CBOR 项进行分帧，随后在数据项缓冲完成后复用正常的同步 serde API。针对不受信任的流，提供了有界的读取辅助函数。
 * **底层标头编解码器** —— `core` 模块为需要精确传输控制的应用暴露了拉取/推送式 `Header` 接口。
@@ -150,6 +150,7 @@ assert_eq!(photo, back);
 | --------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `std`     | 是               | 为每个 `std::io::Read`/`Write` 实现 `cbor2::io` 特征，添加 `async_io` 并添加 `HashMap` 转换。隐式启用 `alloc`。         |
 | `alloc`   | 是（通过 `std`） | 所有需要堆的操作：`Value`、`to_vec`/`from_slice`/`from_reader`、`RawValue`、`diagnostic`、确定性编码器以及 `cbor!` 宏。 |
+| `cdn`     | 否               | 添加需要外部 crate 的 CDN 输入扩展：`hash`、`cri` 和 `CRI`。隐式启用 `alloc`。                                          |
 | `derive`  | 否               | `#[derive(cbor2::Cbor)]` 宏。                                                                                           |
 | `futures` | 否               | 为 `futures_io::AsyncRead`/`AsyncWrite` 添加 `async_io::futures` 辅助函数。隐式启用 `std`。                             |
 | `tokio`   | 否               | 为 `tokio::io::AsyncRead`/`AsyncWrite` 添加 `async_io::tokio` 辅助函数。隐式启用 `std`。                                |
@@ -525,6 +526,9 @@ $ echo '{"name": "example", "ok": true}' | cbor encode | cbor decode
 
 $ echo '{"name": "example", "ok": true}' | cbor encode --hex
 a2646e616d65676578616d706c65626f6bf5
+
+$ printf "bytes<<\"hi\", h'2f'>>" | cbor encode --diag --hex
+4368692f
 
 $ cbor validate a2646e616d65676578616d706c65626f6bf5
 valid

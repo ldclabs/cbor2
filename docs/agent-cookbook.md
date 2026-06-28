@@ -66,11 +66,20 @@ assert!(cbor2::validate(&stream[..]).is_err());
 
 Use `cdn_to_vec` when a test vector is clearer as Concise Diagnostic
 Notation than as JSON. CDN can express integer map keys, byte strings, tags,
-simple values, comments and encoding indicators directly.
+simple values, comments, encoding indicators and application extensions
+directly. Use `bytes` to reinterpret text as byte strings, `same` to assert
+that multiple literals describe the same CBOR item, and `float` to spell raw
+IEEE 754 binary16/32/64 payloads.
 
 ```rust
 let bytes = cbor2::cdn_to_vec(r#"{ /kty/ 1: 4, /k/ -1: h'6684523a' }"#).unwrap();
 assert_eq!(hex::encode(bytes), "a2010420446684523a");
+
+let payload = cbor2::cdn_to_vec(r#"bytes<<"sig:", h'deadbeef'>>"#).unwrap();
+assert_eq!(hex::encode(payload), "487369673adeadbeef");
+
+let float = cbor2::cdn_to_vec(r#"same<<float'47110815', 0x1.22102ap+15>>"#).unwrap();
+assert_eq!(hex::encode(float), "fa47110815");
 
 let value: cbor2::Value = cbor2::from_cdn(r#"{1: [2, 3]}"#).unwrap();
 assert_eq!(value.to_string(), "{1: [2, 3]}");

@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.1.1] - 2026-06-28
+
+### Added
+
+* Added the optional `cdn` feature for CDN input extensions that require
+  external crates: `hash`, `cri` and `CRI`.
+* Added the `bytes` and `same` CDN application extensions from the EDN
+  application-extension draft, including examples for byte-string assembly and
+  cross-checking alternate literal spellings.
+* Exposed `cbor2::cdn` as a public module that groups CDN input helpers,
+  output helpers and the shared `cdn::Error` type.
+
+### Changed
+
+* Documented the expanded CDN application-extension support in the README,
+  Simplified Chinese README, CLI README files and agent cookbook.
+* Bumped `cbor2`, `cbor2-cli` and `cbor2-derive` to `1.1.1`.
+
 ## [1.1.0] - 2026-06-26
 
 ### Added

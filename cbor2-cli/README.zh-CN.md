@@ -145,6 +145,12 @@ a2646e616d65676578616d706c65626f6bf5
 
 $ printf "{ /kty/ 1: 4, /k/ -1: h'6684523a' }" | cbor encode --diag --hex
 a2010420446684523a
+
+$ printf "bytes<<\"sig:\", h'deadbeef'>>" | cbor encode --diag --hex
+487369673adeadbeef
+
+$ printf "same<<float'47110815', 0x1.22102ap+15>>" | cbor encode --diag --hex
+fa47110815
 ```
 
 ## validate
