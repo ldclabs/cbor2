@@ -34,12 +34,13 @@ fn cri_reference_bytes(iri: &iref::IriRef, offset: usize) -> Result<Vec<u8>, Err
                 None => cri_no_authority_bytes(iri.path().as_str()),
             });
         }
-        None if let Some(authority) = iri.authority() => {
-            sections.push(write_simple_value(22)?);
-            sections.push(cri_authority_bytes(authority, offset)?);
-        }
         None => {
-            sections.push(cri_discard_bytes(iri.path().as_str()));
+            if let Some(authority) = iri.authority() {
+                sections.push(write_simple_value(22)?);
+                sections.push(cri_authority_bytes(authority, offset)?);
+            } else {
+                sections.push(cri_discard_bytes(iri.path().as_str()));
+            }
         }
     }
 
