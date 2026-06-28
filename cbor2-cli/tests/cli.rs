@@ -72,41 +72,42 @@ fn show_accepts_hex_and_base64_arguments() {
 }
 
 #[test]
-fn decode_pretty_prints_json() {
-    let out = ok(&["decode"], &hex("a1616101"));
+fn decode_json_pretty_prints_json() {
+    let out = ok(&["decode", "--json"], &hex("a1616101"));
     assert_eq!(out, b"{\n  \"a\": 1\n}\n");
 
     // Sequences become one JSON document per item.
-    let out = ok(&["decode"], &hex("01a16374776f02"));
+    let out = ok(&["decode", "--json"], &hex("01a16374776f02"));
     assert_eq!(out, b"1\n{\n  \"two\": 2\n}\n");
 
     // Bytes render as hex strings, integer keys as JSON-encoded strings,
     // tags are dropped.
-    let out = ok(&["decode"], &hex("a10742dead"));
+    let out = ok(&["decode", "--json"], &hex("a10742dead"));
     assert_eq!(out, b"{\n  \"7\": \"dead\"\n}\n");
-    let out = ok(&["decode"], &hex("c11a514b67b0"));
+    let out = ok(&["decode", "--json"], &hex("c11a514b67b0"));
     assert_eq!(out, b"1363896240\n");
 
     // Generic simple values survive JSON conversion as explicit strings.
-    let out = ok(&["decode"], &hex("f83b"));
+    let out = ok(&["decode", "--json"], &hex("f83b"));
     assert_eq!(out, b"\"simple(59)\"\n");
 
     // The flexible input forms apply to decode as well.
-    let out = ok(&["decode", "a1616101"], b"");
+    let out = ok(&["decode", "--json", "a1616101"], b"");
     assert_eq!(out, b"{\n  \"a\": 1\n}\n");
 }
 
 #[test]
-fn decode_diag_pretty_prints_diagnostic_notation() {
+fn decode_pretty_prints_diagnostic_notation_by_default() {
     // {1: [2, 3]} spreads over indented lines, keys stay integers.
-    let out = ok(&["decode", "--diag", "a101820203"], b"");
+    let out = ok(&["decode", "a101820203"], b"");
     assert_eq!(out, b"{\n  1: [\n    2,\n    3\n  ]\n}\n");
 
-    // Scalars stay on one line; `-d` is the short form.
-    let out = ok(&["decode", "-d", "01"], b"");
+    // Scalars stay on one line; `--diag` remains an explicit spelling.
+    let out = ok(&["decode", "--diag", "01"], b"");
     assert_eq!(out, b"1\n");
 
-    // The wire-level path preserves indefinite-length markers.
+    // The wire-level path preserves indefinite-length markers; `-d` is the
+    // short form.
     let out = ok(&["decode", "-d", "bf0101ff"], b"");
     assert_eq!(out, b"{_\n  1: 1\n}\n");
 }
@@ -114,6 +115,7 @@ fn decode_diag_pretty_prints_diagnostic_notation() {
 #[test]
 fn encode_streams_json_values() {
     assert_eq!(ok(&["encode"], br#"{"a": 1}"#), hex("a1616101"));
+    assert_eq!(ok(&["encode", "--json"], br#"{"a": 1}"#), hex("a1616101"));
 
     // Multiple JSON values become a CBOR sequence.
     assert_eq!(
@@ -125,6 +127,10 @@ fn encode_streams_json_values() {
 #[test]
 fn encode_can_emit_copyable_hex() {
     assert_eq!(ok(&["encode", "--hex"], br#"{"a": 1}"#), b"a1616101\n");
+    assert_eq!(
+        ok(&["encode", "--json", "--hex"], br#"{"a": 1}"#),
+        b"a1616101\n"
+    );
 
     // Multiple JSON values still represent one CBOR sequence, just as
     // copyable lowercase hex text.
@@ -135,9 +141,18 @@ fn encode_can_emit_copyable_hex() {
 }
 
 #[test]
-fn encode_diag_reads_cdn_text() {
+fn encode_default_and_cdn_flags_read_cdn_text() {
+    assert_eq!(
+        ok(&["encode", "--hex"], br#"{ /k/ 1: h'dead' }"#),
+        b"a10142dead\n"
+    );
+
     assert_eq!(
         ok(&["encode", "--diag", "--hex"], br#"{ /k/ 1: h'dead' }"#),
+        b"a10142dead\n"
+    );
+    assert_eq!(
+        ok(&["encode", "--cdn", "--hex"], br#"{ /k/ 1: h'dead' }"#),
         b"a10142dead\n"
     );
 
@@ -165,7 +180,7 @@ fn commands_chain_into_a_round_trip() {
         b"{\n  \"name\": \"example\",\n  \"ok\": true,\n  \"tags\": [\n    1,\n    2.5\n  ]\n}\n"
     );
 
-    let back = ok(&["decode"], &cbor);
+    let back = ok(&["decode", "--json"], &cbor);
     let reparsed: serde_json::Value = serde_json::from_slice(&back).unwrap();
     assert_eq!(
         reparsed,
@@ -197,6 +212,8 @@ fn help_and_version_print_and_exit_cleanly() {
         assert!(out.status.success());
         let text = String::from_utf8(out.stdout).unwrap();
         assert!(text.contains("Usage: cbor [COMMAND] [INPUT]"), "{text}");
+        assert!(text.contains("--json"), "{text}");
+        assert!(text.contains("--cdn"), "{text}");
         assert!(text.contains("--hex"), "{text}");
         assert!(text.contains("Concise Diagnostic Notation"), "{text}");
         assert!(text.contains("validate"), "{text}");
@@ -210,14 +227,20 @@ fn help_and_version_print_and_exit_cleanly() {
 
 #[test]
 fn usage_errors_exit_with_status_2() {
-    // An unknown option, too many arguments, --diag outside decode, an
+    // An unknown option, too many arguments, flags on the wrong command, an
     // unreadable input and something that is no known input form.
     for args in [
         &["--bogus"][..],
         &["decode", "a1616101", "01"][..],
+        &["decode", "--diag", "--json", "01"][..],
         &["--diag", "01"][..],
+        &["--json", "01"][..],
+        &["--cdn", "01"][..],
         &["--hex", "01"][..],
         &["decode", "--hex", "01"][..],
+        &["decode", "--cdn", "01"][..],
+        &["encode", "--json", "--diag"][..],
+        &["encode", "--json", "--cdn"][..],
         &["/nonexistent/cbor_cli_test"][..],
         // `/` makes it a path, even though it is valid standard base64.
         &["Q/vvvg=="][..],
@@ -234,11 +257,13 @@ fn usage_errors_exit_with_status_2() {
 
 #[test]
 fn data_errors_exit_with_status_1() {
-    // Truncated CBOR, a lone break, broken JSON and empty validation input.
+    // Truncated CBOR, a lone break, broken text input and empty validation
+    // input.
     for (args, input) in [
         (&["1a0000"][..], &b""[..]),
         (&["decode"][..], &hex("ff")[..]),
         (&["encode"][..], &b"{broken"[..]),
+        (&["encode", "--json"][..], &b"{1:2}"[..]),
         (&["validate"][..], &b""[..]),
     ] {
         let out = run(args, input);

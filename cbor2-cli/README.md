@@ -22,9 +22,9 @@ Usage: cbor [COMMAND] [INPUT]
 
 Commands:
   (none)  Show each CBOR item as pretty diagnostic notation (§8)
-  decode  Convert CBOR items to pretty-printed JSON, or to
-          pretty-printed diagnostic notation with --diag
-  encode  Convert JSON values, or CDN text with --diag, to CBOR items
+  decode  Show CBOR items as pretty diagnostic notation, or convert
+          them to pretty-printed JSON with --json
+  encode  Convert JSON-compatible values or CDN text to CBOR items
   validate
           Validate one or more complete CBOR items
 ```
@@ -35,9 +35,9 @@ Commands:
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Inspect pasted CBOR   | Run `cbor <hex-or-base64>` to render RFC 8949 diagnostic notation.                                                                   |
 | Preserve wire details | Bare `cbor` captures each item as raw bytes, so indefinite lengths, segmented strings, `undefined` and simple values remain visible. |
-| Decode for JSON tools | `cbor decode` pretty-prints CBOR as JSON, one document per item.                                                                     |
-| Encode fixtures       | `cbor encode` turns JSON values into CBOR bytes; `cbor encode --diag` reads Concise Diagnostic Notation.                            |
-| Copy bytes safely     | `cbor encode --hex` prints copyable lowercase hex for agents and docs; combine it with `--diag` for CDN fixtures.                    |
+| Decode for JSON tools | `cbor decode --json` pretty-prints CBOR as JSON, one document per item.                                                              |
+| Encode fixtures       | `cbor encode` turns JSON-compatible values or Concise Diagnostic Notation into CBOR bytes.                                          |
+| Copy bytes safely     | `cbor encode --hex` prints copyable lowercase hex; add `--json` or `--cdn` when the input syntax must be fixed.                      |
 | Work with sequences   | Multiple JSON or CDN values become a CBOR sequence; CBOR sequences decode item by item.                                              |
 | Validate inputs       | `cbor validate <hex-or-file>` checks one or more complete CBOR items and prints `valid` on success.                                  |
 | Script reliably       | Data errors exit with status 1, usage errors with status 2.                                                                          |
@@ -55,17 +55,16 @@ For code agents, prefer text-first commands unless a pipeline needs raw bytes:
 
 ```bash
 cbor validate a1616101
-echo '{"a":1}' | cbor encode --hex
-printf "{1: h'dead'}" | cbor encode --diag --hex
-cbor decode a1616101
-cbor decode --diag bf616101ff
+echo '{"a":1}' | cbor encode --json --hex
+printf "{1: h'dead'}" | cbor encode --hex
+cbor decode bf616101ff
+cbor decode --json a1616101
 ```
 
 Use raw `cbor encode` only when piping directly into another binary command.
 Use `cbor encode --hex` when the result needs to be pasted into a test, a
-prompt, a review comment or another `cbor` invocation. Use
-`cbor encode --diag --hex` for fixtures that are easier to write as CDN than
-as JSON.
+prompt, a review comment or another `cbor` invocation. Add `--json` to force
+the strict JSON parser, or `--diag`/`--cdn` to force the CDN parser.
 
 ## Show: `cbor`
 
@@ -124,15 +123,17 @@ $ cbor bf61610161629f0203ffff      # wire details survive
 
 ## decode
 
-`cbor decode` pretty-prints each item as JSON, or — with `-d`/`--diag` — as
-indented diagnostic notation. The diagnostic path reads raw item bytes, so it
-preserves indefinite lengths and other wire details; the JSON path decodes
-through `Value` and therefore uses JSON-compatible spelling.
+`cbor decode` pretty-prints each item as indented diagnostic notation by
+default. Add `--json` to use the lossy JSON projection instead. The
+diagnostic path reads raw item bytes, so it preserves indefinite lengths and
+other wire details; the JSON path decodes through `Value` and therefore uses
+JSON-compatible spelling. `-d`/`--diag` remains available as an explicit
+spelling of the default.
 
 ```bash
 $ cbor decode a1018202036466697665f5
 {
-  "1": [
+  1: [
     2,
     3
   ]
@@ -140,9 +141,9 @@ $ cbor decode a1018202036466697665f5
 "five"
 true
 
-$ cbor decode --diag a101820203
+$ cbor decode --json a101820203
 {
-  1: [
+  "1": [
     2,
     3
   ]
@@ -157,9 +158,10 @@ value).
 
 ## encode
 
-`cbor encode` reads JSON text (from a file or stdin) and writes each
-value as a CBOR item. Add `--diag` to read Concise Diagnostic Notation
-instead, and `--hex` for copyable lowercase hex text:
+`cbor encode` reads JSON-compatible values or Concise Diagnostic Notation
+(from a file or stdin) and writes each value as a CBOR item. Add `--json` to
+accept only JSON text, or `--diag`/`--cdn` to accept only CDN text. Add `--hex`
+for copyable lowercase hex text:
 
 ```bash
 $ echo '{"name": "example", "ok": true}' | cbor encode | cbor
@@ -171,10 +173,10 @@ a2646e616d65676578616d706c65626f6bf5
 $ echo '{"name": "example", "ok": true}' | cbor encode --hex
 a2646e616d65676578616d706c65626f6bf5
 
-$ printf "{ /kty/ 1: 4, /k/ -1: h'6684523a' }" | cbor encode --diag --hex
+$ printf "{ /kty/ 1: 4, /k/ -1: h'6684523a' }" | cbor encode --hex
 a2010420446684523a
 
-$ printf "bytes<<\"sig:\", h'deadbeef'>>" | cbor encode --diag --hex
+$ printf "bytes<<\"sig:\", h'deadbeef'>>" | cbor encode --cdn --hex
 487369673adeadbeef
 
 $ printf "same<<float'47110815', 0x1.22102ap+15>>" | cbor encode --diag --hex

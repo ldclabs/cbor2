@@ -661,10 +661,11 @@ The rewrite follows the design of (and is wire-compatible with)
 The workspace ships a `cbor` command line tool in
 [`cbor2-cli`](cbor2-cli/README.md). Bare `cbor` shows any CBOR — from a
 file, stdin, a hex string or a base64 string — as diagnostic notation
-(RFC 8949 §8, formalized as CDN); `decode` converts to pretty JSON (or pretty diagnostic
-with `--diag`), `encode` converts JSON to CBOR, `encode --diag` converts CDN
-text to CBOR, `encode --hex` prints copyable CBOR hex for agents and docs,
-and `validate` checks complete CBOR input:
+(RFC 8949 §8, formalized as CDN); `decode` shows pretty diagnostic notation
+by default and converts to pretty JSON with `--json`, `encode` converts
+JSON-compatible values or CDN text to CBOR, `encode --json` forces strict JSON
+input, `encode --diag`/`--cdn` force CDN input, `encode --hex` prints copyable
+CBOR hex for agents and docs, and `validate` checks complete CBOR input:
 
 ```bash
 brew install ldclabs/tap/cbor2-cli   # Homebrew
@@ -675,7 +676,7 @@ cargo install cbor2-cli              # Cargo
 $ cbor bf61610161629f0203ffff
 {_ "a": 1, "b": [_ 2, 3]}
 
-$ echo '{"name": "example", "ok": true}' | cbor encode | cbor decode
+$ echo '{"name": "example", "ok": true}' | cbor encode --json | cbor decode --json
 {
   "name": "example",
   "ok": true

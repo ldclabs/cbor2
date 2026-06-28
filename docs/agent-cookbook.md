@@ -88,7 +88,7 @@ assert_eq!(value.to_string(), "{1: [2, 3]}");
 For terminal workflows, prefer copyable hex:
 
 ```bash
-printf "{1: h'dead'}" | cbor encode --diag --hex
+printf "{1: h'dead'}" | cbor encode --cdn --hex
 ```
 
 ## Borrow Text and Bytes From Input
@@ -354,17 +354,19 @@ binary from `cbor2-cli`:
 
 ```bash
 cbor a1616101
-cbor decode a1616101
-cbor decode --diag bf616101ff
-echo '{"a":1}' | cbor encode --hex
+cbor decode bf616101ff
+cbor decode --json a1616101
+echo '{"a":1}' | cbor encode --json --hex
+printf "{1: h'dead'}" | cbor encode --cdn --hex
 cbor validate a1616101
 ```
 
 Prefer `cbor encode --hex` in transcripts, tests and docs because it prints
 copyable lowercase hex instead of raw binary stdout. Use raw `cbor encode` only
-when the next command expects CBOR bytes on stdin. `cbor validate` prints
-`valid` and exits 0 for one or more complete CBOR items; malformed data exits
-1 and command-line usage errors exit 2.
+when the next command expects CBOR bytes on stdin. Add `--json` for strict JSON
+input, or `--diag`/`--cdn` for CDN input. `cbor validate` prints `valid` and
+exits 0 for one or more complete CBOR items; malformed data exits 1 and
+command-line usage errors exit 2.
 
 ## Migrate From ciborium or serde_cbor
 

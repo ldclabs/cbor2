@@ -2,10 +2,11 @@
 //!
 //! Without a command, shows every CBOR item in the input as pretty diagnostic
 //! notation (RFC 8949 §8), exactly as it appears on the wire.
-//! `decode` converts CBOR items into pretty-printed JSON or — with
-//! `--diag` — pretty-printed diagnostic notation; `encode` converts JSON
-//! values, or CDN text with `--diag`, into CBOR items, optionally as
-//! copyable hex text with `--hex`;
+//! `decode` shows CBOR items as pretty-printed diagnostic notation, or
+//! converts them to pretty-printed JSON with `--json`; `encode` converts
+//! JSON-compatible values or CDN text into CBOR items, optionally restricted
+//! with `--json`, `--diag` or `--cdn`, and optionally as copyable hex text
+//! with `--hex`;
 //! `validate` checks one or more complete CBOR items. Data errors exit with
 //! status 1, usage errors with status 2.
 //!
@@ -33,9 +34,9 @@ CBOR item in INPUT is shown as pretty diagnostic notation (\u{a7}8),
 exactly as it appears on the wire.
 
 Commands:
-  decode  Convert CBOR items to pretty-printed JSON, or to
-          pretty-printed diagnostic notation with --diag
-  encode  Convert JSON values, or CDN text with --diag, to CBOR items
+  decode  Show CBOR items as pretty-printed diagnostic notation,
+          or convert them to pretty-printed JSON with --json
+  encode  Convert JSON-compatible values or CDN text to CBOR items
   validate
           Validate one or more complete CBOR items
 
@@ -43,20 +44,25 @@ Input:
   INPUT is a file path, a hex string (optionally 0x-prefixed), a base64
   or base64url string, or `-` for stdin; stdin is the default. An
   argument containing a path separator is always a file path. `encode`
-  reads JSON text, or CDN text with --diag, from a file or stdin only.
+  reads JSON-compatible values or CDN text from a file or stdin only.
+  Use --json or --diag/--cdn to restrict the accepted input syntax.
   Output goes to stdout.
 
 Options:
-  -d, --diag     With `decode`: print diagnostic notation instead of JSON
-                 With `encode`: read Concise Diagnostic Notation, not JSON
+  -d, --diag     With `decode`: print diagnostic notation (the default)
+                 With `encode`: read only Concise Diagnostic Notation
+      --cdn      With `encode`: read only Concise Diagnostic Notation
+      --json     With `decode`: print pretty JSON instead of diagnostic notation
+                 With `encode`: read only JSON text
       --hex      With `encode`: print lowercase hex text instead of raw bytes
   -h, --help     Print this help
   -V, --version  Print the version
 
 Examples:
   cbor a201020326                  # show hex CBOR
-  cbor decode message.cbor         # CBOR file -> pretty JSON
-  printf \"{1: h'dead'}\" | cbor encode --diag --hex
+  cbor decode message.cbor         # CBOR file -> diagnostic notation
+  cbor decode --json message.cbor  # CBOR file -> pretty JSON
+  printf \"{1: h'dead'}\" | cbor encode --hex
   echo '{\"a\": 1}' | cbor encode --hex
   echo '{\"a\": 1}' | cbor encode    # JSON -> CBOR bytes";
 
@@ -68,18 +74,35 @@ enum Command {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum DecodeOutput {
+    Diag,
+    Json,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum EncodeOutput {
     Raw,
     Hex,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EncodeInput {
+    Any,
+    Json,
+    Cdn,
+}
+
 fn main() {
-    let (command, diag, encode_output, input) = parse_args();
+    let (command, decode_output, encode_output, encode_input, input) = parse_args();
 
     let result = match command {
         Command::Show => show(open_cbor_input(input.as_deref())),
-        Command::Decode => decode(open_cbor_input(input.as_deref()), diag),
-        Command::Encode => encode(open_text_input(input.as_deref()), encode_output, diag),
+        Command::Decode => decode(open_cbor_input(input.as_deref()), decode_output),
+        Command::Encode => encode(
+            open_text_input(input.as_deref()),
+            encode_output,
+            encode_input,
+        ),
         Command::Validate => validate(open_cbor_input(input.as_deref())),
     };
 
@@ -91,8 +114,16 @@ fn main() {
 
 // Parses the command line. `-h`/`--help` and `-V`/`--version` print and
 // exit; anything malformed exits with 2.
-fn parse_args() -> (Command, bool, EncodeOutput, Option<String>) {
+fn parse_args() -> (
+    Command,
+    DecodeOutput,
+    EncodeOutput,
+    EncodeInput,
+    Option<String>,
+) {
     let mut diag = false;
+    let mut cdn = false;
+    let mut json = false;
     let mut encode_output = EncodeOutput::Raw;
     let mut positional = Vec::new();
 
@@ -107,6 +138,8 @@ fn parse_args() -> (Command, bool, EncodeOutput, Option<String>) {
                 process::exit(0);
             }
             "-d" | "--diag" => diag = true,
+            "--cdn" => cdn = true,
+            "--json" => json = true,
             "--hex" => encode_output = EncodeOutput::Hex,
             _ if arg.starts_with('-') && arg != "-" => {
                 usage_error(format_args!("unrecognized option `{arg}`"));
@@ -136,16 +169,48 @@ fn parse_args() -> (Command, bool, EncodeOutput, Option<String>) {
     if positional.next().is_some() {
         usage_error(format_args!("at most one INPUT argument"));
     }
+    if json && !matches!(command, Command::Decode | Command::Encode) {
+        usage_error(format_args!(
+            "`--json` only applies to `decode` or `encode`"
+        ));
+    }
     if diag && !matches!(command, Command::Decode | Command::Encode) {
         usage_error(format_args!(
             "`--diag` only applies to `decode` or `encode`"
+        ));
+    }
+    if cdn && !matches!(command, Command::Encode) {
+        usage_error(format_args!("`--cdn` only applies to `encode`"));
+    }
+    if matches!(command, Command::Decode) && diag && json {
+        usage_error(format_args!(
+            "`--diag` and `--json` cannot be used together"
+        ));
+    }
+    if matches!(command, Command::Encode) && json && (diag || cdn) {
+        usage_error(format_args!(
+            "`--json` cannot be combined with `--diag` or `--cdn`"
         ));
     }
     if encode_output == EncodeOutput::Hex && !matches!(command, Command::Encode) {
         usage_error(format_args!("`--hex` only applies to `encode`"));
     }
 
-    (command, diag, encode_output, input)
+    let decode_output = if json {
+        DecodeOutput::Json
+    } else {
+        DecodeOutput::Diag
+    };
+
+    let encode_input = if json {
+        EncodeInput::Json
+    } else if diag || cdn {
+        EncodeInput::Cdn
+    } else {
+        EncodeInput::Any
+    };
+
+    (command, decode_output, encode_output, encode_input, input)
 }
 
 fn usage_error(msg: core::fmt::Arguments<'_>) -> ! {
@@ -216,23 +281,25 @@ fn show(input: Box<dyn Read>) -> Result<(), Error> {
     Ok(stdout.flush()?)
 }
 
-// Decodes each CBOR item and pretty-prints it as JSON or — with
-// `diag` — as indented diagnostic notation. The `diag` path works on
-// wire bytes and preserves indefinite-length markers; the JSON path
-// re-spells through `Value`.
-fn decode(input: Box<dyn Read>, diag: bool) -> Result<(), Error> {
+// Decodes each CBOR item and pretty-prints it as diagnostic notation or, with
+// `--json`, as JSON. The diagnostic path works on wire bytes and preserves
+// indefinite-length markers; the JSON path re-spells through `Value`.
+fn decode(input: Box<dyn Read>, output: DecodeOutput) -> Result<(), Error> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
-    if diag {
-        for item in cbor2::de::Deserializer::from_reader(input).into_iter::<RawValue>() {
-            let text = cbor2::to_cdn_pretty(item?.as_ref())?;
-            writeln!(stdout, "{text}")?;
+    match output {
+        DecodeOutput::Diag => {
+            for item in cbor2::de::Deserializer::from_reader(input).into_iter::<RawValue>() {
+                let text = cbor2::to_cdn_pretty(item?.as_ref())?;
+                writeln!(stdout, "{text}")?;
+            }
         }
-    } else {
-        for item in cbor2::de::Deserializer::from_reader(input).into_iter::<Value>() {
-            serde_json::to_writer_pretty(&mut stdout, &to_json(item?))?;
-            stdout.write_all(b"\n")?;
+        DecodeOutput::Json => {
+            for item in cbor2::de::Deserializer::from_reader(input).into_iter::<Value>() {
+                serde_json::to_writer_pretty(&mut stdout, &to_json(item?))?;
+                stdout.write_all(b"\n")?;
+            }
         }
     }
 
@@ -258,15 +325,16 @@ fn validate(input: Box<dyn Read>) -> Result<(), Error> {
     Ok(stdout.flush()?)
 }
 
-// Reads a stream of JSON values, or CDN values with `--diag`, and writes
-// them to stdout as CBOR items. Raw output streams bytes; hex output streams
-// one copyable lowercase hex string for the complete CBOR sequence.
-fn encode(mut input: Box<dyn Read>, output: EncodeOutput, diag: bool) -> Result<(), Error> {
+// Reads a stream with the CDN parser by default, or the strict JSON parser
+// with `--json`, and writes it to stdout as CBOR items. Raw output streams
+// bytes; hex output streams one copyable lowercase hex string for the complete
+// CBOR sequence.
+fn encode(mut input: Box<dyn Read>, output: EncodeOutput, mode: EncodeInput) -> Result<(), Error> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     let mut wrote_hex = false;
 
-    if diag {
+    if mode != EncodeInput::Json {
         let mut text = String::new();
         input.read_to_string(&mut text)?;
         let bytes = cbor2::cdn_sequence_to_vec(&text)?;

@@ -51,14 +51,17 @@ you are an AI/code agent working in a terminal transcript:
 | Task | Command |
 | --- | --- |
 | Inspect pasted CBOR hex/base64 or a file | `cbor <INPUT>` |
-| Convert CBOR to JSON for jq-like tools | `cbor decode <INPUT>` |
-| Preserve wire details while pretty-printing | `cbor decode --diag <INPUT>` or bare `cbor <INPUT>` |
-| Convert JSON to copyable CBOR bytes | `echo '{"a":1}' \| cbor encode --hex` |
+| Convert CBOR to JSON for jq-like tools | `cbor decode --json <INPUT>` |
+| Preserve wire details while pretty-printing | `cbor decode <INPUT>` or bare `cbor <INPUT>` |
+| Convert JSON to copyable CBOR bytes | `echo '{"a":1}' \| cbor encode --json --hex` |
+| Convert CDN to copyable CBOR bytes | `printf "{1: h'dead'}" \| cbor encode --cdn --hex` |
 | Pipe raw CBOR bytes to another binary command | `cbor encode` |
 | Check one or more complete CBOR items | `cbor validate <INPUT>` |
 
 For agent-generated examples, prefer `cbor encode --hex` over raw
 `cbor encode`; raw binary stdout is hard to quote, diff and paste reliably.
+Use `--json` when the input is intended to be strict JSON, or `--diag`/`--cdn`
+when it is intended to be CDN.
 
 ## Non-Negotiable Semantics
 
