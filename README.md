@@ -209,9 +209,10 @@ CBOR sequences and canonical encoding.
   `cdn_sequence_to_vec` and `from_cdn` parse CDN text to CBOR bytes or serde
   values; the older `diagnostic*` names remain as compatibility aliases. CDN
   input covers comments, base-encoded byte strings, embedded CBOR sequences,
-  encoding indicators, tags, simple values and the mandatory `dt`, `ip`, `b1`
-  and `t1` extensions. `Value` implements `Display` with the same notation and
-  `Debug` as its indented form. For integer-keyed protocol maps,
+  encoding indicators, tags, simple values and CDN application extensions such
+  as `dt`, `ip`, `b1` and `t1`; enable the `cdn` feature for `hash`, `cri` and
+  `CRI`. `Value` implements `Display` with the same notation and `Debug` as
+  its indented form. For integer-keyed protocol maps,
   `to_cdn_pretty_with_key_comments` can add CDN `// "iss"` comments beside the
   wire integer keys.
 * **Allocation-free helpers** — `validate` is a well-formedness check for exactly
@@ -235,6 +236,7 @@ CBOR sequences and canonical encoding.
 | --------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `std`     | yes             | Implements the `cbor2::io` traits for every `std::io::Read`/`Write`, adds `async_io`, and adds the `HashMap` conversions. Implies `alloc`.           |
 | `alloc`   | yes (via `std`) | Everything needing a heap: `Value`, `to_vec`/`from_slice`/`from_reader`, `RawValue`, `diagnostic`, the deterministic encoders and the `cbor!` macro. |
+| `cdn`     | no              | Adds the CDN input extensions that need external crates: `hash`, `cri` and `CRI`. Implies `alloc`.                                                |
 | `derive`  | no              | The `#[derive(cbor2::Cbor)]` macro.                                                                                                                  |
 | `futures` | no              | Adds `async_io::futures` helpers for `futures_io::AsyncRead`/`AsyncWrite`. Implies `std`.                                                            |
 | `tokio`   | no              | Adds `async_io::tokio` helpers for `tokio::io::AsyncRead`/`AsyncWrite`. Implies `std`.                                                               |
@@ -695,7 +697,7 @@ out.
 
 ## Minimum supported Rust version
 
-Rust 1.85.
+Rust 1.89.
 
 ## License
 

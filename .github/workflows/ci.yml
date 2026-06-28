@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, "1.85"]
+        toolchain: [stable, "1.89"]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
@@ -36,6 +36,8 @@ jobs:
             command: cargo test -p cbor2 --all-targets
           - name: derive
             command: cargo test -p cbor2 --all-targets --features derive
+          - name: cdn
+            command: cargo test -p cbor2 --all-targets --features cdn
           - name: futures
             command: cargo test -p cbor2 --all-targets --features futures
           - name: tokio

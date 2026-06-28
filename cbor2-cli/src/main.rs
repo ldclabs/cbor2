@@ -359,7 +359,7 @@ fn from_hex(text: &str) -> Option<Vec<u8>> {
         .or_else(|| digits.strip_prefix(b"0X"))
         .unwrap_or(&digits);
 
-    if digits.is_empty() || digits.len() % 2 != 0 {
+    if digits.is_empty() || !digits.len().is_multiple_of(2) {
         return None;
     }
 

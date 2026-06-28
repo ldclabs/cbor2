@@ -383,6 +383,8 @@ assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
   [`diagnostic`]/[`diagnostic_pretty`], the deterministic encoders and
   the [`cbor!`] macro. Readers and writers
   are byte slices, `Vec<u8>`, or custom [`io`] trait implementations.
+* **`cdn`** — enables CDN input extensions that need external crates:
+  `hash` plus `cri`/`CRI` literals. Implies `alloc`.
 * **neither** — a `#![no_std]` core for constrained targets: streaming
   serialization with [`to_writer`]/[`to_slice`]/[`serialized_size`],
   [`validate`], the [`tag`] wrappers and the [`core`] header codec.
@@ -410,7 +412,8 @@ two-space indentation. Both work on the wire and preserve what a [`Value`]
 cannot represent: indefinite-length markers, `undefined`, and unassigned
 simple values. [`cdn_to_vec`] parses CDN text into CBOR bytes, including
 comments, byte-string literals, embedded CBOR sequences, encoding indicators,
-tags, simple values and the mandatory CDN application extensions. `Value`
+tags, simple values and the CDN application extensions implemented by this
+crate. Enable the `cdn` feature for `hash`, `cri`, and `CRI`. `Value`
 implements
 [`Display`](std::fmt::Display) with the same compact notation, and
 [`Debug`](std::fmt::Debug) pretty-prints it with indentation.

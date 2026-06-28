@@ -9,7 +9,7 @@ homepage = "https://github.com/ldclabs/cbor2"
 repository = "https://github.com/ldclabs/cbor2"
 license = "MIT"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [package]
 name = "cbor2"
@@ -36,6 +36,9 @@ std = ["alloc", "serde/std"]
 # RawValue, diagnostic notation and the Vec-producing encode functions.
 # Without it the crate is serialization, well-formedness checks and the core codec only.
 alloc = ["serde/alloc"]
+# Enables CDN input extensions that need external crates: cryptographic hash
+# literals and CRI literals.
+cdn = ["alloc", "dep:iref", "dep:sha2", "dep:sha3"]
 # Enables #[derive(cbor2::Cbor)] for integer map keys and CBOR tags.
 derive = ["dep:cbor2-derive", "serde/derive"]
 # Adapts async_io helpers to futures_io::AsyncRead/AsyncWrite.
@@ -46,7 +49,10 @@ tokio = ["std", "dep:tokio"]
 [dependencies]
 cbor2-derive = { path = "cbor2-derive", version = "1", optional = true }
 futures-io = { version = "0.3", optional = true }
+iref = { version = "4.1.0", default-features = false, optional = true }
 serde = { version = "1", default-features = false }
+sha2 = { version = "0.10", default-features = false, optional = true }
+sha3 = { version = "0.10", default-features = false, optional = true }
 tokio = { version = "1", default-features = false, features = [
   "io-util",
 ], optional = true }
