@@ -63,7 +63,9 @@ impl serde::ser::Error for Error {
 /// into the same variants as definite-length strings, while unknown tags
 /// remain as [`Value::Tag`] and oversized bignums stay as tagged byte
 /// strings. Generic simple values that do not have a dedicated serde shape are
-/// preserved as [`Value::Simple`].
+/// preserved as [`Value::Simple`]; `undefined`, which serde sees as an absent
+/// value, decodes to [`Value::Null`] like `null` does (use the byte-level
+/// [`to_cdn`](crate::to_cdn) when the distinction matters).
 #[non_exhaustive]
 #[derive(Clone, PartialEq, PartialOrd)]
 pub enum Value {
@@ -376,10 +378,12 @@ impl Value {
 
 /// Formats the value in CBOR diagnostic notation (RFC 8949 §8).
 ///
-/// Byte strings appear as `h'..'`, text is escaped to pure ASCII in the
-/// style of RFC 8949 Appendix A, floats always carry a decimal point or
-/// exponent, small bignum tags (2 and 3) are written as plain integers,
-/// and very large bignum payloads fall back to explicit tag/bytes notation.
+/// Byte strings appear as `h'..'`; printable text (including non-ASCII
+/// such as CJK and emoji) is emitted directly, with control and invisible
+/// formatting characters escaped as `\uXXXX`; floats always carry a
+/// decimal point or exponent; small bignum tags (2 and 3) are written as
+/// plain integers, and very large bignum payloads fall back to explicit
+/// tag/bytes notation.
 ///
 /// ```
 /// use cbor2::{cbor, Value};

@@ -317,9 +317,31 @@ fn enum_forms() {
     assert!(cbor2::from_slice::<Enum>(&text("Tuple")).is_err());
     assert!(cbor2::from_slice::<Enum>(&text("Struct")).is_err());
 
-    // Indefinite-length maps do not encode enums.
-    assert!(de::<Enum>("bf674e657774797065182aff").is_err());
-    // Neither do multi-entry maps.
+    // Be liberal: a single-entry indefinite-length map also encodes an
+    // enum, for every variant shape.
+    assert_eq!(
+        de::<Enum>("bf674e657774797065182aff").unwrap(),
+        Enum::Newtype(42)
+    );
+    assert_eq!(de::<Enum>("bf64556e6974f6ff").unwrap(), Enum::Unit);
+    assert_eq!(
+        de::<Enum>("bf655475706c65820102ff").unwrap(),
+        Enum::Tuple(1, 2)
+    );
+    assert_eq!(
+        de::<Enum>("bf66537472756374a1617805ff").unwrap(),
+        Enum::Struct { x: 5 }
+    );
+
+    // The indefinite map still has to hold exactly one entry...
+    let msg = de::<Enum>("bf674e657774797065182a64556e6974f6ff")
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("single-entry map"), "{msg}");
+    // ...and a break in place of the entry is not an enum either.
+    assert!(de::<Enum>("bfff").is_err());
+
+    // Multi-entry definite maps do not encode enums.
     assert!(de::<Enum>("a2674e657774797065182a6155f6").is_err());
 }
 

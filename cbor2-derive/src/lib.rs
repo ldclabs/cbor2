@@ -18,6 +18,14 @@
 //! array shape as runtime metadata. The original Rust field names stay intact
 //! for JSON and other serde formats.
 //!
+//! A type using `#[serde(flatten)]` takes a buffered code path that
+//! dispatches on `is_human_readable()`: human-readable formats (JSON, ...)
+//! see the plain field names, while non-human-readable formats are routed
+//! through a dynamic `cbor2::Value` to remap the integer keys. That routing
+//! assumes the binary format is self-describing like CBOR; flattened types
+//! are not supported in non-self-describing binary formats such as bincode.
+//! Types without `#[serde(flatten)]` have no such restriction.
+//!
 //! ```ignore
 //! use cbor2::Cbor;
 //!
@@ -200,6 +208,26 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
             return Err(syn::Error::new(
                 data.union_token.span(),
                 "Cbor supports structs and enums",
+            ));
+        }
+    }
+
+    // These container shapes make serde bypass the container name — and
+    // with it the marker that carries the declared protocol details, which
+    // would otherwise be dropped silently.
+    if container.tag.is_some() || container.array.is_some() || !entries.is_empty() {
+        if let Some(span) = serde.transparent {
+            return Err(syn::Error::new(
+                span,
+                "#[serde(transparent)] bypasses the container, so the declared \
+                 #[cbor(...)] tag, array shape or keys would be silently ignored",
+            ));
+        }
+        if let Some(span) = serde.into {
+            return Err(syn::Error::new(
+                span,
+                "#[serde(into = ...)] serializes through another type, so the declared \
+                 #[cbor(...)] tag, array shape or keys would be silently ignored on encode",
             ));
         }
     }
@@ -447,15 +475,21 @@ fn fresh_lifetime(generics: &syn::Generics, base: &str) -> syn::Lifetime {
     syn::Lifetime::new(&format!("'{name}"), proc_macro2::Span::call_site())
 }
 
-// The attributes that carry over to the shadow: serde configuration and
-// conditional compilation. Everything else — docs, derives, `#[cbor]` —
+// The attributes that carry over to the shadow: serde configuration,
+// conditional compilation, and lint silencing — the shadow repeats the
+// user's field and variant names, so an `#[allow]` on the original must
+// silence the shadow too. Everything else — docs, derives, `#[cbor]` —
 // stays behind.
 fn copied_attrs(attrs: &[syn::Attribute]) -> Vec<syn::Attribute> {
     attrs
         .iter()
         .filter(|attr| {
             let path = attr.path();
-            path.is_ident("serde") || path.is_ident("cfg") || path.is_ident("cfg_attr")
+            path.is_ident("serde")
+                || path.is_ident("cfg")
+                || path.is_ident("cfg_attr")
+                || path.is_ident("allow")
+                || path.is_ident("expect")
         })
         .cloned()
         .collect()
@@ -503,6 +537,8 @@ struct KeyArg {
 
 impl Parse for KeyArg {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        const RANGE: &str = "#[cbor(key = ...)] must fit a CBOR integer (-2^64 ..= 2^64 - 1)";
+
         let name: syn::Ident = input.parse()?;
         if name != "key" {
             return Err(syn::Error::new(name.span(), "expected `key = <integer>`"));
@@ -515,7 +551,20 @@ impl Parse for KeyArg {
         }
         let literal: syn::LitInt = input.parse()?;
 
-        let magnitude: i128 = literal.base10_parse()?;
+        // `base10_parse` ignores a type suffix; a suffixed key would be
+        // accepted with the suffix silently meaning nothing.
+        if !literal.suffix().is_empty() {
+            return Err(syn::Error::new(
+                literal.span(),
+                "#[cbor(key = ...)] does not accept a suffixed integer literal",
+            ));
+        }
+
+        // A `LitInt` is already a valid integer, so the only parse failure
+        // left is overflow; report it as the CBOR range.
+        let magnitude: i128 = literal
+            .base10_parse()
+            .map_err(|_| syn::Error::new(literal.span(), RANGE))?;
         let value = if negative { -magnitude } else { magnitude };
 
         Ok(KeyArg {
@@ -550,6 +599,12 @@ fn container_attrs(attrs: &[syn::Attribute]) -> syn::Result<ContainerAttrs> {
                     return Err(syn::Error::new(value.span(), RANGE));
                 }
                 let literal: syn::LitInt = value.parse()?;
+                if !literal.suffix().is_empty() {
+                    return Err(syn::Error::new(
+                        literal.span(),
+                        "#[cbor(tag = ...)] does not accept a suffixed integer literal",
+                    ));
+                }
                 let tag = TagArg {
                     value: literal
                         .base10_parse()
@@ -649,6 +704,17 @@ fn field_entries(fields: &syn::Fields) -> syn::Result<Vec<Entry>> {
                 "#[serde(flatten)] cannot be combined with #[cbor(key = ...)]",
             ));
         }
+        // A fully skipped field is never on the wire in either direction,
+        // so a key on it is a mistake. (The one-directional
+        // `skip_serializing`/`skip_deserializing` variants keep the key
+        // meaningful and stay allowed.)
+        if let (Some(..), Some(span)) = (&key, serde.skip) {
+            return Err(syn::Error::new(
+                span,
+                "#[serde(skip)] cannot be combined with #[cbor(key = ...)]; \
+                 the field is never on the wire",
+            ));
+        }
 
         let Some(key) = key else { continue };
 
@@ -717,6 +783,12 @@ struct SerdeAttrs {
     rename_all_fields: Option<proc_macro2::Span>,
     enum_repr: Option<proc_macro2::Span>,
     flatten: Option<proc_macro2::Span>,
+    // Container shapes that bypass the container name — and with it the
+    // marker carrying the declared tag, array shape and keys.
+    transparent: Option<proc_macro2::Span>,
+    into: Option<proc_macro2::Span>,
+    // `#[serde(skip)]`: the field is never on the wire in either direction.
+    skip: Option<proc_macro2::Span>,
 }
 
 // Scans `#[serde(...)]` attributes, tolerating any meta shapes we do not
@@ -749,6 +821,12 @@ fn scan_serde(attrs: &[syn::Attribute]) -> SerdeAttrs {
                 out.rename_all_fields = Some(meta.path.span());
             } else if meta.path.is_ident("flatten") {
                 out.flatten = Some(meta.path.span());
+            } else if meta.path.is_ident("transparent") {
+                out.transparent = Some(meta.path.span());
+            } else if meta.path.is_ident("into") {
+                out.into = Some(meta.path.span());
+            } else if meta.path.is_ident("skip") {
+                out.skip = Some(meta.path.span());
             } else if meta.path.is_ident("tag")
                 || meta.path.is_ident("untagged")
                 || meta.path.is_ident("content")
@@ -1163,6 +1241,119 @@ mod tests {
             msg.contains("expected `tag = <integer>` or `array`"),
             "{msg}"
         );
+    }
+
+    #[test]
+    fn copies_lint_attributes_to_the_shadow() {
+        let out = expanded(quote! {
+            #[allow(non_snake_case)]
+            struct S {
+                #[cbor(key = 1)]
+                #[allow(unused)]
+                fooBar: u8,
+            }
+        });
+
+        // Both the container-level and the field-level allow survive on the
+        // shadow, which repeats the user's names.
+        assert!(out.contains("allow (non_snake_case)"), "{out}");
+        assert!(out.contains("allow (unused)"), "{out}");
+    }
+
+    #[test]
+    fn rejects_suffixed_integer_literals() {
+        let msg = error(quote! {
+            struct S {
+                #[cbor(key = 1u8)]
+                a: u8,
+            }
+        });
+        assert!(msg.contains("suffixed integer literal"), "{msg}");
+
+        let msg = error(quote! {
+            #[cbor(tag = 7u64)]
+            struct S {
+                a: u8,
+            }
+        });
+        assert!(msg.contains("suffixed integer literal"), "{msg}");
+    }
+
+    #[test]
+    fn oversized_key_literals_report_the_cbor_range() {
+        // Beyond i128: the parse itself fails, but the error still names
+        // the CBOR range instead of a generic overflow.
+        let msg = error(quote! {
+            struct S {
+                #[cbor(key = 170141183460469231731687303715884105728)]
+                a: u8,
+            }
+        });
+        assert!(msg.contains("must fit a CBOR integer"), "{msg}");
+    }
+
+    #[test]
+    fn rejects_container_shapes_that_bypass_the_marker() {
+        let msg = error(quote! {
+            #[serde(transparent)]
+            #[cbor(tag = 7)]
+            struct S {
+                a: u8,
+            }
+        });
+        assert!(msg.contains("silently ignored"), "{msg}");
+
+        let msg = error(quote! {
+            #[serde(into = "Other")]
+            struct S {
+                #[cbor(key = 1)]
+                a: u8,
+            }
+        });
+        assert!(msg.contains("silently ignored on encode"), "{msg}");
+
+        // Without any #[cbor(...)] details there is nothing to lose, so
+        // both shapes stay allowed.
+        let out = expanded(quote! {
+            #[serde(transparent)]
+            struct S {
+                a: u8,
+            }
+        });
+        assert!(out.contains("transparent"), "{out}");
+    }
+
+    #[test]
+    fn rejects_key_on_fully_skipped_fields() {
+        let msg = error(quote! {
+            struct S {
+                #[cbor(key = 1)]
+                #[serde(skip)]
+                a: u8,
+            }
+        });
+        assert!(msg.contains("never on the wire"), "{msg}");
+
+        // One-directional skips keep the key meaningful.
+        let out = expanded(quote! {
+            struct S {
+                #[cbor(key = 1)]
+                #[serde(skip_serializing_if = "Option::is_none", default)]
+                a: Option<u8>,
+            }
+        });
+        assert!(out.contains(r#"rename = "@@CBOR@@@@a=1@@S""#), "{out}");
+
+        // A skipped field without a key stays fine.
+        let out = expanded(quote! {
+            struct S {
+                #[cbor(key = 1)]
+                a: u8,
+                #[serde(skip)]
+                b: u8,
+            }
+        });
+        assert!(out.contains(r#"rename = "@@CBOR@@@@a=1@@S""#), "{out}");
     }
 
     #[test]

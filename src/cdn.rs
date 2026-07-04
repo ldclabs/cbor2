@@ -35,6 +35,20 @@ mod types;
 /// also enables the `hash`, `cri`, and `CRI` extensions that require external
 /// crates. The default encoding is preferred serialization.
 ///
+/// Encoding indicators that carry no defined meaning here — the reserved
+/// `_4` through `_7`, indicator words from future registrations, and the
+/// bare `_` on an item that has no indefinite-length form — are accepted
+/// and ignored, as the CDN draft requires of consumers.
+///
+/// Two inputs encode as the draft's provisional (CPA) placeholder tags
+/// rather than as final data: an ellipsis (`...`) becomes the Diagnostic
+/// Notation Ellipsis Tag 888, and an application-extension prefix this
+/// crate does not implement becomes the Unresolved Application-Extension
+/// Tag 999 wrapping the prefix and its arguments (`cri`/`CRI` similarly
+/// use the provisional tag 99). These tag numbers may change when IANA
+/// assigns final values; consumers that cannot process elided or
+/// unresolved data should treat those tags as errors.
+///
 /// ```rust
 /// let bytes = cbor2::cdn_to_vec(r#"{ /kty/ 1: 4, "kid": h'deadbeef' }"#).unwrap();
 /// assert_eq!(cbor2::to_cdn(&bytes[..]).unwrap(), r#"{1: 4, "kid": h'deadbeef'}"#);

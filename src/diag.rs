@@ -36,14 +36,17 @@ const BIGNUM_DECIMAL_BYTE_LIMIT: usize = 1024;
 ///
 /// Working directly on the wire preserves details that a decoded
 /// [`Value`] cannot represent: indefinite-length items are rendered with
-/// the `_` marker of §8.1 (`[_ 1, 2]`, `{_ "k": 1}`, `(_ h'01', h'02')`),
+/// the `_` marker of §8.1 (`[_ 1, 2]`, `{_ "k": 1}`, `(_ h'01', h'02')`;
+/// an indefinite-length string with no chunks uses the CDN forms `''_`
+/// and `""_`, since `(_ )` could not carry the major type),
 /// `undefined` and unassigned simple values appear as themselves, and
 /// ordinary bignums (tags 2 and 3) are written as plain integers, exactly
 /// as in RFC 8949 Appendix A. Very large bignum payloads fall back to
 /// explicit tag/bytes notation.
 ///
 /// Printable non-ASCII characters (e.g. CJK, emoji) are emitted
-/// directly for readability; only control characters are escaped with
+/// directly for readability; control characters and invisible formatting
+/// characters (zero-width and bidirectional controls) are escaped with
 /// `\uXXXX`. Like [`validate`](crate::validate), this checks
 /// the input for well-formedness as it goes, requires the input to end
 /// after the item, and bounds nesting by
@@ -254,17 +257,25 @@ fn item_header<'a, R: Read>(
         Header::Bytes(len) => match len {
             Some(len) => hex_segment(decoder, out, len),
             None => {
-                out.push_str("(_ ");
                 let mut first = true;
                 loop {
                     let offset = decoder.offset();
                     match decoder.pull()? {
                         Header::Break => {
-                            out.push(')');
+                            // With no chunk to carry the major type, `(_ )`
+                            // would be ambiguous between a byte and a text
+                            // string; CDN reserves `''_` for this encoding.
+                            if first {
+                                out.push_str("''_");
+                            } else {
+                                out.push(')');
+                            }
                             return Ok(());
                         }
                         Header::Bytes(Some(len)) => {
-                            if !first {
+                            if first {
+                                out.push_str("(_ ");
+                            } else {
                                 out.push_str(", ");
                             }
                             first = false;
@@ -279,17 +290,24 @@ fn item_header<'a, R: Read>(
         Header::Text(len) => match len {
             Some(len) => text_segment(decoder, out, len),
             None => {
-                out.push_str("(_ ");
                 let mut first = true;
                 loop {
                     let offset = decoder.offset();
                     match decoder.pull()? {
                         Header::Break => {
-                            out.push(')');
+                            // See the byte-string arm: CDN reserves `""_`
+                            // for the empty indefinite-length text string.
+                            if first {
+                                out.push_str("\"\"_");
+                            } else {
+                                out.push(')');
+                            }
                             return Ok(());
                         }
                         Header::Text(Some(len)) => {
-                            if !first {
+                            if first {
+                                out.push_str("(_ ");
+                            } else {
                                 out.push_str(", ");
                             }
                             first = false;
@@ -302,7 +320,7 @@ fn item_header<'a, R: Read>(
         },
 
         Header::Array(len) => match (len, indent) {
-            (Some(0), _) | (None, None) if len == Some(0) => {
+            (Some(0), _) => {
                 out.push_str("[]");
                 Ok(())
             }
@@ -318,10 +336,6 @@ fn item_header<'a, R: Read>(
                 Ok(())
             }
             (Some(len), Some(ind)) => {
-                if len == 0 {
-                    out.push_str("[]");
-                    return Ok(());
-                }
                 out.push_str("[\n");
                 for i in 0..len {
                     if i > 0 {
@@ -650,9 +664,28 @@ fn text_segment<R: Read>(
     Ok(())
 }
 
+// Invisible characters beyond the Unicode `Cc` controls: zero-width and
+// joining characters, bidirectional controls, line/paragraph separators and
+// interlinear annotation marks. Passing these through raw would let a text
+// string visually misrepresent the surrounding diagnostic output.
+fn is_invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}'                  // soft hyphen
+            | '\u{061c}'            // Arabic letter mark
+            | '\u{180e}'            // Mongolian vowel separator
+            | '\u{200b}'..='\u{200f}' // zero-width chars, LRM/RLM
+            | '\u{2028}'..='\u{202e}' // Zl/Zp, bidi embedding/overrides
+            | '\u{2060}'..='\u{2069}' // word joiner, bidi isolates
+            | '\u{feff}'            // zero-width no-break space (BOM)
+            | '\u{fff9}'..='\u{fffb}' // interlinear annotation
+    )
+}
+
 // Escapes special and control characters in diagnostic text strings.
 // Printable non-ASCII characters (e.g. CJK, emoji) are passed through
-// directly for readability; only control characters use `\uXXXX`.
+// directly for readability; control and invisible formatting characters
+// use `\uXXXX`.
 pub(crate) fn escape_into(out: &mut String, s: &str) {
     for c in s.chars() {
         match c {
@@ -663,7 +696,7 @@ pub(crate) fn escape_into(out: &mut String, s: &str) {
             '\n' => out.push_str("\\n"),
             '\u{0c}' => out.push_str("\\f"),
             '\r' => out.push_str("\\r"),
-            _ if c.is_control() => {
+            _ if c.is_control() || is_invisible(c) => {
                 let mut units = [0u16; 2];
                 for unit in c.encode_utf16(&mut units) {
                     let _ = write!(out, "\\u{unit:04x}");

@@ -403,6 +403,18 @@ fn deserialized_unwraps_tags_for_scalars() {
             .unwrap(),
         [("k".to_string(), 1u8)].into()
     );
+
+    // Integer targets skip unknown tags too, exactly like the streaming
+    // deserializer decoding `7(42)` — only the bignum tags are interpreted.
+    assert_eq!(tag(Value::from(42)).deserialized::<u64>().unwrap(), 42);
+    assert_eq!(tag(Value::from(-2)).deserialized::<i32>().unwrap(), -2);
+    assert_eq!(
+        tag(Value::Tag(2, Box::new(Value::Bytes(vec![1, 0]))))
+            .deserialized::<u16>()
+            .unwrap(),
+        256
+    );
+    assert!(tag(Value::from("x")).deserialized::<u64>().is_err());
 }
 
 #[test]
@@ -424,12 +436,14 @@ fn deserialized_error_messages_name_the_input() {
         .unwrap_err()
         .to_string()
         .contains("null"));
+    // Unknown tags are transparent for integer targets, so the error names
+    // the value inside the tag, exactly as the streaming deserializer does.
     let tagged = Value::Tag(9, Box::new(Value::Null));
     assert!(tagged
         .deserialized::<u8>()
         .unwrap_err()
         .to_string()
-        .contains("tag"));
+        .contains("null"));
     assert!(Value::Bool(true)
         .deserialized::<String>()
         .unwrap_err()

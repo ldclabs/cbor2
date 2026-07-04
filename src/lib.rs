@@ -293,7 +293,9 @@ assert_eq!(cbor2::from_slice::<CoseSign>(&bytes).unwrap(), key);
 # }
 ```
 
-The tag is transparent on decode, and the serde attributes (`alias`,
+The tag is transparent on decode — any leading tag numbers are skipped
+without validation, so wrap a field in [`tag::RequireExact`] when a
+specific tag must be enforced — and the serde attributes (`alias`,
 `default`, `skip`, `with`, ...) work as usual; map types like
 `HashMap<String, _>` are unaffected. The declared keys, array shape and tag
 stay inspectable at runtime through the [`Cbor`](trait@Cbor) trait, which the

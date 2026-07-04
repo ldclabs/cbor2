@@ -34,7 +34,18 @@ pub(super) fn ip_atom(content: &str, tagged: bool, offset: usize) -> Result<Atom
         if prefix > max_prefix {
             return Err(Error::semantic(offset, "IP prefix length is out of range"));
         }
-        let mut prefix_bytes = mask_prefix(bytes, prefix);
+        // RFC 9164 §4.2 requires the bits beyond the prefix length to be
+        // zero. Rejecting nonzero host bits — instead of silently masking
+        // them off — keeps the literal faithful to the encoded data.
+        let mut prefix_bytes = mask_prefix(bytes.clone(), prefix);
+        if bytes[..prefix_bytes.len()] != prefix_bytes[..]
+            || bytes[prefix_bytes.len()..].iter().any(|&b| b != 0)
+        {
+            return Err(Error::semantic(
+                offset,
+                "IP prefix has nonzero bits beyond the prefix length",
+            ));
+        }
         while prefix_bytes.last() == Some(&0) {
             prefix_bytes.pop();
         }

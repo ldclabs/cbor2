@@ -4,7 +4,7 @@ use alloc::{
     vec::Vec,
 };
 
-use crate::core::{f64_to_f16, tag, Encoder, Header};
+use crate::core::{f64_to_f32, tag, Encoder, Header};
 use crate::de::{Error, DEFAULT_RECURSION_LIMIT};
 
 use super::applications::{
@@ -16,13 +16,13 @@ use super::applications::{
 use super::cri::cri_atom;
 use super::datetime::datetime_atom;
 use super::encode::{ellipsis_item, write_definite_bytes, write_definite_text, write_uint};
-use super::float::float_atom;
+use super::float::{f64_to_f16_preserving, float_atom};
 #[cfg(feature = "cdn")]
 use super::hash::{hash_args, hash_atom};
 use super::ip::ip_atom;
 use super::number::{
-    bytes_to_u64, f64_to_f32_bits, is_app_char_any, is_tag_uint, parse_bigint_digits,
-    parse_hex_float, strip_sign, subtract_one,
+    bytes_to_u64, is_app_char_any, is_tag_uint, parse_bigint_digits, parse_hex_float, strip_sign,
+    subtract_one,
 };
 use super::types::{Arg, Atom, BigInt, Indicator};
 
@@ -437,6 +437,12 @@ impl<'a> Parser<'a> {
         let mut chunks = Vec::new();
         let mut major = None;
         loop {
+            // The grammar admits an ellipsis where a chunk may stand, but no
+            // semantics are defined for eliding chunks of an
+            // indefinite-length string (cf. the ilbs/ilts extensions).
+            if self.starts_with("...") {
+                return Err(self.semantic("ellipsis is not supported as a stream string chunk"));
+            }
             let mut chunk = Vec::new();
             self.item(&mut chunk, depth)?;
             let Some(&head) = chunk.first() else {
@@ -750,6 +756,14 @@ impl<'a> Parser<'a> {
             let value = lex
                 .parse::<f64>()
                 .map_err(|_| Error::semantic(offset, format!("invalid decimal float `{lex}`")))?;
+            // Overflowing to infinity would silently change the data;
+            // `Infinity` spells the infinite values explicitly.
+            if value.is_infinite() {
+                return Err(Error::semantic(
+                    offset,
+                    format!("decimal float `{lex}` overflows the f64 range"),
+                ));
+            }
             return Ok(Atom::Float(value));
         }
 
@@ -775,7 +789,9 @@ impl<'a> Parser<'a> {
             if ch == '\r' {
                 continue;
             }
-            if ch != '\n' && ch.is_control() {
+            // The `unescaped` grammar excludes the C0 controls other than
+            // LF (CR was dropped above) but allows DEL and the C1 range.
+            if ch != '\n' && (ch as u32) < 0x20 {
                 return Err(self.syntax());
             }
             out.push(ch);
@@ -1054,14 +1070,14 @@ impl<'a> Parser<'a> {
             }
             Indicator::Immediate => Err(self.semantic("float cannot use `_i` encoding indicator")),
             Indicator::Ai(1) => {
-                let bits = f64_to_f16(value)
+                let bits = f64_to_f16_preserving(value)
                     .ok_or_else(|| self.semantic("float cannot be represented as binary16"))?;
                 out.push(0xf9);
                 out.extend_from_slice(&bits.to_be_bytes());
                 Ok(())
             }
             Indicator::Ai(2) => {
-                let bits = f64_to_f32_bits(value).ok_or_else(|| {
+                let bits = f64_to_f32(value).ok_or_else(|| {
                     self.semantic("float cannot be represented exactly as binary32")
                 })?;
                 out.push(0xfa);

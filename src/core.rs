@@ -251,22 +251,18 @@ impl<W: Write> Encoder<W> {
 
     #[inline]
     pub(crate) fn float(&mut self, value: f64) -> Result<(), crate::io::Error> {
-        if value.is_nan() {
-            if let Some(n16) = f64_to_f16(value) {
-                let b = n16.to_be_bytes();
-                return self.0.write_all(&[0xf9, b[0], b[1]]);
-            }
-        } else {
-            let n32 = value as f32;
-            if (n32 as f64).to_bits() == value.to_bits() {
-                if let Some(n16) = f64_to_f16(value) {
-                    let b = n16.to_be_bytes();
-                    return self.0.write_all(&[0xf9, b[0], b[1]]);
-                }
+        // Preferred serialization (RFC 8949 §4.1): the shortest width that
+        // preserves the value exactly. Any value representable as f16 is
+        // also representable as f32, so trying the narrower width first is
+        // sufficient.
+        if let Some(n16) = f64_to_f16(value) {
+            let b = n16.to_be_bytes();
+            return self.0.write_all(&[0xf9, b[0], b[1]]);
+        }
 
-                let b = n32.to_bits().to_be_bytes();
-                return self.0.write_all(&[0xfa, b[0], b[1], b[2], b[3]]);
-            }
+        if let Some(n32) = f64_to_f32(value) {
+            let b = n32.to_be_bytes();
+            return self.0.write_all(&[0xfa, b[0], b[1], b[2], b[3]]);
         }
 
         let b = value.to_bits().to_be_bytes();
@@ -278,8 +274,9 @@ impl<W: Write> Encoder<W> {
     ///
     /// The shortest well-formed argument width is chosen automatically.
     /// Floating-point values are encoded as `f16`, `f32` or `f64`, using the
-    /// shortest lossless width; NaN is emitted as the canonical half-width
-    /// quiet NaN when it round-trips exactly.
+    /// shortest lossless width. This applies to NaN too: the canonical quiet
+    /// NaN is emitted half-width, and a NaN payload uses the narrowest width
+    /// that preserves it bit for bit.
     #[inline]
     pub fn push(&mut self, header: Header) -> Result<(), crate::io::Error> {
         match header {
@@ -926,6 +923,36 @@ pub fn f16_to_f64(bits: u16) -> f64 {
     }
 }
 
+/// Converts an `f64` to IEEE 754 single-precision bits if (and only if) the
+/// conversion is lossless.
+///
+/// A NaN converts when its sign and payload survive the narrowing exactly
+/// (the low 29 fraction bits must be zero).
+pub fn f64_to_f32(value: f64) -> Option<u32> {
+    let bits = value.to_bits();
+
+    let single = if value.is_nan() {
+        // Narrow bit by bit: numeric casts may quieten or canonicalize a
+        // NaN, losing the payload the caller asked to preserve.
+        if bits & ((1 << 29) - 1) != 0 {
+            return None;
+        }
+        let sign = ((bits >> 32) & 0x8000_0000) as u32;
+        let frac = ((bits >> 29) & 0x007f_ffff) as u32;
+        sign | 0x7f80_0000 | frac
+    } else {
+        (value as f32).to_bits()
+    };
+
+    // Belt and braces: only report success on an exact bit-level round trip
+    // through the same widening the decoder performs.
+    if (f32::from_bits(single) as f64).to_bits() == bits {
+        Some(single)
+    } else {
+        None
+    }
+}
+
 /// Converts an `f64` to IEEE 754 half-precision bits if (and only if) the
 /// conversion is lossless. NaN converts to the canonical quiet NaN.
 pub fn f64_to_f16(value: f64) -> Option<u16> {
@@ -990,6 +1017,60 @@ mod tests {
             }
 
             assert_eq!(f64_to_f16(wide), Some(bits), "bits {bits:04x} ({wide})");
+        }
+    }
+
+    // Every f32 bit pattern must survive widening to f64 and re-narrowing,
+    // NaN payloads included (quiet NaNs only: the widening cast may quieten
+    // a signaling NaN, which the round-trip check then rejects).
+    #[test]
+    fn f32_narrowing_roundtrip() {
+        for bits in [
+            0x0000_0000u32, // 0.0
+            0x8000_0000,    // -0.0
+            0x3fc0_0000,    // 1.5
+            0x7f7f_ffff,    // f32::MAX
+            0x0000_0001,    // smallest subnormal
+            0x7f80_0000,    // Infinity
+            0xff80_0000,    // -Infinity
+            0x7fc0_0000,    // canonical quiet NaN
+            0xffc0_0000,    // -NaN
+            0x7fc0_0100,    // quiet NaN with payload
+        ] {
+            let wide = f32::from_bits(bits) as f64;
+            assert_eq!(f64_to_f32(wide), Some(bits), "bits {bits:08x}");
+        }
+    }
+
+    // Values that are not representable as f32 must be rejected.
+    #[test]
+    fn f32_rejects_lossy() {
+        for value in [
+            0.1,                                   // fraction bits beyond 23
+            f64::MAX,                              // exponent out of range
+            f64::MIN_POSITIVE,                     // below the subnormal range
+            f64::from_bits(0x7ff8_0000_1000_0000), // NaN payload needs 29 low bits
+            f64::from_bits(0x7ff0_0000_0000_0001), // NaN payload entirely low
+        ] {
+            assert_eq!(f64_to_f32(value), None, "{:016x}", value.to_bits());
+        }
+    }
+
+    // NaN payloads use the narrowest lossless width (RFC 8949 §4.1).
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn nan_payloads_use_preferred_widths() {
+        for (bits, expected) in [
+            (0x7ff8_0000_0000_0000u64, "f97e00"),          // canonical: f16
+            (0xfff8_0000_0000_0000, "faffc00000"),         // -NaN: sign fits f32
+            (0x7ff8_0000_2000_0000, "fa7fc00001"),         // payload fits f32
+            (0x7ff8_0000_1000_0000, "fb7ff8000010000000"), // payload needs f64
+        ] {
+            let mut buffer = Vec::new();
+            Encoder::from(&mut buffer)
+                .push(Header::Float(f64::from_bits(bits)))
+                .unwrap();
+            assert_eq!(hex::encode(&buffer), expected, "bits {bits:016x}");
         }
     }
 

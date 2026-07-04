@@ -105,7 +105,7 @@ fn parse_datetime(content: &str, offset: usize) -> Result<(i128, Option<f64>), E
         + i128::from(minute) * 60
         + i128::from(second)
         - i128::from(offset_seconds);
-    if second == 60 && !is_positive_leap_second_epoch(seconds) {
+    if second == 60 && !is_possible_leap_second_epoch(seconds) {
         return Err(Error::Syntax(offset));
     }
     Ok((seconds, fractional))
@@ -145,40 +145,23 @@ fn expect_byte_ci(bytes: &[u8], idx: usize, expected: u8, offset: usize) -> Resu
     }
 }
 
-fn is_positive_leap_second_epoch(seconds: i128) -> bool {
-    const POSITIVE_LEAP_SECOND_DAYS: &[(i32, u32, u32)] = &[
-        (1972, 6, 30),
-        (1972, 12, 31),
-        (1973, 12, 31),
-        (1974, 12, 31),
-        (1975, 12, 31),
-        (1976, 12, 31),
-        (1977, 12, 31),
-        (1978, 12, 31),
-        (1979, 12, 31),
-        (1981, 6, 30),
-        (1982, 6, 30),
-        (1983, 6, 30),
-        (1985, 6, 30),
-        (1987, 12, 31),
-        (1989, 12, 31),
-        (1990, 12, 31),
-        (1992, 6, 30),
-        (1993, 6, 30),
-        (1994, 6, 30),
-        (1995, 12, 31),
-        (1997, 6, 30),
-        (1998, 12, 31),
-        (2005, 12, 31),
-        (2008, 12, 31),
-        (2012, 6, 30),
-        (2015, 6, 30),
-        (2016, 12, 31),
-    ];
+// A positive leap second is only ever inserted as 23:59:60 UTC on the last
+// day of a month (IERS schedules them at month ends, preferring June and
+// December). Checking that shape — instead of a hardcoded table of past
+// leap seconds — keeps future leap seconds parseable while still rejecting
+// times like 12:30:60 that cannot be leap seconds at all. `seconds` already
+// includes the :60, so it must land exactly on a following midnight that
+// starts a new month.
+fn is_possible_leap_second_epoch(seconds: i128) -> bool {
+    if seconds % 86_400 != 0 {
+        return false;
+    }
 
-    POSITIVE_LEAP_SECOND_DAYS.iter().any(|&(year, month, day)| {
-        i128::from(days_from_civil(year, month, day) + 1) * 86_400 == seconds
-    })
+    let Ok(days) = i64::try_from(seconds / 86_400) else {
+        return false;
+    };
+    let (.., day) = civil_from_days(days);
+    day == 1
 }
 
 fn days_in_month(year: i32, month: u32) -> u32 {
@@ -203,4 +186,18 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
     let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day as i32 - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     i64::from(era * 146097 + doe - 719468)
+}
+
+// The inverse of `days_from_civil`.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
 }

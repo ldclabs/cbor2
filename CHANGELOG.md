@@ -1,5 +1,67 @@
 # Changelog
 
+## [1.1.3] - 2026-07-04
+
+### Fixed
+
+* Diagnostic notation now renders an empty indefinite-length byte or text
+  string as `''_` / `""_` instead of `(_ )`, which cannot carry the string's
+  major type and is not parseable CDN (draft-ietf-cbor-edn-literals §2.5.5).
+* Preferred serialization now encodes a NaN payload at the narrowest width
+  that preserves it: a NaN whose payload fits binary32 is emitted as 4 bytes
+  instead of 8 (RFC 8949 §4.1). The new `core::f64_to_f32` helper exposes the
+  lossless narrowing, NaN payloads included.
+* CDN encoding indicators on `float'..'` literals now re-encode NaN sign and
+  payload bit for bit at the requested width, erroring when the payload does
+  not fit, instead of silently canonicalizing the NaN.
+* Decimal and hexadecimal floating-point literals that overflow the f64 range
+  (such as `1e999` or `0x1p+1024`) are now rejected instead of silently
+  becoming `Infinity`.
+* `IP'..'`/`ip'..'` prefix literals now reject addresses with nonzero bits
+  beyond the prefix length (RFC 9164 §4.2) instead of silently masking them.
+* `Value::deserialized` integer targets now skip unknown tags exactly like
+  the streaming deserializer, so `7(42)` decodes to `u64` through `Value` too.
+* The streaming deserializer now accepts an enum encoded as a single-entry
+  *indefinite-length* map, matching its handling of every other container.
+* Error messages for out-of-range negative integers no longer wrap around
+  when the encoded argument exceeds `i64::MAX`.
+
+* `#[derive(Cbor)]` now rejects `#[serde(transparent)]` and
+  `#[serde(into = ...)]` on containers that declare a tag, array shape or
+  integer keys: both shapes bypass the container marker, so the declared
+  protocol details were silently dropped (a `#[cbor(tag = 7)]` +
+  `transparent` struct encoded without its tag).
+* `#[derive(Cbor)]` now rejects `#[cbor(key = ...)]` on a `#[serde(skip)]`
+  field (the field is never on the wire, so the key was dead weight in
+  `Cbor::KEYS`); the one-directional `skip_serializing`/`skip_deserializing`
+  variants remain allowed.
+* `#[derive(Cbor)]` now rejects suffixed integer literals in
+  `#[cbor(key = 1u8)]` and `#[cbor(tag = 7u64)]` instead of silently
+  ignoring the suffix, and oversized key literals report the CBOR integer
+  range instead of a generic overflow error.
+* The derive's hidden shadow type now inherits `#[allow]`/`#[expect]` lint
+  attributes from the original item, so style lints silenced on the user's
+  type no longer re-fire on the generated copy of its names.
+
+### Changed
+
+* `dt'..'` leap-second validation now accepts any month-end `23:59:60` UTC
+  instead of consulting a hardcoded table that ended in 2016, so future leap
+  seconds parse without a new release.
+* Diagnostic output now escapes invisible formatting characters (zero-width
+  characters, bidirectional controls, line/paragraph separators) as `\uXXXX`
+  so rendered text cannot visually misrepresent the surrounding notation.
+* CDN string literals now accept raw DEL (U+007F) and C1 control characters,
+  matching the draft's `unescaped` grammar; C0 controls other than LF remain
+  rejected.
+* Attempting to elide a stream-string chunk (`(_ 'a', ...)`) now reports a
+  dedicated error instead of a generic chunk-type error.
+* Documented that unknown or reserved encoding indicators are accepted and
+  ignored, that `...` and unknown application-extension prefixes encode as
+  the draft's provisional CPA tags (888/999/99), that `undefined` decodes to
+  `Value::Null`, and that `#[cbor(tag = ...)]` skips tags without validation
+  on decode (use `tag::RequireExact` to enforce one).
+
 ## [1.1.2] - 2026-06-28
 
 ### Added

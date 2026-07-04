@@ -121,10 +121,13 @@ fn appendix_a_diagnostic_column() {
 
 #[test]
 fn beyond_the_appendix() {
-    // Empty indefinite forms.
+    // Empty indefinite forms. `(_ )` could not carry a chunkless string's
+    // major type, so CDN reserves the `''_` and `""_` spellings instead.
     assert_eq!(diag("bfff"), "{_ }");
-    assert_eq!(diag("5fff"), "(_ )");
-    assert_eq!(diag("7fff"), "(_ )");
+    assert_eq!(diag("5fff"), "''_");
+    assert_eq!(diag("7fff"), "\"\"_");
+    assert_eq!(diag("5f40ff"), "(_ h'')");
+    assert_eq!(diag("7f60ff"), "(_ \"\")");
 
     // More simple values. (Two-byte encodings below 32 are not
     // well-formed, so simple(24)..=simple(31) cannot appear at all.)
@@ -175,6 +178,14 @@ fn beyond_the_appendix() {
     assert_eq!(
         diag("6a085c090a0c0d2f01207f"),
         "\"\\b\\\\\\t\\n\\f\\r/\\u0001 \\u007f\""
+    );
+
+    // Invisible formatting characters (zero-width, bidirectional controls,
+    // line/paragraph separators) are escaped so diagnostic output cannot be
+    // visually misleading; ordinary non-ASCII text still passes through.
+    assert_eq!(
+        Value::from("a\u{202e}b\u{200b}c\u{2028}水").to_string(),
+        "\"a\\u202eb\\u200bc\\u2028水\""
     );
 
     // Large bodies cross the internal 4096-byte chunking.

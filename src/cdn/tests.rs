@@ -112,6 +112,9 @@ fn parses_application_extensions() {
     assert_eq!(hex("dt'1969-07-21t02:56:16z'"), "3a00d80caf");
     assert_eq!(hex("dt'2016-12-31T23:59:60Z'"), "1a58684680");
     assert_eq!(hex("dt'2017-01-01T00:59:60+01:00'"), "1a58684680");
+    // Any month-end 23:59:60 UTC parses, so leap seconds that IERS
+    // announces in the future do not need a new release.
+    assert_cdn_eq("dt'2035-06-30T23:59:60Z'", "dt'2035-07-01T00:00:00Z'");
     assert_eq!(hex("DT'1969-07-21T02:56:16Z'"), "c13a00d80caf");
     assert_eq!(hex("ip'192.0.2.42'"), "44c000022a");
     assert_eq!(hex("IP'192.0.2.42'"), "d83444c000022a");
@@ -121,6 +124,8 @@ fn parses_application_extensions() {
         "d8365020010db8000000000000000000000042"
     );
     assert_eq!(hex("IP'2001:db8::/64'"), "d8368218404420010db8");
+    // A full-length prefix has no host bits to reject.
+    assert_eq!(hex("ip'192.0.2.1/32'"), "82182044c0000201");
     assert_eq!(
         hex(r#"t1<<"Hello", h'20', "world">>"#),
         "6b48656c6c6f20776f726c64"
@@ -143,6 +148,18 @@ fn parses_application_extensions() {
     );
     assert_eq!(hex("float'fe00'"), "f9fe00");
     assert_eq!(hex("float'fe00'_2"), "faffc00000");
+    // Encoding indicators re-encode NaN payloads bit for bit — the float
+    // extension exists precisely to express non-canonical NaNs.
+    assert_eq!(hex("float'7e01'"), "f97e01");
+    assert_eq!(hex("float'7e01'_1"), "f97e01");
+    assert_eq!(hex("float'7e01'_2"), "fa7fc02000");
+    assert_eq!(hex("float'7e01'_3"), "fb7ff8040000000000");
+    assert_eq!(hex("float'7fc00100'_3"), "fb7ff8002000000000");
+    assert_eq!(hex("float'fe00'_1"), "f9fe00");
+    // A payload that does not fit the requested width is an error, not a
+    // silent canonicalization.
+    assert!(cdn_to_vec("float'7ff0000000000001'_2").is_err());
+    assert!(cdn_to_vec("float'7fc00100'_1").is_err());
     assert_eq!(hex("bytes<<>>"), "40");
     assert_eq!(hex("bytes`text1`"), "457465787431");
     assert_eq!(hex(r#"bytes<<"1", "2">>"#), "423132");
@@ -305,6 +322,13 @@ fn draft26_string_examples() {
     assert_all_eq(&[r#"'hello world'"#, "h'68656c6c6f20776f726c64'"]);
     assert_hex(r#"'\\'"#, "415c");
     assert_hex(r#"'\''"#, "4127");
+
+    // The `unescaped` grammar excludes C0 controls (other than LF) but
+    // allows raw DEL and the C1 range.
+    assert_hex("\"a\u{7f}b\"", "63617f62");
+    assert_hex("\"a\u{85}b\"", "6461c28562");
+    assert!(cdn_to_vec("\"a\tb\"").is_err());
+    assert!(cdn_to_vec("\"a\u{1}b\"").is_err());
 
     assert_all_eq(&[r#"``[^ \t\n\r"'`]``"#, r#""[^ \\t\\n\\r\"'`]""#]);
     assert_all_eq(&["```a```", "```\na```"]);
@@ -635,7 +659,8 @@ fn rejects_invalid_cdn() {
         "[1[]]",
         "h'0'",
         "'\\u{41}'",
-        "dt'2015-01-01T23:59:60Z'",
+        "dt'2015-01-01T23:59:60Z'", // :60 not at a month-end midnight
+        "dt'2016-12-31T12:30:60Z'",
         "simple(24)",
         "simple(042)",
         "simple(59)_i",
@@ -648,6 +673,12 @@ fn rejects_invalid_cdn() {
         "b64'===='",
         "b64'SG=V'",
         "ilts<<h'ff'>>",
+        "1e999", // overflows to Infinity
+        "-1e999",
+        "0x1p+1024",
+        "IP'192.0.2.42/24'", // nonzero host bits (RFC 9164 §4.2)
+        "ip'2001:db8::1/56'",
+        "(_ 'a', ...)", // no semantics for eliding streamstring chunks
     ] {
         assert!(cdn_to_vec(input).is_err(), "{input}");
     }

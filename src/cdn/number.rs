@@ -121,6 +121,16 @@ pub(super) fn parse_hex_float(lex: &str, offset: usize) -> Result<f64, Error> {
     }
 
     value *= exp2(exponent - 4 * frac_digits);
+    // A literal beyond the f64 range would silently change the data; the
+    // encoding-indicator rules of CDN reject lossy re-encodings, so an
+    // unrepresentable literal is rejected the same way. (A non-finite
+    // intermediate also poisons the scaling above.)
+    if !value.is_finite() {
+        return Err(Error::semantic(
+            offset,
+            format!("hex float `{lex}` overflows the f64 range"),
+        ));
+    }
     if negative {
         value = -value;
     }
@@ -138,19 +148,6 @@ fn exp2(n: i32) -> f64 {
         f64::from_bits(((n + 1023) as u64) << 52)
     } else {
         f64::from_bits(1u64 << (n + 1074))
-    }
-}
-
-pub(super) fn f64_to_f32_bits(value: f64) -> Option<u32> {
-    if value.is_nan() {
-        let sign = ((value.to_bits() >> 32) & 0x8000_0000) as u32;
-        return Some(sign | 0x7fc0_0000);
-    }
-    let f = value as f32;
-    if (f as f64).to_bits() == value.to_bits() {
-        Some(f.to_bits())
-    } else {
-        None
     }
 }
 

@@ -242,16 +242,26 @@ impl Deserializer<&Value> {
             Ok(u128::from_be_bytes(buffer))
         }
 
-        let err = || de::Error::invalid_type(self.0.into(), &kind);
+        // Unknown tags are transparent for integer targets, exactly as in
+        // the streaming deserializer; only the bignum tags are interpreted.
+        let mut value = self.0;
+        while let Value::Tag(t, v) = value {
+            if *t == tag::BIGPOS || *t == tag::BIGNEG {
+                break;
+            }
+            value = v;
+        }
 
-        Ok(match self.0 {
+        let err = || de::Error::invalid_type(value.into(), &kind);
+
+        Ok(match value {
             Value::Integer(x) => i128::from(*x).try_into().map_err(|_| err())?,
             Value::Tag(t, v) if *t == tag::BIGPOS => raw(v)?.try_into().map_err(|_| err())?,
             Value::Tag(t, v) if *t == tag::BIGNEG => i128::try_from(raw(v)?)
                 .map(|x| x ^ !0)
                 .map_err(|_| err())
                 .and_then(|x| x.try_into().map_err(|_| err()))?,
-            _ => return Err(de::Error::invalid_type(self.0.into(), &"(big)int")),
+            _ => return Err(de::Error::invalid_type(value.into(), &"(big)int")),
         })
     }
 }

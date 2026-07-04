@@ -139,7 +139,10 @@ impl Expected for Header {
         de::Error::invalid_type(
             match self {
                 Header::Positive(x) => de::Unexpected::Unsigned(x),
-                Header::Negative(x) => de::Unexpected::Signed(x as i64 ^ !0),
+                Header::Negative(x) => match i64::try_from(x) {
+                    Ok(x) => de::Unexpected::Signed(-1 - x),
+                    Err(..) => de::Unexpected::Other("large negative integer"),
+                },
                 Header::Bytes(..) => de::Unexpected::Other("bytes"),
                 Header::Text(..) => de::Unexpected::Other("string"),
 
@@ -1356,18 +1359,21 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
         loop {
             // An enum variant is either encoded as a map with a single entry
             // (the variant name and its payload) or, for a unit variant, as
-            // a bare text string.
-            let map = match self.source.pull()? {
+            // a bare text string. Be liberal: the map may be
+            // indefinite-length, in which case the break is checked after
+            // the entry.
+            let form = match self.source.pull()? {
                 Header::Tag(..) => continue,
-                Header::Map(Some(1)) => true,
+                Header::Map(Some(1)) => EnumForm::Map,
+                Header::Map(None) => EnumForm::IndefiniteMap,
                 header @ Header::Text(..) => {
                     self.source.push(header);
-                    false
+                    EnumForm::Text
                 }
                 header => return Err(header.expected("enum")),
             };
 
-            return self.recurse(|me| visitor.visit_enum(Enum(me, map, keys, shape)));
+            return self.recurse(|me| visitor.visit_enum(Enum(me, form, keys, shape)));
         }
     }
 
@@ -1507,21 +1513,48 @@ impl<'de, S: BorrowSource<'de>> de::MapAccess<'de> for StructAccess<'_, S> {
     }
 }
 
+// The wire form an enum item was encoded in.
+#[cfg(feature = "alloc")]
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum EnumForm {
+    // A bare text string: a unit variant with no payload item, so payload
+    // accesses must not consume any further items from the stream.
+    Text,
+    // A definite-length map with a single entry.
+    Map,
+    // An indefinite-length map; its break follows the single entry.
+    IndefiniteMap,
+}
+
 // Variant access for an enum item.
 //
-// The boolean field indicates whether the variant was encoded as a
-// single-entry map (`true`) or as a bare text string (`false`). The bare
-// form only encodes a unit variant, so payload accesses in that form must
-// not consume any further items from the stream. The last field is the
-// key table of a marked enum (empty otherwise), applied to struct
-// variants.
+// The second field carries the wire form. The last field is the key table
+// of a marked enum (empty otherwise), applied to struct variants.
 #[cfg(feature = "alloc")]
 struct Enum<'a, S>(
     &'a mut Deserializer<S>,
-    bool,
+    EnumForm,
     &'static str,
     crate::ser::StructShape,
 );
+
+// After the payload of the indefinite-length map form, the entry must have
+// been the only one: the next header has to be the break.
+#[cfg(feature = "alloc")]
+fn finish_enum_map<S: Source>(de: &mut Deserializer<S>, form: EnumForm) -> Result<(), Error> {
+    if form != EnumForm::IndefiniteMap {
+        return Ok(());
+    }
+
+    let offset = de.source.offset();
+    match de.source.pull()? {
+        Header::Break => Ok(()),
+        _ => Err(Error::semantic(
+            offset,
+            "expected a single-entry map for an enum",
+        )),
+    }
+}
 
 #[cfg(feature = "alloc")]
 impl<'de, S: BorrowSource<'de>> de::EnumAccess<'de> for Enum<'_, S> {
@@ -1544,9 +1577,10 @@ impl<'de, S: BorrowSource<'de>> de::VariantAccess<'de> for Enum<'_, S> {
 
     #[inline]
     fn unit_variant(self) -> Result<(), Self::Error> {
-        if self.1 {
+        if self.1 != EnumForm::Text {
             // The map form carries a payload; require it to be a unit.
             <() as de::Deserialize>::deserialize(&mut *self.0)?;
+            finish_enum_map(self.0, self.1)?;
         }
 
         Ok(())
@@ -1557,14 +1591,16 @@ impl<'de, S: BorrowSource<'de>> de::VariantAccess<'de> for Enum<'_, S> {
         self,
         seed: U,
     ) -> Result<U::Value, Self::Error> {
-        if !self.1 {
+        if self.1 == EnumForm::Text {
             return Err(de::Error::invalid_type(
                 de::Unexpected::UnitVariant,
                 &"newtype variant",
             ));
         }
 
-        seed.deserialize(&mut *self.0)
+        let value = seed.deserialize(&mut *self.0)?;
+        finish_enum_map(self.0, self.1)?;
+        Ok(value)
     }
 
     #[inline]
@@ -1573,14 +1609,16 @@ impl<'de, S: BorrowSource<'de>> de::VariantAccess<'de> for Enum<'_, S> {
         _len: usize,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        if !self.1 {
+        if self.1 == EnumForm::Text {
             return Err(de::Error::invalid_type(
                 de::Unexpected::UnitVariant,
                 &"tuple variant",
             ));
         }
 
-        self.0.deserialize_seq(visitor)
+        let value = self.0.deserialize_seq(visitor)?;
+        finish_enum_map(self.0, self.1)?;
+        Ok(value)
     }
 
     #[inline]
@@ -1589,7 +1627,7 @@ impl<'de, S: BorrowSource<'de>> de::VariantAccess<'de> for Enum<'_, S> {
         _fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        if !self.1 {
+        if self.1 == EnumForm::Text {
             return Err(de::Error::invalid_type(
                 de::Unexpected::UnitVariant,
                 &"struct variant",
@@ -1598,19 +1636,23 @@ impl<'de, S: BorrowSource<'de>> de::VariantAccess<'de> for Enum<'_, S> {
 
         let keys = self.2;
         let shape = self.3;
-        loop {
-            return match self.0.source.pull()? {
+        let value = loop {
+            break match self.0.source.pull()? {
                 Header::Tag(..) => continue,
                 Header::Map(len) if shape == crate::ser::StructShape::Map => self
                     .0
-                    .recurse(|me| visitor.visit_map(StructAccess(me, len, keys))),
+                    .recurse(|me| visitor.visit_map(StructAccess(me, len, keys)))?,
                 Header::Array(len) if shape == crate::ser::StructShape::Array => {
-                    self.0.recurse(|me| visitor.visit_seq(Access(me, len)))
+                    self.0.recurse(|me| visitor.visit_seq(Access(me, len)))?
                 }
-                header if shape == crate::ser::StructShape::Array => Err(header.expected("array")),
-                header => Err(header.expected("map")),
+                header if shape == crate::ser::StructShape::Array => {
+                    return Err(header.expected("array"))
+                }
+                header => return Err(header.expected("map")),
             };
-        }
+        };
+        finish_enum_map(self.0, self.1)?;
+        Ok(value)
     }
 }
 
