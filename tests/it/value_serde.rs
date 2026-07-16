@@ -418,6 +418,32 @@ fn deserialized_unwraps_tags_for_scalars() {
 }
 
 #[test]
+fn deserialized_unwraps_tags_for_units() {
+    let tag = |v: Value| Value::Tag(7, Box::new(v));
+
+    // `7(null)` decodes to a unit through `Value` exactly as it does
+    // through the streaming deserializer.
+    let bytes = [0xc7, 0xf6];
+    cbor2::from_slice::<()>(&bytes).unwrap();
+    let tagged_null: Value = cbor2::from_slice(&bytes).unwrap();
+    tagged_null.deserialized::<()>().unwrap();
+    assert_eq!(tagged_null.deserialized::<Option<()>>().unwrap(), Some(()));
+    assert_eq!(
+        tagged_null.deserialized::<UnitStruct>().unwrap(),
+        UnitStruct
+    );
+    assert!(tag(Value::Bool(true)).deserialized::<()>().is_err());
+
+    // The same transparency for the payload of a map-form unit variant.
+    let unit_variant = cbor!({"Unit" => tag(Value::Null)}).unwrap();
+    let bytes = cbor2::to_vec(&unit_variant).unwrap();
+    assert_eq!(cbor2::from_slice::<Enum>(&bytes).unwrap(), Enum::Unit);
+    assert_eq!(unit_variant.deserialized::<Enum>().unwrap(), Enum::Unit);
+    let bool_variant = cbor!({"Unit" => tag(Value::Bool(true))}).unwrap();
+    assert!(bool_variant.deserialized::<Enum>().is_err());
+}
+
+#[test]
 fn deserialized_error_messages_name_the_input() {
     // The invalid_type errors carry a description of the unexpected value.
     let err = |v: &Value| v.deserialized::<bool>().unwrap_err().to_string();

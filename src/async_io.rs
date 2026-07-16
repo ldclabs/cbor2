@@ -12,6 +12,18 @@
 //! The item walk is iterative, so the futures returned here are plain state
 //! machines: when the reader or writer is `Send`, so is the future, and it
 //! can be driven by multi-threaded executors such as `tokio::spawn`.
+//!
+//! # Cancellation safety
+//!
+//! The read helpers are **not cancellation-safe**, for the same reason as
+//! `tokio::io::AsyncReadExt::read_exact`: a read future dropped before
+//! completion — a lost `select!` race against a timeout, for example — may
+//! have consumed bytes that are gone with it, leaving the stream in the
+//! middle of an item. Further reads on that stream would misparse the
+//! remainder as fresh items, so discard the connection instead of reusing
+//! it. When peers must survive a timed-out read, put the timeout around
+//! the connection (closing it on expiry) rather than around an individual
+//! read future.
 
 use alloc::vec::Vec;
 use core::future::Future;
@@ -34,6 +46,11 @@ const CHUNK: usize = 4096;
 /// future would not be `Send` are not supported.
 pub trait AsyncRead {
     /// Reads exactly `buf.len()` bytes into `buf`.
+    ///
+    /// Like `tokio::io::AsyncReadExt::read_exact`, this is not expected to
+    /// be cancellation-safe: a future dropped mid-read loses the bytes it
+    /// already consumed. See the [module docs](self) on cancellation
+    /// safety.
     fn read_exact(
         &mut self,
         buf: &mut [u8],
@@ -78,7 +95,8 @@ impl<T: AsyncWrite + Send + ?Sized> AsyncWrite for &mut T {
 
 /// Adapters for [`futures_io::AsyncRead`] and [`futures_io::AsyncWrite`].
 ///
-/// Enabled with the `futures` feature.
+/// Enabled with the `futures` feature. The read helpers are not
+/// cancellation-safe; see the [module docs](super) on cancellation safety.
 #[cfg(feature = "futures")]
 pub mod futures {
     use core::{future::poll_fn, pin::Pin};
@@ -198,7 +216,8 @@ pub mod futures {
 
 /// Adapters for `tokio::io::AsyncRead` and `tokio::io::AsyncWrite`.
 ///
-/// Enabled with the `tokio` feature.
+/// Enabled with the `tokio` feature. The read helpers are not
+/// cancellation-safe; see the [module docs](super) on cancellation safety.
 #[cfg(feature = "tokio")]
 pub mod tokio {
     use serde::{de, ser};
@@ -306,6 +325,8 @@ pub mod tokio {
 /// The returned bytes are exactly the item read from the stream. Text strings
 /// are validated as UTF-8 and nesting is bounded by the same recursion limit
 /// as the synchronous deserializer.
+///
+/// Not cancellation-safe; see the [module docs](self).
 pub async fn read_item<R: AsyncRead + ?Sized>(reader: &mut R) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
     let mut offset = 0;
@@ -320,6 +341,8 @@ pub async fn read_item<R: AsyncRead + ?Sized>(reader: &mut R) -> Result<Vec<u8>,
 /// headers and string bodies. Use this for untrusted async streams when an
 /// external transport or framing layer does not already impose a message
 /// size limit.
+///
+/// Not cancellation-safe; see the [module docs](self).
 pub async fn read_item_with_limit<R: AsyncRead + ?Sized>(
     reader: &mut R,
     max_len: usize,
@@ -343,6 +366,8 @@ pub async fn read_item_with_limit<R: AsyncRead + ?Sized>(
 /// item buffer is owned by the function. Use [`read_item`] plus
 /// [`from_slice`](crate::from_slice) when the caller wants to keep the buffer
 /// alive and borrow from it.
+///
+/// Not cancellation-safe; see the [module docs](self).
 pub async fn read_value<T, R>(reader: &mut R) -> Result<T, Error>
 where
     T: de::DeserializeOwned,
@@ -356,6 +381,8 @@ where
 ///
 /// This is the bounded counterpart of [`read_value`]; see
 /// [`read_item_with_limit`] for the limit semantics.
+///
+/// Not cancellation-safe; see the [module docs](self).
 pub async fn read_value_with_limit<T, R>(reader: &mut R, max_len: usize) -> Result<T, Error>
 where
     T: de::DeserializeOwned,

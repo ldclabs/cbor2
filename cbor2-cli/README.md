@@ -49,10 +49,12 @@ Commands:
 
 `INPUT` is a file path, a hex string (optionally `0x`-prefixed), a
 base64/base64url string, or `-` for stdin; stdin is the default. An
-argument containing a path separator is always a file path. Everything
-streams: multiple JSON or CDN values become a CBOR sequence (RFC 8742), and a
-CBOR sequence becomes one output document or line per item. Data errors
-exit with status 1, usage errors with status 2.
+argument containing a path separator is always a file path. Multiple JSON
+or CDN values become a CBOR sequence (RFC 8742), and a CBOR sequence
+becomes one output document or line per item. Decoding, validation and
+`encode --json` stream item by item; CDN encoding (the default `encode`
+mode) reads its whole input before parsing, as CDN has no incremental
+parser. Data errors exit with status 1, usage errors with status 2.
 
 ## Agent-friendly usage
 

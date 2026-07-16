@@ -347,6 +347,11 @@ The bare `async_io::AsyncRead`/`AsyncWrite` traits have no impls of their own.
 Enable `futures` or `tokio` and call `async_io::futures::*` / `async_io::tokio::*`
 to drive real `futures_io` / `tokio::io` streams.
 
+The read helpers are not cancellation-safe: a read future dropped before
+completion (for example, losing a `select!` race against a timeout) can leave
+the stream mid-item, so discard the connection instead of reading from it
+again. Put timeouts around the connection, not around an individual read.
+
 ## Use The CLI Safely
 
 When an agent needs to inspect or generate CBOR from a shell, use the `cbor`

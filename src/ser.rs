@@ -808,6 +808,11 @@ impl<W: Write> ser::SerializeStructVariant for CollectionSerializer<'_, W> {
 ///
 /// With the `std` feature any `std::io::Write` is accepted; for repeated
 /// small writes consider wrapping the writer in a `std::io::BufWriter`.
+///
+/// To encode into a new `Vec<u8>`, prefer [`to_vec`]: a `&mut Vec<u8>`
+/// passed here goes through the generic `std::io::Write` impl, which
+/// cannot forward the capacity hints of [`Write::reserve`], while
+/// `to_vec` pre-reserves.
 #[inline]
 pub fn to_writer<T: ?Sized + ser::Serialize, W: Write>(value: &T, writer: W) -> Result<(), Error> {
     let mut serializer = Serializer::from(writer);

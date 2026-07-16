@@ -230,6 +230,20 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
                  #[cbor(...)] tag, array shape or keys would be silently ignored on encode",
             ));
         }
+        if let Some(span) = serde.from {
+            return Err(syn::Error::new(
+                span,
+                "#[serde(from = ...)] deserializes through another type, so the declared \
+                 #[cbor(...)] tag, array shape or keys would be silently ignored on decode",
+            ));
+        }
+        if let Some(span) = serde.try_from {
+            return Err(syn::Error::new(
+                span,
+                "#[serde(try_from = ...)] deserializes through another type, so the declared \
+                 #[cbor(...)] tag, array shape or keys would be silently ignored on decode",
+            ));
+        }
     }
 
     Ok(generate(
@@ -238,6 +252,8 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
         container.array.is_some(),
         flatten,
         &entries,
+        serde.ser_bound.as_ref(),
+        serde.de_bound.as_ref(),
     ))
 }
 
@@ -246,12 +262,15 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
 // to the shadow's generated functions. The shadow accesses the real
 // type's fields directly, so nothing is copied at runtime, and the real
 // type's name and field names stay exactly as written.
+#[allow(clippy::too_many_arguments)]
 fn generate(
     input: &syn::DeriveInput,
     tag: Option<u64>,
     array: bool,
     flatten: bool,
     entries: &[Entry],
+    ser_bound: Option<&BoundPredicates>,
+    de_bound: Option<&BoundPredicates>,
 ) -> TokenStream {
     let ident = &input.ident;
     let shadow_ident = format_ident!("__CborShadow");
@@ -294,19 +313,45 @@ fn generate(
     head.append(&mut shadow.attrs);
     shadow.attrs = head;
 
-    // `T: Serialize` / `T: Deserialize<'de>` bounds, like serde's derive.
+    // `T: Serialize` / `T: Deserialize<'de>` bounds, like serde's derive —
+    // unless a container-level `#[serde(bound = ...)]` replaces them, just
+    // as it replaces serde's inferred bounds on the shadow.
     let mut ser_generics = input.generics.clone();
-    for param in ser_generics.type_params_mut() {
-        param.bounds.push(syn::parse_quote!(::serde::Serialize));
+    match ser_bound {
+        Some(predicates) => ser_generics
+            .make_where_clause()
+            .predicates
+            .extend(predicates.iter().cloned()),
+        None => {
+            for param in ser_generics.type_params_mut() {
+                param.bounds.push(syn::parse_quote!(::serde::Serialize));
+            }
+        }
     }
-    let (ser_impl_generics, ..) = ser_generics.split_for_impl();
+    let (ser_impl_generics, _, ser_where_clause) = ser_generics.split_for_impl();
 
     let de_lifetime = fresh_de_lifetime(&input.generics);
     let mut de_generics = input.generics.clone();
-    for param in de_generics.type_params_mut() {
-        param
-            .bounds
-            .push(syn::parse_quote!(::serde::Deserialize<#de_lifetime>));
+    match de_bound {
+        Some(predicates) => {
+            // serde bound strings name the deserializer lifetime `'de`;
+            // the outer impl uses a fresh one, so rename.
+            let tokens = rename_de_lifetime(quote!(#predicates), &de_lifetime);
+            let predicates: BoundPredicates = syn::parse2::<ParsedBound>(tokens)
+                .map(|bound| bound.0)
+                .unwrap_or_else(|_| predicates.clone());
+            de_generics
+                .make_where_clause()
+                .predicates
+                .extend(predicates);
+        }
+        None => {
+            for param in de_generics.type_params_mut() {
+                param
+                    .bounds
+                    .push(syn::parse_quote!(::serde::Deserialize<#de_lifetime>));
+            }
+        }
     }
     let mut de_lifetime_param = syn::LifetimeParam::new(de_lifetime.clone());
     de_lifetime_param
@@ -315,7 +360,7 @@ fn generate(
     de_generics
         .params
         .insert(0, syn::GenericParam::Lifetime(de_lifetime_param));
-    let (de_impl_generics, ..) = de_generics.split_for_impl();
+    let (de_impl_generics, _, de_where_clause) = de_generics.split_for_impl();
 
     let serde_impls = if flatten {
         let cbor_lifetime = fresh_lifetime(&input.generics, "__cbor");
@@ -352,7 +397,7 @@ fn generate(
 
             struct __CborShadowOwned #impl_generics (#ident #ty_generics) #where_clause;
 
-            impl #de_impl_generics ::serde::Deserialize<#de_lifetime> for __CborShadowOwned #ty_generics #where_clause {
+            impl #de_impl_generics ::serde::Deserialize<#de_lifetime> for __CborShadowOwned #ty_generics #de_where_clause {
                 fn deserialize<__D>(deserializer: __D) -> ::core::result::Result<Self, __D::Error>
                 where
                     __D: ::serde::Deserializer<#de_lifetime>,
@@ -362,7 +407,7 @@ fn generate(
             }
 
             #[automatically_derived]
-            impl #ser_impl_generics ::serde::Serialize for #ident #ty_generics #where_clause {
+            impl #ser_impl_generics ::serde::Serialize for #ident #ty_generics #ser_where_clause {
                 fn serialize<__S>(&self, serializer: __S) -> ::core::result::Result<__S::Ok, __S::Error>
                 where
                     __S: ::serde::Serializer,
@@ -384,7 +429,7 @@ fn generate(
             }
 
             #[automatically_derived]
-            impl #de_impl_generics ::serde::Deserialize<#de_lifetime> for #ident #ty_generics #where_clause {
+            impl #de_impl_generics ::serde::Deserialize<#de_lifetime> for #ident #ty_generics #de_where_clause {
                 fn deserialize<__D>(deserializer: __D) -> ::core::result::Result<Self, __D::Error>
                 where
                     __D: ::serde::Deserializer<#de_lifetime>,
@@ -410,7 +455,7 @@ fn generate(
     } else {
         quote! {
             #[automatically_derived]
-            impl #ser_impl_generics ::serde::Serialize for #ident #ty_generics #where_clause {
+            impl #ser_impl_generics ::serde::Serialize for #ident #ty_generics #ser_where_clause {
                 fn serialize<__S>(&self, serializer: __S) -> ::core::result::Result<__S::Ok, __S::Error>
                 where
                     __S: ::serde::Serializer,
@@ -420,7 +465,7 @@ fn generate(
             }
 
             #[automatically_derived]
-            impl #de_impl_generics ::serde::Deserialize<#de_lifetime> for #ident #ty_generics #where_clause {
+            impl #de_impl_generics ::serde::Deserialize<#de_lifetime> for #ident #ty_generics #de_where_clause {
                 fn deserialize<__D>(deserializer: __D) -> ::core::result::Result<Self, __D::Error>
                 where
                     __D: ::serde::Deserializer<#de_lifetime>,
@@ -787,8 +832,68 @@ struct SerdeAttrs {
     // marker carrying the declared tag, array shape and keys.
     transparent: Option<proc_macro2::Span>,
     into: Option<proc_macro2::Span>,
+    from: Option<proc_macro2::Span>,
+    try_from: Option<proc_macro2::Span>,
+    // Container-level `#[serde(bound = ...)]`: replaces the inferred
+    // `T: Serialize` / `T: Deserialize<'de>` bounds on the outer impls,
+    // exactly as it replaces serde's inferred bounds on the shadow.
+    ser_bound: Option<BoundPredicates>,
+    de_bound: Option<BoundPredicates>,
     // `#[serde(skip)]`: the field is never on the wire in either direction.
     skip: Option<proc_macro2::Span>,
+}
+
+type BoundPredicates = syn::punctuated::Punctuated<syn::WherePredicate, syn::Token![,]>;
+
+// Parses a serde bound string — a possibly empty, comma-separated list of
+// where-predicates. `None` on a malformed string: the same string is copied
+// to the shadow, where serde's own derive reports the error.
+fn parse_bound(lit: &syn::LitStr) -> Option<BoundPredicates> {
+    lit.parse_with(syn::punctuated::Punctuated::parse_terminated)
+        .ok()
+}
+
+// `syn::parse2` entry point for a where-predicate list.
+struct ParsedBound(BoundPredicates);
+
+impl Parse for ParsedBound {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self(syn::punctuated::Punctuated::parse_terminated(input)?))
+    }
+}
+
+// Replaces every `'de` in `tokens` with `to`. A lifetime is a joint `'`
+// punct followed by an ident; groups are walked recursively. Renaming is
+// uniform, so a `for<'de> ...` binder in a bound string stays consistent.
+fn rename_de_lifetime(tokens: TokenStream, to: &syn::Lifetime) -> TokenStream {
+    use proc_macro2::{Group, Spacing, TokenTree};
+
+    let mut out = TokenStream::new();
+    let mut iter = tokens.into_iter().peekable();
+    while let Some(token) = iter.next() {
+        match token {
+            TokenTree::Group(group) => {
+                let inner = rename_de_lifetime(group.stream(), to);
+                let mut renamed = Group::new(group.delimiter(), inner);
+                renamed.set_span(group.span());
+                out.extend([TokenTree::Group(renamed)]);
+            }
+            TokenTree::Punct(punct)
+                if punct.as_char() == '\'' && punct.spacing() == Spacing::Joint =>
+            {
+                match iter.peek() {
+                    Some(TokenTree::Ident(ident)) if ident == "de" => {
+                        iter.next();
+                        out.extend(quote!(#to));
+                    }
+                    _ => out.extend([TokenTree::Punct(punct)]),
+                }
+            }
+            other => out.extend([other]),
+        }
+    }
+
+    out
 }
 
 // Scans `#[serde(...)]` attributes, tolerating any meta shapes we do not
@@ -825,6 +930,45 @@ fn scan_serde(attrs: &[syn::Attribute]) -> SerdeAttrs {
                 out.transparent = Some(meta.path.span());
             } else if meta.path.is_ident("into") {
                 out.into = Some(meta.path.span());
+            } else if meta.path.is_ident("from") {
+                out.from = Some(meta.path.span());
+            } else if meta.path.is_ident("try_from") {
+                out.try_from = Some(meta.path.span());
+            } else if meta.path.is_ident("bound") {
+                if meta.input.peek(syn::Token![=]) {
+                    // `bound = "..."` applies to both directions.
+                    let expr: syn::Expr = meta.value()?.parse()?;
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) = expr
+                    {
+                        out.ser_bound = parse_bound(&s);
+                        out.de_bound = parse_bound(&s);
+                    }
+                    return Ok(());
+                }
+
+                // `bound(serialize = "...", deserialize = "...")`.
+                meta.parse_nested_meta(|side| {
+                    let is_ser = side.path.is_ident("serialize");
+                    let is_de = side.path.is_ident("deserialize");
+                    let expr: syn::Expr = side.value()?.parse()?;
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) = expr
+                    {
+                        if is_ser {
+                            out.ser_bound = parse_bound(&s);
+                        }
+                        if is_de {
+                            out.de_bound = parse_bound(&s);
+                        }
+                    }
+                    Ok(())
+                })?;
+                return Ok(());
             } else if meta.path.is_ident("skip") {
                 out.skip = Some(meta.path.span());
             } else if meta.path.is_ident("tag")
@@ -1312,6 +1456,24 @@ mod tests {
         });
         assert!(msg.contains("silently ignored on encode"), "{msg}");
 
+        let msg = error(quote! {
+            #[serde(from = "Other")]
+            #[cbor(tag = 7)]
+            struct S {
+                a: u8,
+            }
+        });
+        assert!(msg.contains("silently ignored on decode"), "{msg}");
+
+        let msg = error(quote! {
+            #[serde(try_from = "Other")]
+            struct S {
+                #[cbor(key = 1)]
+                a: u8,
+            }
+        });
+        assert!(msg.contains("silently ignored on decode"), "{msg}");
+
         // Without any #[cbor(...)] details there is nothing to lose, so
         // both shapes stay allowed.
         let out = expanded(quote! {
@@ -1321,6 +1483,46 @@ mod tests {
             }
         });
         assert!(out.contains("transparent"), "{out}");
+
+        let out = expanded(quote! {
+            #[serde(from = "Other")]
+            struct S {
+                a: u8,
+            }
+        });
+        assert!(out.contains("Other"), "{out}");
+    }
+
+    #[test]
+    fn container_bounds_replace_the_inferred_impl_bounds() {
+        // `bound = ""` erases the `T: Serialize` / `T: Deserialize<'de>`
+        // bounds on the outer impls, as it does on the shadow's impls.
+        let out = expanded(quote! {
+            #[serde(bound = "")]
+            struct S<T> {
+                #[cbor(key = 1)]
+                a: u8,
+                #[serde(skip)]
+                marker: PhantomData<T>,
+            }
+        });
+        assert!(!out.contains("T : :: serde :: Serialize"), "{out}");
+        assert!(!out.contains("T : :: serde :: Deserialize"), "{out}");
+
+        // Split bounds replace each direction separately, and `'de` in a
+        // deserialize bound is renamed to the impl's fresh lifetime.
+        let out = expanded(quote! {
+            #[serde(bound(deserialize = "T: ::serde::Deserialize<'de> + Default"))]
+            struct S<T> {
+                #[cbor(key = 1)]
+                a: T,
+            }
+        });
+        assert!(
+            out.contains("T : :: serde :: Deserialize < '__de > + Default"),
+            "{out}"
+        );
+        assert!(out.contains("T : :: serde :: Serialize"), "{out}");
     }
 
     #[test]

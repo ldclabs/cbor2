@@ -310,6 +310,51 @@ fn serde_attributes_combine() {
 }
 
 #[test]
+fn container_serde_bounds_are_honored() {
+    struct NotSerde;
+
+    // The classic marker-field idiom: `bound = ""` lifts the inferred
+    // `T: Serialize` / `T: Deserialize` bounds off the generated impls.
+    #[derive(Cbor)]
+    #[serde(bound = "")]
+    struct Wrap<T> {
+        #[cbor(key = 1)]
+        value: u8,
+        #[serde(skip)]
+        _marker: std::marker::PhantomData<T>,
+    }
+
+    let wrap = Wrap::<NotSerde> {
+        value: 7,
+        _marker: std::marker::PhantomData,
+    };
+    let bytes = cbor2::to_vec(&wrap).unwrap();
+    // {1: 7}
+    assert_eq!(hex::encode(&bytes), "a10107");
+    let back: Wrap<NotSerde> = cbor2::from_slice(&bytes).unwrap();
+    assert_eq!(back.value, 7);
+
+    // Split bounds combine with a tag; `'de` names the impl's
+    // deserializer lifetime like in serde's own derive.
+    #[derive(Debug, PartialEq, Cbor)]
+    #[cbor(tag = 90)]
+    #[serde(bound(
+        serialize = "T: serde::Serialize",
+        deserialize = "T: serde::Deserialize<'de> + Default"
+    ))]
+    struct Tagged<T> {
+        #[cbor(key = 1)]
+        inner: T,
+    }
+
+    let tagged = Tagged { inner: 5u8 };
+    let bytes = cbor2::to_vec(&tagged).unwrap();
+    // 90({1: 5})
+    assert_eq!(hex::encode(&bytes), "d85aa10105");
+    assert_eq!(cbor2::from_slice::<Tagged<u8>>(&bytes).unwrap(), tagged);
+}
+
+#[test]
 fn full_key_range() {
     #[derive(Debug, PartialEq, Cbor)]
     #[cbor(tag = 18446744073709551615)]

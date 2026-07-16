@@ -105,7 +105,7 @@ pub enum Value {
 /// This is the multi-line counterpart of the [`Display`](Self#impl-Display-for-Value)
 /// implementation: arrays and maps spread one element per line, nested
 /// levels are indented by two spaces, and scalars render exactly as in
-/// the compact form.
+/// the compact form. Nesting is bounded as in `Display`.
 ///
 /// ```
 /// use cbor2::cbor;
@@ -119,7 +119,7 @@ pub enum Value {
 impl core::fmt::Debug for Value {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut out = String::new();
-        crate::diag::write_value_pretty(&mut out, self, 0);
+        crate::diag::write_value_pretty(&mut out, self, 0, crate::de::DEFAULT_RECURSION_LIMIT)?;
         f.write_str(&out)
     }
 }
@@ -385,6 +385,14 @@ impl Value {
 /// plain integers, and very large bignum payloads fall back to explicit
 /// tag/bytes notation.
 ///
+/// Nesting is bounded by [`DEFAULT_RECURSION_LIMIT`](crate::de::DEFAULT_RECURSION_LIMIT),
+/// exactly like the wire-level [`diagnostic`](crate::diagnostic) renderer.
+/// A value nested deeper — only possible by building it programmatically,
+/// give or take one level at the boundary — returns [`core::fmt::Error`]
+/// instead of exhausting the stack. Note `format!`/`to_string` panic on
+/// such an error; probe with `write!(&mut String::new(), ..)` when
+/// arbitrarily deep values are possible.
+///
 /// ```
 /// use cbor2::{cbor, Value};
 ///
@@ -394,7 +402,7 @@ impl Value {
 impl core::fmt::Display for Value {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut out = String::new();
-        crate::diag::write_value(&mut out, self);
+        crate::diag::write_value(&mut out, self, crate::de::DEFAULT_RECURSION_LIMIT)?;
         f.write_str(&out)
     }
 }

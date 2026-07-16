@@ -546,9 +546,14 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
 
     #[inline]
     fn deserialize_unit<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        match self.0 {
+        let mut value = self.0;
+        while let Value::Tag(.., v) = value {
+            value = v;
+        }
+
+        match value {
             Value::Null => visitor.visit_unit(),
-            _ => Err(de::Error::invalid_type(self.0.into(), &"null")),
+            _ => Err(de::Error::invalid_type(value.into(), &"null")),
         }
     }
 
@@ -885,9 +890,14 @@ impl<'de> de::VariantAccess<'de> for Deserializer<&Value> {
 
     #[inline]
     fn unit_variant(self) -> Result<(), Self::Error> {
-        match self.0 {
+        let mut value = self.0;
+        while let Value::Tag(.., v) = value {
+            value = v;
+        }
+
+        match value {
             Value::Null => Ok(()),
-            _ => Err(de::Error::invalid_type(self.0.into(), &"unit")),
+            _ => Err(de::Error::invalid_type(value.into(), &"unit")),
         }
     }
 

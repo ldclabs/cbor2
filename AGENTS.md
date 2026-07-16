@@ -93,6 +93,11 @@ when it is intended to be CDN.
 - For untrusted async peers, prefer `read_value_with_limit` or
   `read_item_with_limit` unless an outer transport layer already enforces a
   message size limit.
+- The `async_io` read helpers are not cancellation-safe: a read future
+  dropped before completion (for example, losing a `select!` race against a
+  timeout) can leave the stream mid-item. Discard the connection after a
+  cancelled read; do not issue another read on it. Put timeouts around the
+  connection, not around an individual read future.
 - The bare `async_io` traits have no impls of their own. Enable `tokio` or
   `futures` and call `async_io::tokio::*` / `async_io::futures::*` to drive real
   `tokio::io` / `futures_io` streams.

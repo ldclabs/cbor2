@@ -357,6 +357,29 @@ fn value_display_is_diagnostic_notation() {
 }
 
 #[test]
+fn value_display_depth_is_bounded() {
+    use std::fmt::Write as _;
+
+    // Every depth the wire renderer accepts also renders through `Value`.
+    let mut bytes = vec![0x81u8; 255];
+    bytes.push(0x01);
+    let value: Value = cbor2::from_slice(&bytes).unwrap();
+    assert_eq!(cbor2::diagnostic(&bytes[..]).unwrap(), value.to_string());
+    assert!(!format!("{value:?}").is_empty());
+
+    // A programmatically built value nested deeper than the recursion
+    // limit reports fmt::Error instead of exhausting the native stack.
+    let mut deep = Value::Null;
+    for _ in 0..4096 {
+        deep = Value::Tag(7, Box::new(deep));
+    }
+    let mut out = String::new();
+    assert!(write!(out, "{deep}").is_err());
+    out.clear();
+    assert!(write!(out, "{deep:?}").is_err());
+}
+
+#[test]
 fn float_formatting_boundaries() {
     // The plain/exponent switchover and digit-shifting paths.
     let cases: &[(f64, &str)] = &[

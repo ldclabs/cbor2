@@ -42,6 +42,15 @@ pub trait Write {
 
     /// Reserves capacity for at least `additional` more bytes, if the
     /// writer has a meaningful capacity concept.
+    ///
+    /// The default implementation does nothing. Note that with the `std`
+    /// feature, every writer — `Vec<u8>` included — resolves through the
+    /// blanket `std::io::Write` impl, which keeps this default: coherence
+    /// leaves no room for a `Vec`-specific impl beside the blanket one.
+    /// [`to_vec`](crate::to_vec) pre-reserves through an internal wrapper
+    /// and is the better entry point for encoding into a new `Vec<u8>`.
+    /// (In `no_std` + `alloc` builds, `Vec<u8>` has its own impl that does
+    /// forward to `Vec::reserve`.)
     #[inline]
     fn reserve(&mut self, _additional: usize) {}
 

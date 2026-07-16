@@ -1,5 +1,47 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+* `Value::deserialized` unit targets now skip unknown tags exactly like the
+  streaming deserializer, so `7(null)` decodes to `()`, `Option<()>` and unit
+  structs through `Value` too, and a tagged `null` payload satisfies a
+  map-form unit variant. This closes the last gap of the 1.1.3 integer-target
+  fix.
+* `#[derive(Cbor)]` now honors a container-level `#[serde(bound = ...)]`,
+  including the split `bound(serialize = ..., deserialize = ...)` form: the
+  given predicates replace the inferred `T: Serialize` / `T: Deserialize<'de>`
+  bounds on the generated outer impls, as they already did on the hidden
+  shadow. Previously the attribute was silently ignored there, so the classic
+  `PhantomData<T>` + `bound = ""` idiom failed to compile.
+* `#[derive(Cbor)]` now rejects `#[serde(from = ...)]` and
+  `#[serde(try_from = ...)]` on containers that declare a tag, array shape or
+  integer keys, matching the existing `#[serde(into = ...)]` guard: both
+  attributes replace the generated `Deserialize` impl, so the declared
+  protocol details were silently ignored on decode and such a type could not
+  decode its own encoding.
+* `Display`/`Debug` for `Value` now bound nesting by the same recursion limit
+  as the wire-level diagnostic renderer, returning `fmt::Error` instead of
+  exhausting the native stack on a programmatically built value nested deeper
+  than the limit. Values decoded from CBOR bytes are unaffected.
+
+### Documentation
+
+* The `async_io` read helpers now document that they are not
+  cancellation-safe (module docs, the four read functions, the adapters and
+  `AGENTS.md`): a read future dropped before completion — e.g. losing a
+  `select!` race against a timeout — can leave the stream mid-item, so the
+  connection must be discarded rather than read again.
+* `Write::reserve` and `to_writer` now document that with the `std` feature
+  the blanket `std::io::Write` impl cannot forward capacity hints, so
+  `to_writer(&value, &mut vec)` skips pre-reservation; `to_vec` remains the
+  pre-reserving entry point for encoding into a new `Vec<u8>`.
+* The CLI README no longer claims that everything streams: CDN encoding (the
+  default `encode` mode) reads its whole input before parsing, as CDN has no
+  incremental parser. Decoding, validation and `encode --json` stream item by
+  item as before.
+
 ## [1.1.3] - 2026-07-04
 
 ### Fixed

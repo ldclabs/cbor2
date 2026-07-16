@@ -844,7 +844,15 @@ fn write_tagged_bytes(out: &mut String, tag: u64, payload: &[u8]) {
 }
 
 // Renders a `Value` in diagnostic notation; backs `Display for Value`.
-pub(crate) fn write_value(out: &mut String, value: &Value) {
+//
+// `depth` bounds the nesting like the wire renderer's recursion limit:
+// values built programmatically can nest arbitrarily deep, and erroring
+// out beats exhausting the native stack.
+pub(crate) fn write_value(out: &mut String, value: &Value, depth: usize) -> core::fmt::Result {
+    if depth == 0 {
+        return Err(core::fmt::Error);
+    }
+
     match value {
         Value::Integer(x) => {
             let _ = write!(out, "{}", i128::from(*x));
@@ -877,14 +885,14 @@ pub(crate) fn write_value(out: &mut String, value: &Value) {
             Value::Bytes(payload) => write_bignum(out, *t, payload),
             inner => {
                 let _ = write!(out, "{t}(");
-                write_value(out, inner);
+                write_value(out, inner, depth - 1)?;
                 out.push(')');
             }
         },
 
         Value::Tag(t, inner) => {
             let _ = write!(out, "{t}(");
-            write_value(out, inner);
+            write_value(out, inner, depth - 1)?;
             out.push(')');
         }
 
@@ -894,7 +902,7 @@ pub(crate) fn write_value(out: &mut String, value: &Value) {
                 if i > 0 {
                     out.push_str(", ");
                 }
-                write_value(out, item);
+                write_value(out, item, depth - 1)?;
             }
             out.push(']');
         }
@@ -905,37 +913,48 @@ pub(crate) fn write_value(out: &mut String, value: &Value) {
                 if i > 0 {
                     out.push_str(", ");
                 }
-                write_value(out, key);
+                write_value(out, key, depth - 1)?;
                 out.push_str(": ");
-                write_value(out, val);
+                write_value(out, val, depth - 1)?;
             }
             out.push('}');
         }
     }
+
+    Ok(())
 }
 
 // Renders a `Value` as indented diagnostic notation; backs `Debug for
 // Value`. Scalars (including bignum tags) render exactly as in the
 // compact form; arrays and maps spread one element per line, indented by
-// two spaces per level.
-pub(crate) fn write_value_pretty(out: &mut String, value: &Value, indent: usize) {
+// two spaces per level. `depth` bounds the nesting as in `write_value`.
+pub(crate) fn write_value_pretty(
+    out: &mut String,
+    value: &Value,
+    indent: usize,
+    depth: usize,
+) -> core::fmt::Result {
+    if depth == 0 {
+        return Err(core::fmt::Error);
+    }
+
     match value {
         Value::Tag(tag::BIGPOS | tag::BIGNEG, inner)
             if matches!(inner.as_ref(), Value::Bytes(..)) =>
         {
-            write_value(out, value);
+            write_value(out, value, depth)?;
         }
 
         Value::Tag(t, inner) => {
             let _ = write!(out, "{t}(");
-            write_value_pretty(out, inner, indent);
+            write_value_pretty(out, inner, indent, depth - 1)?;
             out.push(')');
         }
 
         Value::Array(items) => {
             if items.is_empty() {
                 out.push_str("[]");
-                return;
+                return Ok(());
             }
 
             out.push_str("[\n");
@@ -944,7 +963,7 @@ pub(crate) fn write_value_pretty(out: &mut String, value: &Value, indent: usize)
                     out.push_str(",\n");
                 }
                 push_indent(out, indent + 1);
-                write_value_pretty(out, item, indent + 1);
+                write_value_pretty(out, item, indent + 1, depth - 1)?;
             }
             out.push('\n');
             push_indent(out, indent);
@@ -954,7 +973,7 @@ pub(crate) fn write_value_pretty(out: &mut String, value: &Value, indent: usize)
         Value::Map(pairs) => {
             if pairs.is_empty() {
                 out.push_str("{}");
-                return;
+                return Ok(());
             }
 
             out.push_str("{\n");
@@ -963,17 +982,19 @@ pub(crate) fn write_value_pretty(out: &mut String, value: &Value, indent: usize)
                     out.push_str(",\n");
                 }
                 push_indent(out, indent + 1);
-                write_value_pretty(out, key, indent + 1);
+                write_value_pretty(out, key, indent + 1, depth - 1)?;
                 out.push_str(": ");
-                write_value_pretty(out, val, indent + 1);
+                write_value_pretty(out, val, indent + 1, depth - 1)?;
             }
             out.push('\n');
             push_indent(out, indent);
             out.push('}');
         }
 
-        scalar => write_value(out, scalar),
+        scalar => write_value(out, scalar, depth)?,
     }
+
+    Ok(())
 }
 
 fn push_indent(out: &mut String, level: usize) {
