@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+* `validate_slice`: the byte-slice counterpart of `validate`. It performs
+  exactly the same checks (well-formedness, per-segment text UTF-8, bounded
+  nesting, no trailing data) but borrows string bodies directly from the
+  input instead of copying them through a scratch buffer, and allocates no
+  heap memory. Available in every configuration, `no_std` included.
+
+### Performance
+
+* Walking an item without materializing it (`validate`, ignored fields,
+  `RawValue` capture) no longer zero-initializes a 4 KiB stack buffer per
+  string body: the reader path shares one scratch buffer per walk, and the
+  slice path (ignored fields and `RawValue` through `from_slice`) skips
+  string bodies in place without copying at all. Validating a text-heavy
+  document drops to roughly a third of the previous time.
+* Encoding into a fresh `Vec` (`to_vec`) no longer hits an inlining cliff
+  that turned constant-length header writes into `memcpy` calls; a
+  struct-heavy `to_vec` is about twice as fast. Small string bodies also no
+  longer pay a `reserve` call each, relying on the writer's amortized
+  growth instead.
+* `f64` values that cannot narrow losslessly (the common case for measured
+  data) are now rejected with one bit mask before the f16/f32 probes, and
+  the slice deserializer's header/integer fast paths are inlined: decoding
+  a `Vec<u64>` from a slice is about 25% faster, and `serialized_size` over
+  float-heavy data more than twice as fast.
+* The async `read_body` helper reads directly into the output buffer
+  instead of staging every chunk through a 4 KiB stack buffer.
+
 ## [1.1.4] - 2026-07-16
 
 ### Fixed

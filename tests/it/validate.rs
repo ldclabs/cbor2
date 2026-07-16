@@ -1,10 +1,17 @@
-//! Tests for the allocation-free well-formedness validator.
+//! Tests for the allocation-free well-formedness validators.
+//!
+//! `validate` (any reader) and `validate_slice` (borrowing) must agree on
+//! every input, so each vector runs through both.
 
 use serde::Serialize;
 
 fn ok(hex: &str) {
     let bytes = hex::decode(hex).unwrap();
     assert!(cbor2::validate(&bytes[..]).is_ok(), "{hex} must validate");
+    assert!(
+        cbor2::validate_slice(&bytes).is_ok(),
+        "{hex} must validate as a slice"
+    );
 }
 
 fn bad(hex: &str) {
@@ -13,6 +20,10 @@ fn bad(hex: &str) {
         cbor2::validate(&bytes[..]).is_err(),
         "{hex} must be rejected"
     );
+    assert!(
+        cbor2::validate_slice(&bytes).is_err(),
+        "{hex} must be rejected as a slice"
+    );
 }
 
 #[test]
@@ -20,6 +31,7 @@ fn everything_we_encode_validates() {
     fn check<T: ?Sized + Serialize>(value: &T) {
         let bytes = cbor2::to_vec(value).unwrap();
         assert!(cbor2::validate(&bytes[..]).is_ok());
+        assert!(cbor2::validate_slice(&bytes).is_ok());
     }
 
     check(&true);
@@ -131,11 +143,19 @@ fn nesting_is_depth_limited() {
         cbor2::validate(&array_bomb[..]),
         Err(cbor2::de::Error::RecursionLimitExceeded)
     ));
+    assert!(matches!(
+        cbor2::validate_slice(&array_bomb),
+        Err(cbor2::de::Error::RecursionLimitExceeded)
+    ));
 
     let mut tag_bomb = vec![0xc1u8; 65536];
     *tag_bomb.last_mut().unwrap() = 0x01;
     assert!(matches!(
         cbor2::validate(&tag_bomb[..]),
+        Err(cbor2::de::Error::RecursionLimitExceeded)
+    ));
+    assert!(matches!(
+        cbor2::validate_slice(&tag_bomb),
         Err(cbor2::de::Error::RecursionLimitExceeded)
     ));
 
@@ -146,17 +166,23 @@ fn nesting_is_depth_limited() {
         cbor2::validate(&mixed[..]),
         Err(cbor2::de::Error::RecursionLimitExceeded)
     ));
+    assert!(matches!(
+        cbor2::validate_slice(&mixed),
+        Err(cbor2::de::Error::RecursionLimitExceeded)
+    ));
 }
 
 #[test]
 fn utf8_across_chunk_boundaries() {
-    // The validator checks text bodies in 4096-byte chunks; place
-    // multi-byte characters across the boundary.
-    for prefix_len in [4094usize, 4095, 4096] {
+    // The reader-based validator checks text bodies in 1024-byte chunks
+    // (`validate_slice` checks each body in one piece); place multi-byte
+    // characters across the chunk boundaries.
+    for prefix_len in [1022usize, 1023, 1024, 4094, 4095, 4096] {
         let mut text = "a".repeat(prefix_len);
         text.push_str("水水");
         let bytes = cbor2::to_vec(&text).unwrap();
         assert!(cbor2::validate(&bytes[..]).is_ok(), "prefix {prefix_len}");
+        assert!(cbor2::validate_slice(&bytes).is_ok(), "prefix {prefix_len}");
     }
 
     // An invalid byte after the chunk boundary is still caught...
@@ -165,6 +191,7 @@ fn utf8_across_chunk_boundaries() {
     let mut bytes = vec![0x7a, 0x00, 0x00, 0x13, 0x88]; // text(5000)
     bytes.extend_from_slice(&body);
     assert!(cbor2::validate(&bytes[..]).is_err());
+    assert!(cbor2::validate_slice(&bytes).is_err());
 
     // ...and so is an incomplete character at the very end of the body.
     let mut bytes = vec![0x7a, 0x00, 0x00, 0x13, 0x88];
@@ -172,6 +199,7 @@ fn utf8_across_chunk_boundaries() {
     body.push(0xc3); // first byte of a two-byte character
     bytes.extend_from_slice(&body);
     assert!(cbor2::validate(&bytes[..]).is_err());
+    assert!(cbor2::validate_slice(&bytes).is_err());
 }
 
 #[test]

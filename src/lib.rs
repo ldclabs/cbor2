@@ -44,7 +44,8 @@ assert_eq!(photo, back);
 ```
 
 `from_slice` and `from_reader` deserialize one leading CBOR item. Use
-[`validate`] first when a byte buffer must contain exactly one item, or use
+[`validate_slice`] first when a byte buffer must contain exactly one item
+([`validate`] is the same check over any reader), or use
 [`de::Deserializer::into_iter`] for a CBOR sequence.
 
 # For code agents
@@ -358,18 +359,19 @@ assert!(Sign1::ARRAY);
 
 # Allocation-free helpers
 
-Three helpers work without touching the heap: [`validate`] checks that an
-input is exactly one well-formed CBOR item (including text UTF-8 validity),
-[`serialized_size`] computes the exact encoded size of any serializable
-value, and [`to_slice`] encodes into a caller-provided buffer.
+These helpers work without touching the heap: [`validate_slice`] and
+[`validate`] check that an input (a byte slice or any reader) is exactly one
+well-formed CBOR item (including text UTF-8 validity), [`serialized_size`]
+computes the exact encoded size of any serializable value, and [`to_slice`]
+encodes into a caller-provided buffer.
 
 ```rust
 let value = ("hello", vec![1u8, 2, 3]);
 let bytes = cbor2::to_vec(&value).unwrap();
 
 assert_eq!(cbor2::serialized_size(&value).unwrap(), bytes.len() as u64);
-assert!(cbor2::validate(&bytes[..]).is_ok());
-assert!(cbor2::validate(&bytes[..bytes.len() - 1]).is_err()); // truncated
+assert!(cbor2::validate_slice(&bytes).is_ok());
+assert!(cbor2::validate_slice(&bytes[..bytes.len() - 1]).is_err()); // truncated
 
 let mut buffer = [0u8; 16];
 assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
@@ -389,8 +391,8 @@ assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
   `hash` plus `cri`/`CRI` literals. Implies `alloc`.
 * **neither** — a `#![no_std]` core for constrained targets: streaming
   serialization with [`to_writer`]/[`to_slice`]/[`serialized_size`],
-  [`validate`], the [`tag`] wrappers and the [`core`] header codec.
-  Deserializing through serde requires `alloc`.
+  [`validate`]/[`validate_slice`], the [`tag`] wrappers and the [`core`]
+  header codec. Deserializing through serde requires `alloc`.
 * **`derive`** — the `#[derive(Cbor)]` macro; works in all three modes
   (deserialization again requiring `alloc`).
 * **`futures`** — adds `async_io::futures` adapters for
@@ -578,11 +580,11 @@ pub use crate::cdn::{
     cdn_sequence_to_vec, cdn_to_vec, from_cdn, to_cdn, to_cdn_pretty,
     to_cdn_pretty_with_key_comments,
 };
-#[doc(inline)]
-pub use crate::de::validate;
 #[cfg(feature = "alloc")]
 #[doc(inline)]
 pub use crate::de::{from_reader, from_slice};
+#[doc(inline)]
+pub use crate::de::{validate, validate_slice};
 #[cfg(feature = "alloc")]
 pub use crate::diag::{diagnostic, diagnostic_pretty, diagnostic_pretty_with_key_comments};
 #[cfg(feature = "alloc")]

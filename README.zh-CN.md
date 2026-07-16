@@ -124,7 +124,7 @@ let back: Photo = cbor2::from_slice(&bytes).unwrap();
 assert_eq!(photo, back);
 ```
 
-`to_writer` 和 `from_reader` 适用于任何 `std::io::Write`/`Read`，且 `Deserializer::into_iter` 可用于解码拼接在一起的数据项流。`from_slice`/`from_reader` 读取第一个主导（leading）的 CBOR 项；当需要确保缓冲区中恰好仅包含一个数据项时，请使用 `validate`。
+`to_writer` 和 `from_reader` 适用于任何 `std::io::Write`/`Read`，且 `Deserializer::into_iter` 可用于解码拼接在一起的数据项流。`from_slice`/`from_reader` 读取第一个主导（leading）的 CBOR 项；当需要确保缓冲区中恰好仅包含一个数据项时，请使用 `validate_slice`（对读取器则使用 `validate`）。
 
 ## 致 AI 智能体 (Agent)
 
@@ -143,7 +143,7 @@ assert_eq!(photo, back);
 * **原始值** —— `RawValue` 延迟解码并保留单个数据项的精确传输字节：序列化时将它们原封不动地拼接进流中，反序列化时则逐字节捕获，适用于签名负载、透传项和延迟解码。`TryFrom` 可在 `RawValue` 和 `Value` 之间进行双向转换。
 * **鲁棒的解码** —— 妥善处理不定长数据项、分段字符串、重复 map 键、未知标签和 CBOR 序列（RFC 8742）；限制递归深度，并防止伪造的长度触发巨额内存分配。
 * **简明诊断表示法 (Concise Diagnostic Notation)** —— `to_cdn` 可以将原始 CBOR 渲染为由 IETF 简明诊断表示法草案（CDN，`draft-ietf-cbor-edn-literals`）规范化的易读文本形式，在保留不定长标记的同时，与 RFC 8949 附录 A 的普通数据项示例相匹配。API 命名保持了显式的方向性：`to_cdn*` 将 CBOR 字节渲染为 CDN 文本，而 `cdn_to_vec`、`cdn_sequence_to_vec` 和 `from_cdn` 则将 CDN 文本解析为 CBOR 字节或 serde 值；较旧的 `diagnostic*` 名称作为兼容类别名予以保留。CDN 输入支持注释、基于编码的字节字符串、嵌入式 CBOR 序列、编码指示器、标签、简单值，以及 `dt`/`DT`、`ip`/`IP`、`b1`/`t1`、`ilbs`/`ilts`、`bytes`、`same` 和 `float` 等应用扩展；启用 `cdn` 特性后还会添加依赖外部 crate 的 `hash`、`cri` 和 `CRI`。`bytes<<"ä", h'2f'>>` 会生成 `h'c3a42f'`，而 `same<< float'47110815', 0x1.22102ap+15 >>` 会校验同一数据项的不同写法并输出第一个实参。`Value` 通过相同的表示法实现 `Display`，并将其缩进形式作为 `Debug` 实现。对于整数键协议 map，`to_cdn_pretty_with_key_comments` 可以在传输整数键旁边添加 CDN `// "iss"` 类似的注释。
-* **无分配辅助函数** —— `validate` 是针对单个 CBOR 数据项的格式完好性检查（RFC 8949 §5.3.1，包括文本 UTF-8），`serialized_size` 计算任何可序列化值的精确编码大小，而 `to_slice` 则将数据编码到调用者提供的缓冲区中；这些操作均不分配堆内存。
+* **无分配辅助函数** —— `validate` 与零拷贝的 `validate_slice` 是针对单个 CBOR 数据项的格式完好性检查（RFC 8949 §5.3.1，包括文本 UTF-8），`serialized_size` 计算任何可序列化值的精确编码大小，而 `to_slice` 则将数据编码到调用者提供的缓冲区中；这些操作均不分配堆内存。
 * **异步项 I/O** —— `async_io` 模块在异步字节流上对完整的 CBOR 项进行分帧，随后在数据项缓冲完成后复用正常的同步 serde API。针对不受信任的流，提供了有界的读取辅助函数。
 * **底层标头编解码器** —— `core` 模块为需要精确传输控制的应用暴露了拉取/推送式 `Header` 接口。
 * **`no_std` 支持** —— `default-features = false, features = ["alloc"]` 保持了完整的 API（减去了 `std::io` 互操作和 `HashMap` 转换）；即使在没有 `alloc` 的情况下，此 crate 仍然可以进行序列化（`to_writer`/`to_slice`/`serialized_size`）、格式完好性检查，并支持 `core` 标头编解码器。

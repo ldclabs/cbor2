@@ -21,10 +21,11 @@
 //! Deserialization is where the designs diverge sharply. The four serde
 //! deserializers — cbor2, ciborium, serde_cbor and cbor4ii — all need a heap
 //! scratch buffer and therefore **cannot deserialize without `alloc` at
-//! all**. What cbor2 *does* offer without a heap is `cbor2::validate`, which
-//! walks the bytes and proves well-formedness without materializing a value;
-//! minicbor's comparable no-alloc primitive is `Decoder::skip`. Those two are
-//! compared in the `scan` groups below. minicbor additionally is the only
+//! all**. What cbor2 *does* offer without a heap is `cbor2::validate` (any
+//! reader) and the copy-free `cbor2::validate_slice`, which walk the bytes
+//! and prove well-formedness without materializing a value; minicbor's
+//! comparable no-alloc primitive is `Decoder::skip`. These are compared in
+//! the `scan` groups below. minicbor additionally is the only
 //! crate that can produce a *typed* value with no heap (by borrowing
 //! `&str`/`&[u8]` straight out of the input) — see the README capability
 //! matrix.
@@ -116,6 +117,9 @@ fn bench_scan(c: &mut Criterion) {
             let mut g = c.benchmark_group($name);
             g.bench_function("cbor2 (validate)", |x| {
                 x.iter(|| cbor2::validate(black_box(&bytes[..])).unwrap())
+            });
+            g.bench_function("cbor2 (validate_slice)", |x| {
+                x.iter(|| cbor2::validate_slice(black_box(&bytes[..])).unwrap())
             });
             g.bench_function("minicbor (skip)", |x| {
                 x.iter(|| {

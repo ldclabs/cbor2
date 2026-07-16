@@ -115,7 +115,9 @@ impl<'de> de::Visitor<'de> for Visitor {
 
     #[inline]
     fn visit_seq<A: de::SeqAccess<'de>>(self, mut acc: A) -> Result<Self::Value, A::Error> {
-        let mut seq = Vec::new();
+        // Like `visit_map` below: trust small size hints, so typical arrays
+        // allocate once, while a forged length cannot reserve much.
+        let mut seq = Vec::with_capacity(acc.size_hint().filter(|&l| l < 1024).unwrap_or(0));
 
         while let Some(elem) = acc.next_element()? {
             seq.push(elem);

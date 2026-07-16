@@ -7,9 +7,10 @@ CBOR examples.
 ## Cargo Setup
 
 The default build (`cbor2 = "1"`) is `std` and already covers `to_vec`,
-`to_writer`, `from_slice`, `from_reader`, `validate`, `Value`, `Simple`,
-`RawValue`, `cbor!`, the canonical encoders, diagnostics and the synchronous
-`async_io` helpers. Add a feature only for the rows that need one:
+`to_writer`, `from_slice`, `from_reader`, `validate`, `validate_slice`,
+`Value`, `Simple`, `RawValue`, `cbor!`, the canonical encoders, diagnostics
+and the synchronous `async_io` helpers. Add a feature only for the rows that
+need one:
 
 | Need | Manifest line |
 | --- | --- |
@@ -32,7 +33,7 @@ feature is the most common compile failure — set the manifest first.
 | Encode a serde value to a writer | `cbor2::to_writer` | Building a `Vec` first when streaming is enough |
 | Decode from an in-memory buffer | `cbor2::from_slice` | `from_reader` if borrowed fields are expected |
 | Decode from `Read` | `cbor2::from_reader` | Borrowed output types |
-| Require exactly one item in a buffer | `cbor2::validate` before/after decode | Assuming `from_slice` rejects trailing bytes |
+| Require exactly one item in a buffer | `cbor2::validate_slice` before/after decode (`validate` for readers) | Assuming `from_slice` rejects trailing bytes |
 | Decode a CBOR sequence | `cbor2::de::Deserializer::into_iter` | Repeated `from_slice` on the same buffer |
 | Preserve exact encoded bytes | `cbor2::RawValue` | Decode/re-encode through typed structs |
 | Dynamic or unknown shape | `cbor2::Value` or `cbor2::cbor!` | Untyped maps of JSON strings |
@@ -66,7 +67,8 @@ when it is intended to be CDN.
 ## Non-Negotiable Semantics
 
 - `from_slice` and `from_reader` deserialize one leading CBOR item. They are
-  not exact-buffer validators. Use `validate` when trailing data must fail.
+  not exact-buffer validators. Use `validate_slice` (or `validate` for
+  readers) when trailing data must fail.
 - `from_slice` is the borrowed path. Definite-length text and byte strings can
   deserialize as borrowed `&str` and `serde_bytes` values from the input.
 - `from_reader` copies because it cannot borrow from a generic stream.

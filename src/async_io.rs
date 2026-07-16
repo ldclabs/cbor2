@@ -543,10 +543,19 @@ async fn read_body<R: AsyncRead + ?Sized>(
     mut remaining: usize,
     max_len: Option<usize>,
 ) -> Result<(), Error> {
-    let mut buffer = [0u8; CHUNK];
+    // Grow `out` chunk by chunk and read straight into it: memory still
+    // only grows as data actually arrives, without staging each chunk
+    // through a separate buffer first.
     while remaining > 0 {
-        let n = remaining.min(buffer.len());
-        read_exact_record(reader, out, offset, &mut buffer[..n], max_len).await?;
+        let n = remaining.min(CHUNK);
+        check_size_limit(*offset, n, max_len)?;
+        let used = out.len();
+        out.resize(used + n, 0);
+        reader
+            .read_exact(&mut out[used..])
+            .await
+            .map_err(Error::Io)?;
+        *offset += n;
         remaining -= n;
     }
     Ok(())

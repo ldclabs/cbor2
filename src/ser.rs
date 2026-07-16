@@ -137,6 +137,7 @@ pub(crate) struct StructMarker<'a> {
 // Splits a marked container name into its tag number and its field key
 // table. Returns `None` — no special handling — unless the marker frame
 // and the tag segment are well-formed.
+#[inline]
 pub(crate) fn parse_struct_marker(name: &str) -> Option<StructMarker<'_>> {
     let rest = name.strip_prefix(STRUCT_MARKER)?;
     let (tag, rest) = rest.split_once("@@")?;
@@ -824,7 +825,10 @@ struct VecWriter<'a>(&'a mut Vec<u8>);
 
 #[cfg(feature = "alloc")]
 impl Write for VecWriter<'_> {
-    #[inline]
+    // `inline(always)`: header writes arrive as constant-length arrays, and
+    // only full inlining lets those constants reach `extend_from_slice`,
+    // turning it into fixed-size stores instead of a memcpy call.
+    #[inline(always)]
     fn write_all(&mut self, data: &[u8]) -> Result<(), crate::io::Error> {
         self.0.extend_from_slice(data);
         Ok(())

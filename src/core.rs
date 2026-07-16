@@ -181,6 +181,9 @@ impl<W: Write> Encoder<W> {
         self.0.reserve(additional);
     }
 
+    // Each width writes a constant-length array: the compiler turns these
+    // into fixed-size stores, which beats funneling every width through one
+    // variable-length buffer.
     #[inline]
     pub(crate) fn push_uint(&mut self, major: u8, value: u64) -> Result<(), crate::io::Error> {
         let prefix = major << 5;
@@ -255,17 +258,31 @@ impl<W: Write> Encoder<W> {
         // preserves the value exactly. Any value representable as f16 is
         // also representable as f32, so trying the narrower width first is
         // sufficient.
-        if let Some(n16) = f64_to_f16(value) {
-            let b = n16.to_be_bytes();
-            return self.0.write_all(&[0xf9, b[0], b[1]]);
+        //
+        // A finite value can only narrow losslessly when the fraction bits
+        // beyond the target's precision are zero (f16 keeps 10 of the 52
+        // bits, f32 keeps 23; subnormal targets need even more zeros), so a
+        // single mask test skips the full conversion for the typical f64
+        // that cannot narrow. NaN and infinity (all exponent bits set) take
+        // the slow path unconditionally.
+        let bits = value.to_bits();
+        let special = bits & 0x7ff0_0000_0000_0000 == 0x7ff0_0000_0000_0000;
+
+        if special || bits & ((1 << 42) - 1) == 0 {
+            if let Some(n16) = f64_to_f16(value) {
+                let b = n16.to_be_bytes();
+                return self.0.write_all(&[0xf9, b[0], b[1]]);
+            }
         }
 
-        if let Some(n32) = f64_to_f32(value) {
-            let b = n32.to_be_bytes();
-            return self.0.write_all(&[0xfa, b[0], b[1], b[2], b[3]]);
+        if special || bits & ((1 << 29) - 1) == 0 {
+            if let Some(n32) = f64_to_f32(value) {
+                let b = n32.to_be_bytes();
+                return self.0.write_all(&[0xfa, b[0], b[1], b[2], b[3]]);
+            }
         }
 
-        let b = value.to_bits().to_be_bytes();
+        let b = bits.to_be_bytes();
         self.0
             .write_all(&[0xfb, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
     }
@@ -301,7 +318,13 @@ impl<W: Write> Encoder<W> {
     /// [`Header::Break`].
     #[inline]
     pub fn bytes(&mut self, value: &[u8]) -> Result<(), crate::io::Error> {
-        self.reserve(value.len().saturating_add(9));
+        // Small bodies ride on the writer's own amortized growth; calling
+        // `reserve` for each of them costs more than it saves. A hint is
+        // only worthwhile when the body is large enough to skip growth
+        // steps.
+        if value.len() >= 1024 {
+            self.reserve(value.len().saturating_add(9));
+        }
         self.push_len(2, Some(value.len()))?;
         self.0.write_all(value)
     }
@@ -312,7 +335,10 @@ impl<W: Write> Encoder<W> {
     /// well-formed UTF-8 text segment.
     #[inline]
     pub fn text(&mut self, value: &str) -> Result<(), crate::io::Error> {
-        self.reserve(value.len().saturating_add(9));
+        // See `bytes` for why only large bodies get a capacity hint.
+        if value.len() >= 1024 {
+            self.reserve(value.len().saturating_add(9));
+        }
         self.push_len(3, Some(value.len()))?;
         self.0.write_all(value.as_bytes())
     }
@@ -428,6 +454,7 @@ impl<R: Read> Decoder<R> {
     /// the body with [`bytes_body`](Self::bytes_body),
     /// [`text_body`](Self::text_body) or [`read_exact`](Self::read_exact)
     /// before continuing.
+    #[inline]
     pub fn pull(&mut self) -> Result<Header, Error> {
         if let Some((header, end)) = self.pushback.take() {
             self.mark = self.offset;
@@ -516,6 +543,7 @@ impl<R: Read> Decoder<R> {
     /// [`Header::Text`] when you want to own body validation. The higher
     /// level [`bytes_body`](Self::bytes_body) and
     /// [`text_body`](Self::text_body) helpers also handle segmented strings.
+    #[inline]
     pub fn read_exact(&mut self, data: &mut [u8]) -> Result<(), crate::io::Error> {
         debug_assert!(self.pushback.is_none());
         self.reader.read_exact(data)?;
@@ -622,10 +650,13 @@ impl<R: Read> Decoder<R> {
     }
 }
 
-#[cfg(feature = "alloc")]
-impl<'de> Decoder<&'de [u8]> {
+// The slice-specialized decoding fast paths. They are available in every
+// configuration (the copy-free `validate_slice` builds on them without
+// `alloc`); only the recording bookkeeping inside is `alloc`-gated.
+impl Decoder<&[u8]> {
     #[inline]
     fn slice_eof_after_prefix(&mut self) -> Error {
+        #[cfg(feature = "alloc")]
         if let Some(record) = &mut self.record {
             record.push(self.reader[0]);
         }
@@ -636,16 +667,25 @@ impl<'de> Decoder<&'de [u8]> {
 
     #[inline]
     fn finish_slice_header(&mut self, raw: [u8; 9], raw_len: u8) {
-        self.last_header.0 = raw;
-        self.last_header.1 = raw_len;
-        if let Some(record) = &mut self.record {
-            record.extend_from_slice(&raw[..raw_len as usize]);
+        #[cfg(feature = "alloc")]
+        {
+            self.last_header.0 = raw;
+            self.last_header.1 = raw_len;
+            if let Some(record) = &mut self.record {
+                record.extend_from_slice(&raw[..raw_len as usize]);
+            }
         }
+        #[cfg(not(feature = "alloc"))]
+        let _ = raw;
         self.reader = &self.reader[raw_len as usize..];
         self.offset += raw_len as usize;
     }
+}
 
+#[cfg(feature = "alloc")]
+impl Decoder<&[u8]> {
     /// Pulls a plain positive or negative integer from a byte slice.
+    #[inline]
     pub(crate) fn integer_slice(&mut self) -> Option<Result<(bool, u64), Error>> {
         if self.pushback.is_some() {
             return None;
@@ -719,6 +759,7 @@ impl<'de> Decoder<&'de [u8]> {
     }
 
     /// Pulls a plain boolean from a byte slice.
+    #[inline]
     pub(crate) fn bool_slice(&mut self) -> Option<bool> {
         if self.pushback.is_some() {
             return None;
@@ -794,8 +835,11 @@ impl<'de> Decoder<&'de [u8]> {
         self.offset += raw_len;
         Some(Ok(value))
     }
+}
 
+impl<'de> Decoder<&'de [u8]> {
     /// Pulls a header from a byte slice without going through `Read`.
+    #[inline]
     pub(crate) fn pull_slice(&mut self) -> Result<Header, Error> {
         if let Some((header, end)) = self.pushback.take() {
             self.mark = self.offset;
@@ -879,6 +923,7 @@ impl<'de> Decoder<&'de [u8]> {
     /// or text header. Generic readers still go through [`read_exact`];
     /// slice deserialization uses this to hand serde borrowed strings and
     /// byte strings without copying.
+    #[inline]
     pub(crate) fn borrow_body(&mut self, len: usize) -> Result<&'de [u8], crate::io::Error> {
         debug_assert!(self.pushback.is_none());
         if self.reader.len() < len {
@@ -888,6 +933,7 @@ impl<'de> Decoder<&'de [u8]> {
         let (head, tail) = self.reader.split_at(len);
         self.reader = tail;
         self.offset += len;
+        #[cfg(feature = "alloc")]
         if let Some(record) = &mut self.record {
             record.extend_from_slice(head);
         }

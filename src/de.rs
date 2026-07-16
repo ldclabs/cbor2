@@ -353,7 +353,8 @@ impl<R: Read> Source for ReaderSource<R> {
 
     #[inline]
     fn skip_item(&mut self, recurse: usize) -> Result<(), Error> {
-        validate_item(&mut self.0, recurse)
+        let mut scratch = [0u8; SKIP_CHUNK];
+        validate_item(&mut self.0, recurse, &mut scratch)
     }
 
     fn capture(&mut self, recurse: usize) -> Result<Vec<u8>, Error> {
@@ -449,11 +450,14 @@ impl Source for SliceSource<'_> {
 
     #[inline]
     fn skip_item(&mut self, recurse: usize) -> Result<(), Error> {
-        validate_item(&mut self.0, recurse)
+        validate_item_slice(&mut self.0, recurse)
     }
 
     fn capture(&mut self, recurse: usize) -> Result<Vec<u8>, Error> {
-        capture_item(&mut self.0, recurse)
+        self.0.start_recording();
+        let result = validate_item_slice(&mut self.0, recurse);
+        let bytes = self.0.take_recording();
+        result.map(|()| bytes)
     }
 }
 
@@ -465,12 +469,14 @@ impl<'de> BorrowSource<'de> for SliceSource<'de> {
     }
 }
 
-// Captures one well-formed item's wire bytes from a decoder. Shared by both
-// sources' `capture` implementations and used by `RawValue`.
+// Captures one well-formed item's wire bytes from a decoder; used by
+// `RawValue` through the reader source (the slice source captures through
+// its copy-free skip instead).
 #[cfg(feature = "alloc")]
 fn capture_item<R: Read>(decoder: &mut Decoder<R>, recurse: usize) -> Result<Vec<u8>, Error> {
+    let mut scratch = [0u8; SKIP_CHUNK];
     decoder.start_recording();
-    let result = validate_item(decoder, recurse);
+    let result = validate_item(decoder, recurse, &mut scratch);
     let bytes = decoder.take_recording();
     result.map(|()| bytes)
 }
@@ -1766,6 +1772,9 @@ impl<T: de::DeserializeOwned, R: Read> Iterator for Iter<T, R> {
 /// Trailing data after the item is an error; to handle a CBOR sequence
 /// (RFC 8742), validate items one at a time from the shared reader.
 ///
+/// For input that is already a byte slice, [`validate_slice`] performs the
+/// same checks without copying string bodies.
+///
 /// ```rust
 /// assert!(cbor2::validate(&b"\x83\x01\x02\x03"[..]).is_ok()); // [1, 2, 3]
 /// assert!(cbor2::validate(&b"\x83\x01\x02"[..]).is_err()); // truncated
@@ -1773,7 +1782,29 @@ impl<T: de::DeserializeOwned, R: Read> Iterator for Iter<T, R> {
 /// ```
 pub fn validate<R: Read>(reader: R) -> Result<(), Error> {
     let mut decoder = Decoder::from(reader);
-    validate_item(&mut decoder, DEFAULT_RECURSION_LIMIT)?;
+    let mut scratch = [0u8; SKIP_CHUNK];
+    validate_item(&mut decoder, DEFAULT_RECURSION_LIMIT, &mut scratch)?;
+    expect_eof(&mut decoder)
+}
+
+/// Checks that a byte slice contains exactly one well-formed CBOR item.
+///
+/// The slice counterpart of [`validate`], performing exactly the same
+/// checks: well-formedness (RFC 8949 §5.3.1), text UTF-8 validity (every
+/// segment of an indefinite-length text string on its own), nesting bounded
+/// by [`DEFAULT_RECURSION_LIMIT`] and no trailing data. Because the whole
+/// input is already in memory, string bodies are checked in place instead
+/// of being copied through a scratch buffer, which makes this the faster
+/// entry point for buffers. **No heap memory is allocated.**
+///
+/// ```rust
+/// assert!(cbor2::validate_slice(b"\x83\x01\x02\x03").is_ok()); // [1, 2, 3]
+/// assert!(cbor2::validate_slice(b"\x83\x01\x02").is_err()); // truncated
+/// assert!(cbor2::validate_slice(b"\x62\xff\xfe").is_err()); // invalid UTF-8
+/// ```
+pub fn validate_slice(slice: &[u8]) -> Result<(), Error> {
+    let mut decoder = Decoder::from(slice);
+    validate_item_slice(&mut decoder, DEFAULT_RECURSION_LIMIT)?;
     expect_eof(&mut decoder)
 }
 
@@ -1788,10 +1819,19 @@ pub(crate) fn expect_eof<R: Read>(decoder: &mut Decoder<R>) -> Result<(), Error>
     }
 }
 
-fn validate_item<R: Read>(decoder: &mut Decoder<R>, depth: usize) -> Result<(), Error> {
+// The scratch buffer used to discard string bodies while walking an item.
+// It is created once per walk and shared by every body along the way, so
+// its (zero-initialization) cost is paid once, not per string.
+const SKIP_CHUNK: usize = 1024;
+
+fn validate_item<R: Read>(
+    decoder: &mut Decoder<R>,
+    depth: usize,
+    scratch: &mut [u8; SKIP_CHUNK],
+) -> Result<(), Error> {
     let offset = decoder.offset();
     let header = decoder.pull()?;
-    validate_header(decoder, header, offset, depth)
+    validate_header(decoder, header, offset, depth, scratch)
 }
 
 fn validate_header<R: Read>(
@@ -1799,6 +1839,7 @@ fn validate_header<R: Read>(
     header: Header,
     offset: usize,
     depth: usize,
+    scratch: &mut [u8; SKIP_CHUNK],
 ) -> Result<(), Error> {
     if depth == 0 {
         return Err(Error::RecursionLimitExceeded);
@@ -1811,29 +1852,29 @@ fn validate_header<R: Read>(
 
         Header::Break => Err(Error::Syntax(offset)),
 
-        Header::Tag(..) => validate_item(decoder, depth - 1),
+        Header::Tag(..) => validate_item(decoder, depth - 1, scratch),
 
         Header::Bytes(len) => match len {
-            Some(len) => skip_body(decoder, len),
+            Some(len) => skip_body(decoder, len, scratch),
             None => loop {
                 let offset = decoder.offset();
                 match decoder.pull()? {
                     Header::Break => return Ok(()),
                     // Segments must be definite-length strings of the same
                     // major type (RFC 8949 §3.2.3).
-                    Header::Bytes(Some(len)) => skip_body(decoder, len)?,
+                    Header::Bytes(Some(len)) => skip_body(decoder, len, scratch)?,
                     _ => return Err(Error::Syntax(offset)),
                 }
             },
         },
 
         Header::Text(len) => match len {
-            Some(len) => check_utf8_body(decoder, len),
+            Some(len) => check_utf8_body(decoder, len, scratch),
             None => loop {
                 let offset = decoder.offset();
                 match decoder.pull()? {
                     Header::Break => return Ok(()),
-                    Header::Text(Some(len)) => check_utf8_body(decoder, len)?,
+                    Header::Text(Some(len)) => check_utf8_body(decoder, len, scratch)?,
                     _ => return Err(Error::Syntax(offset)),
                 }
             },
@@ -1842,7 +1883,7 @@ fn validate_header<R: Read>(
         Header::Array(len) => match len {
             Some(len) => {
                 for _ in 0..len {
-                    validate_item(decoder, depth - 1)?;
+                    validate_item(decoder, depth - 1, scratch)?;
                 }
                 Ok(())
             }
@@ -1850,7 +1891,7 @@ fn validate_header<R: Read>(
                 let offset = decoder.offset();
                 match decoder.pull()? {
                     Header::Break => return Ok(()),
-                    header => validate_header(decoder, header, offset, depth - 1)?,
+                    header => validate_header(decoder, header, offset, depth - 1, scratch)?,
                 }
             },
         },
@@ -1858,8 +1899,8 @@ fn validate_header<R: Read>(
         Header::Map(len) => match len {
             Some(len) => {
                 for _ in 0..len {
-                    validate_item(decoder, depth - 1)?; // key
-                    validate_item(decoder, depth - 1)?; // value
+                    validate_item(decoder, depth - 1, scratch)?; // key
+                    validate_item(decoder, depth - 1, scratch)?; // value
                 }
                 Ok(())
             }
@@ -1873,7 +1914,7 @@ fn validate_header<R: Read>(
                         Header::Break if expecting_value => return Err(Error::Syntax(offset)),
                         Header::Break => return Ok(()),
                         header => {
-                            validate_header(decoder, header, offset, depth - 1)?;
+                            validate_header(decoder, header, offset, depth - 1, scratch)?;
                             expecting_value = !expecting_value;
                         }
                     }
@@ -1883,13 +1924,123 @@ fn validate_header<R: Read>(
     }
 }
 
-// Discards a definite-length body through a fixed-size buffer; a forged
-// length cannot trigger an allocation.
-fn skip_body<R: Read>(decoder: &mut Decoder<R>, mut remaining: usize) -> Result<(), Error> {
-    let mut buffer = [0u8; 4096];
+// Walks one item directly over a byte slice: string bodies are borrowed
+// (and text checked) in place, with no intermediate buffer at all.
+fn validate_item_slice(decoder: &mut Decoder<&[u8]>, depth: usize) -> Result<(), Error> {
+    let offset = decoder.offset();
+    let header = decoder.pull_slice()?;
+    validate_header_slice(decoder, header, offset, depth)
+}
+
+fn validate_header_slice(
+    decoder: &mut Decoder<&[u8]>,
+    header: Header,
+    offset: usize,
+    depth: usize,
+) -> Result<(), Error> {
+    if depth == 0 {
+        return Err(Error::RecursionLimitExceeded);
+    }
+
+    let check_utf8 = |decoder: &mut Decoder<&[u8]>, len: usize| -> Result<(), Error> {
+        let offset = decoder.offset();
+        let body = decoder.borrow_body(len)?;
+        core::str::from_utf8(body)
+            .map(|_| ())
+            .map_err(|_| Error::Syntax(offset))
+    };
+
+    match header {
+        Header::Positive(..) | Header::Negative(..) | Header::Float(..) | Header::Simple(..) => {
+            Ok(())
+        }
+
+        Header::Break => Err(Error::Syntax(offset)),
+
+        Header::Tag(..) => validate_item_slice(decoder, depth - 1),
+
+        Header::Bytes(len) => match len {
+            Some(len) => decoder.borrow_body(len).map(|_| ()).map_err(Error::Io),
+            None => loop {
+                let offset = decoder.offset();
+                match decoder.pull_slice()? {
+                    Header::Break => return Ok(()),
+                    // Segments must be definite-length strings of the same
+                    // major type (RFC 8949 §3.2.3).
+                    Header::Bytes(Some(len)) => {
+                        decoder.borrow_body(len)?;
+                    }
+                    _ => return Err(Error::Syntax(offset)),
+                }
+            },
+        },
+
+        Header::Text(len) => match len {
+            Some(len) => check_utf8(decoder, len),
+            None => loop {
+                let offset = decoder.offset();
+                match decoder.pull_slice()? {
+                    Header::Break => return Ok(()),
+                    Header::Text(Some(len)) => check_utf8(decoder, len)?,
+                    _ => return Err(Error::Syntax(offset)),
+                }
+            },
+        },
+
+        Header::Array(len) => match len {
+            Some(len) => {
+                for _ in 0..len {
+                    validate_item_slice(decoder, depth - 1)?;
+                }
+                Ok(())
+            }
+            None => loop {
+                let offset = decoder.offset();
+                match decoder.pull_slice()? {
+                    Header::Break => return Ok(()),
+                    header => validate_header_slice(decoder, header, offset, depth - 1)?,
+                }
+            },
+        },
+
+        Header::Map(len) => match len {
+            Some(len) => {
+                for _ in 0..len {
+                    validate_item_slice(decoder, depth - 1)?; // key
+                    validate_item_slice(decoder, depth - 1)?; // value
+                }
+                Ok(())
+            }
+            None => {
+                let mut expecting_value = false;
+                loop {
+                    let offset = decoder.offset();
+                    match decoder.pull_slice()? {
+                        // A break in place of a value leaves a dangling key,
+                        // which is not well-formed (RFC 8949 §5.3.1).
+                        Header::Break if expecting_value => return Err(Error::Syntax(offset)),
+                        Header::Break => return Ok(()),
+                        header => {
+                            validate_header_slice(decoder, header, offset, depth - 1)?;
+                            expecting_value = !expecting_value;
+                        }
+                    }
+                }
+            }
+        },
+    }
+}
+
+// Discards a definite-length body through the shared scratch buffer; a
+// forged length cannot trigger an allocation.
+fn skip_body<R: Read>(
+    decoder: &mut Decoder<R>,
+    mut remaining: usize,
+    scratch: &mut [u8; SKIP_CHUNK],
+) -> Result<(), Error> {
     while remaining > 0 {
-        let n = remaining.min(buffer.len());
-        decoder.read_exact(&mut buffer[..n])?;
+        let n = remaining.min(scratch.len());
+        decoder.read_exact(&mut scratch[..n])?;
         remaining -= n;
     }
     Ok(())
@@ -1899,19 +2050,22 @@ fn skip_body<R: Read>(decoder: &mut Decoder<R>, mut remaining: usize) -> Result<
 // valid UTF-8. Characters may straddle the internal chunk boundaries; up to
 // three trailing bytes of an incomplete character carry over to the next
 // chunk.
-fn check_utf8_body<R: Read>(decoder: &mut Decoder<R>, len: usize) -> Result<(), Error> {
+fn check_utf8_body<R: Read>(
+    decoder: &mut Decoder<R>,
+    len: usize,
+    scratch: &mut [u8; SKIP_CHUNK],
+) -> Result<(), Error> {
     let offset = decoder.offset();
-    let mut buffer = [0u8; 4096];
     let mut carry = 0usize;
     let mut remaining = len;
 
     while remaining > 0 {
-        let n = remaining.min(buffer.len() - carry);
-        decoder.read_exact(&mut buffer[carry..carry + n])?;
+        let n = remaining.min(scratch.len() - carry);
+        decoder.read_exact(&mut scratch[carry..carry + n])?;
         remaining -= n;
         let filled = carry + n;
 
-        match core::str::from_utf8(&buffer[..filled]) {
+        match core::str::from_utf8(&scratch[..filled]) {
             Ok(..) => carry = 0,
             Err(err) => {
                 // An incomplete character is only acceptable while more
@@ -1921,7 +2075,7 @@ fn check_utf8_body<R: Read>(decoder: &mut Decoder<R>, len: usize) -> Result<(), 
                 }
 
                 let valid = err.valid_up_to();
-                buffer.copy_within(valid..filled, 0);
+                scratch.copy_within(valid..filled, 0);
                 carry = filled - valid;
             }
         }

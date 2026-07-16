@@ -225,11 +225,11 @@ CBOR sequences and canonical encoding.
   its indented form. For integer-keyed protocol maps,
   `to_cdn_pretty_with_key_comments` can add CDN `// "iss"` comments beside the
   wire integer keys.
-* **Allocation-free helpers** — `validate` is a well-formedness check for exactly
-  one CBOR item (RFC 8949 §5.3.1, including text UTF-8),
-  `serialized_size` computes the exact encoded size of any serializable
-  value and `to_slice` encodes into a caller-provided buffer; none of them
-  allocates heap memory.
+* **Allocation-free helpers** — `validate` and the copy-free `validate_slice`
+  are well-formedness checks for exactly one CBOR item (RFC 8949 §5.3.1,
+  including text UTF-8), `serialized_size` computes the exact encoded size of
+  any serializable value and `to_slice` encodes into a caller-provided
+  buffer; none of them allocates heap memory.
 * **Async item I/O** — the `async_io` module frames complete CBOR items on
   async byte streams, then reuses the normal synchronous serde API once an
   item is buffered. Bounded read helpers are available for untrusted streams.
@@ -253,8 +253,8 @@ CBOR sequences and canonical encoding.
 
 With no features at all the crate is a `#![no_std]` core for constrained
 targets: streaming serialization with `to_writer`/`to_slice`/
-`serialized_size`, `validate`, the `tag` wrappers and the `core` header
-codec. Deserializing through serde requires `alloc`. Readers and writers
+`serialized_size`, `validate`/`validate_slice`, the `tag` wrappers and the
+`core` header codec. Deserializing through serde requires `alloc`. Readers and writers
 implement the small `cbor2::io` traits, which are provided for byte slices
 (and `Vec<u8>` with `alloc`):
 
