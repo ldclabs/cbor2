@@ -3,7 +3,7 @@ resolver = "2"
 members = [".", "cbor2-derive", "cbor2-cli"]
 
 [workspace.package]
-version = "1.1.3"
+version = "1.1.4"
 authors = ["0xZensh <txr1883@gmail.com>"]
 homepage = "https://github.com/ldclabs/cbor2"
 repository = "https://github.com/ldclabs/cbor2"
