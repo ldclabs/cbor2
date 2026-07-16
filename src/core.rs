@@ -1000,7 +1000,8 @@ pub fn f64_to_f32(value: f64) -> Option<u32> {
 }
 
 /// Converts an `f64` to IEEE 754 half-precision bits if (and only if) the
-/// conversion is lossless. NaN converts to the canonical quiet NaN.
+/// conversion is lossless. NaN converts to the canonical quiet NaN of the
+/// same sign.
 pub fn f64_to_f16(value: f64) -> Option<u16> {
     let bits = value.to_bits();
     let sign = ((bits >> 48) & 0x8000) as u16;
@@ -1008,11 +1009,12 @@ pub fn f64_to_f16(value: f64) -> Option<u16> {
     let frac = bits & 0x000f_ffff_ffff_ffff;
 
     let half = if exp == 0x7ff {
-        // Infinity or NaN. Any NaN becomes the canonical quiet NaN; the
-        // round-trip check below rejects NaNs whose payload would be lost.
+        // Infinity or NaN. Any NaN becomes the canonical quiet NaN of the
+        // same sign; the round-trip check below rejects NaNs whose payload
+        // would be lost.
         match frac {
             0 => sign | 0x7c00,
-            _ => 0x7e00,
+            _ => sign | 0x7e00,
         }
     } else {
         let unbiased = exp - 1023;
@@ -1057,8 +1059,10 @@ mod tests {
             let wide = f16_to_f64(bits);
 
             if wide.is_nan() {
-                // NaN payloads are not preserved; the canonical NaN is.
-                assert!(f64_to_f16(f64::NAN) == Some(0x7e00));
+                // NaN payloads are not preserved; the canonical NaN of
+                // either sign is.
+                let canonical = (bits & 0x8000) | 0x7e00;
+                assert_eq!(f64_to_f16(wide), Some(canonical), "bits {bits:04x}");
                 continue;
             }
 
@@ -1108,7 +1112,7 @@ mod tests {
     fn nan_payloads_use_preferred_widths() {
         for (bits, expected) in [
             (0x7ff8_0000_0000_0000u64, "f97e00"),          // canonical: f16
-            (0xfff8_0000_0000_0000, "faffc00000"),         // -NaN: sign fits f32
+            (0xfff8_0000_0000_0000, "f9fe00"),             // -NaN: sign fits f16
             (0x7ff8_0000_2000_0000, "fa7fc00001"),         // payload fits f32
             (0x7ff8_0000_1000_0000, "fb7ff8000010000000"), // payload needs f64
         ] {
@@ -1134,10 +1138,11 @@ mod tests {
             assert_eq!(f64_to_f16(value), None, "{value}");
         }
 
-        // NaNs whose sign or payload would be lost are rejected by the
-        // round-trip check; only the canonical quiet NaN converts.
-        assert_eq!(f64_to_f16(-f64::NAN), None);
+        // NaNs whose payload would be lost are rejected by the round-trip
+        // check; the canonical quiet NaN converts with its sign preserved.
+        assert_eq!(f64_to_f16(-f64::NAN), Some(0xfe00));
         assert_eq!(f64_to_f16(f64::from_bits(0x7ff8_0000_0000_0001)), None);
+        assert_eq!(f64_to_f16(f64::from_bits(0xfff8_0000_0000_0001)), None);
     }
 
     // Headers round-trip through encode and decode.

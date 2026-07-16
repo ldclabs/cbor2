@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.4] - 2026-07-16
 
 ### Added
 
@@ -10,31 +10,16 @@
   input instead of copying them through a scratch buffer, and allocates no
   heap memory. Available in every configuration, `no_std` included.
 
-### Performance
-
-* Walking an item without materializing it (`validate`, ignored fields,
-  `RawValue` capture) no longer zero-initializes a 4 KiB stack buffer per
-  string body: the reader path shares one scratch buffer per walk, and the
-  slice path (ignored fields and `RawValue` through `from_slice`) skips
-  string bodies in place without copying at all. Validating a text-heavy
-  document drops to roughly a third of the previous time.
-* Encoding into a fresh `Vec` (`to_vec`) no longer hits an inlining cliff
-  that turned constant-length header writes into `memcpy` calls; a
-  struct-heavy `to_vec` is about twice as fast. Small string bodies also no
-  longer pay a `reserve` call each, relying on the writer's amortized
-  growth instead.
-* `f64` values that cannot narrow losslessly (the common case for measured
-  data) are now rejected with one bit mask before the f16/f32 probes, and
-  the slice deserializer's header/integer fast paths are inlined: decoding
-  a `Vec<u64>` from a slice is about 25% faster, and `serialized_size` over
-  float-heavy data more than twice as fast.
-* The async `read_body` helper reads directly into the output buffer
-  instead of staging every chunk through a 4 KiB stack buffer.
-
-## [1.1.4] - 2026-07-16
-
 ### Fixed
 
+* Preferred float serialization: the negative canonical quiet NaN (`f64`
+  bits `0xfff8_0000_0000_0000`) now encodes as the 3-byte half-width form
+  `f9 fe00` instead of the 5-byte `fa ffc00000`. The f16 narrowing dropped
+  the NaN sign bit while the widening decoder preserved it, so the
+  round-trip probe rejected a value half-precision represents exactly;
+  decoding `f9 fe00` and re-encoding is now byte-idempotent, matching the
+  shortest-form rule of RFC 8949 §4.1. NaNs with payload bits are encoded
+  exactly as before.
 * `Value::deserialized` unit targets now skip unknown tags exactly like the
   streaming deserializer, so `7(null)` decodes to `()`, `Option<()>` and unit
   structs through `Value` too, and a tagged `null` payload satisfies a
@@ -56,6 +41,27 @@
   as the wire-level diagnostic renderer, returning `fmt::Error` instead of
   exhausting the native stack on a programmatically built value nested deeper
   than the limit. Values decoded from CBOR bytes are unaffected.
+
+### Performance
+
+* Walking an item without materializing it (`validate`, ignored fields,
+  `RawValue` capture) no longer zero-initializes a 4 KiB stack buffer per
+  string body: the reader path shares one scratch buffer per walk, and the
+  slice path (ignored fields and `RawValue` through `from_slice`) skips
+  string bodies in place without copying at all. Validating a text-heavy
+  document drops to roughly a third of the previous time.
+* Encoding into a fresh `Vec` (`to_vec`) no longer hits an inlining cliff
+  that turned constant-length header writes into `memcpy` calls; a
+  struct-heavy `to_vec` is about twice as fast. Small string bodies also no
+  longer pay a `reserve` call each, relying on the writer's amortized
+  growth instead.
+* `f64` values that cannot narrow losslessly (the common case for measured
+  data) are now rejected with one bit mask before the f16/f32 probes, and
+  the slice deserializer's header/integer fast paths are inlined: decoding
+  a `Vec<u64>` from a slice is about 25% faster, and `serialized_size` over
+  float-heavy data more than twice as fast.
+* The async `read_body` helper reads directly into the output buffer
+  instead of staging every chunk through a 4 KiB stack buffer.
 
 ### Documentation
 

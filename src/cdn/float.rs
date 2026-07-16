@@ -55,8 +55,8 @@ fn f32_to_f64_preserving(bits: u32) -> f64 {
     f64::from(value)
 }
 
-// Narrows to half-precision like `f64_to_f16`, but keeps a NaN sign and
-// payload when they fit instead of accepting only the canonical quiet NaN.
+// Narrows to half-precision like `f64_to_f16`, but keeps a NaN payload
+// when it fits instead of accepting only the canonical quiet NaN.
 pub(super) fn f64_to_f16_preserving(value: f64) -> Option<u16> {
     if value.is_nan() {
         let bits = value.to_bits();
