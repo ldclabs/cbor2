@@ -1,6 +1,8 @@
 //! Internal adapters for derived flattened structs. Values remain on the
 //! original serde path, and the serializer buffers wire bytes, not Value.
 
+pub(crate) mod fields;
+
 use crate::raw::{RawSlice, RawValue};
 use alloc::{string::String, vec::Vec};
 use serde::{de, ser, Deserialize, Serialize};

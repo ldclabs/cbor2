@@ -166,8 +166,9 @@ $ cbor decode --json a101820203
 JSON conversion is best-effort where CBOR is richer: byte strings become
 lowercase hex strings, non-string map keys are JSON-encoded into strings,
 non-finite floats and `undefined` become `null`, integers beyond the
-64-bit ranges become strings, and tags are dropped (keeping the inner
-value). Object members keep the CBOR map order. If multiple CBOR keys become
+64-bit ranges, including bignums, become signed decimal strings. Integer
+object keys use the same decimal spelling. Other tags are dropped, keeping their
+inner value. Object members keep the CBOR map order. If multiple CBOR keys become
 the same JSON object key (including duplicate text keys), conversion fails
 with status 1 instead of overwriting a value. The failing item is not written;
 preceding sequence items may already have been output. Output is buffered,

@@ -100,7 +100,9 @@ fn oversized_declared_body_fails_before_waiting_for_body() {
     // body is already known to exceed it. No body byte needs to arrive.
     let mut reader = Cursor::new(vec![0x59, 0x40, 0x00]);
     let error = block_on(async_io::read_item_with_limit(&mut reader, 8192)).unwrap_err();
-    assert!(error.to_string().contains("exceeds size limit"));
+    assert!(
+        matches!(error, cbor2::de::Error::Semantic(Some(3),ref msg) if msg.contains("exceeds size limit"))
+    );
     assert_eq!(reader.pos, 3);
 }
 
@@ -133,7 +135,9 @@ fn read_item_with_limit_enforces_total_item_size() {
 
     let mut reader = Cursor::new(bytes);
     let err = block_on(async_io::read_item_with_limit(&mut reader, 8)).unwrap_err();
-    assert!(err.to_string().contains("exceeds size limit"), "{err}");
+    assert!(
+        matches!(err, cbor2::de::Error::Semantic(Some(2),ref msg) if msg.contains("exceeds size limit"))
+    );
     assert_eq!(
         reader.pos, 2,
         "body bytes must not be read after limit failure"

@@ -444,3 +444,67 @@ fn hex(s: &str) -> Vec<u8> {
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
         .collect()
 }
+
+#[test]
+fn json_numeric_spelling_and_bignum_sign_survive_conversion() {
+    for source in [
+        "18446744073709551617",
+        "-9223372036854775809",
+        "0.12345678901234567",
+        "-0",
+        r#"{"a":18446744073709551617,"a":-0}"#,
+    ] {
+        assert_eq!(
+            ok(&["encode", "--json"], source.as_bytes()),
+            ok(&["encode", "--cdn"], source.as_bytes()),
+            "{source}"
+        );
+    }
+    let values = [
+        "18446744073709551616",
+        "-18446744073709551617",
+        &"9".repeat(3000),
+    ];
+    for value in values {
+        let encoded = ok(&["encode", "--json"], value.as_bytes());
+        let json = ok(&["decode", "--json"], &encoded);
+        assert_eq!(serde_json::from_slice::<String>(&json).unwrap(), value);
+    }
+    let map = ok(
+        &["encode", "--cdn"],
+        b"{18446744073709551616: 1, -18446744073709551617: 2}",
+    );
+    let json: serde_json::Value = serde_json::from_slice(&ok(&["decode", "--json"], &map)).unwrap();
+    assert_eq!(json["18446744073709551616"], 1);
+    assert_eq!(json["-18446744073709551617"], 2);
+    let bytes = ok(
+        &["encode", "--cdn"],
+        br#"{18446744073709551616: 1, "18446744073709551616": 2}"#,
+    );
+    let failed = run(&["decode", "--json"], &bytes);
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(failed.stdout.is_empty());
+    assert_eq!(json.as_object().unwrap().len(), 2);
+}
+
+#[test]
+fn json_sequences_cross_buffers_and_keep_strict_boundaries() {
+    // A number may stop at the buffer edge and continue with more digits.
+    let text = format!("{}18446744073709551617 [1,2]\n-0", " ".repeat(8191));
+    assert_eq!(
+        ok(&["encode", "--json"], text.as_bytes()),
+        ok(&["encode", "--cdn"], text.as_bytes())
+    );
+    // Long items switch to reader framing and still preserve duplicate keys.
+    let text = format!(r#"["{}"]{{"a":1,"a":2}}-0"#, "x".repeat(32000));
+    let bytes = ok(&["encode", "--json"], text.as_bytes());
+    let mut stream = cbor2::de::Deserializer::from_slice(&bytes).into_iter::<cbor2::Value>();
+    assert_eq!(stream.next().unwrap().unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(stream.next().unwrap().unwrap().as_map().unwrap().len(), 2);
+    assert_eq!(stream.next().unwrap().unwrap(), 0.into());
+    assert!(stream.next().is_none());
+    let invalid = format!("{}truefalse", " ".repeat(8188));
+    let out = run(&["encode", "--json"], invalid.as_bytes());
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+}

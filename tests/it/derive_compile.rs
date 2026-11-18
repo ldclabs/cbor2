@@ -10,6 +10,7 @@ fn derive_consumer_fixtures() {
     for (binary, expected_error) in [
         ("pass", None),
         ("bounds", None),
+        ("renamed", None),
         ("array_skip", Some("array field positions")),
         ("tuple_skip", Some("array field positions")),
         (
@@ -20,6 +21,11 @@ fn derive_consumer_fixtures() {
         ("struct_tag", Some("on a struct conflicts with")),
         ("array_tag", Some("on a struct conflicts with")),
     ] {
+        let consumer_manifest = if binary == "renamed" {
+            root.join("tests/derive-fixtures/renamed/Cargo.toml")
+        } else {
+            manifest.clone()
+        };
         let output = Command::new(env!("CARGO"))
             .args([
                 if expected_error.is_none() {
@@ -30,7 +36,7 @@ fn derive_consumer_fixtures() {
                 "--offline",
                 "--manifest-path",
             ])
-            .arg(&manifest)
+            .arg(&consumer_manifest)
             .arg("--target-dir")
             .arg(&target)
             .args(["--bin", binary])

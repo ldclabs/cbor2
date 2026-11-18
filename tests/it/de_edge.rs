@@ -656,3 +656,26 @@ fn truncated_bodies_in_every_position() {
     // An indefinite array with nothing after its header.
     assert!(de::<Value>("9f").is_err());
 }
+
+#[test]
+fn reader_sequence_stops_after_a_failed_item() {
+    let bytes = [0x82, 1, 2, 3];
+    let mut iter = cbor2::de::Deserializer::from_reader(&bytes[..]).into_iter::<u8>();
+    assert!(iter.next().unwrap().is_err());
+    assert!(iter.next().is_none());
+    assert!(iter.next().is_none());
+}
+
+#[test]
+fn padded_primitive_bignums_use_significant_bytes() {
+    for (source, expected) in [
+        ("2(h'000000000000000007')", 7),
+        ("3((_ h'00000000', h'0000000007'))", -8),
+    ] {
+        let bytes = cbor2::cdn_to_vec(source).unwrap();
+        assert_eq!(cbor2::from_slice::<i64>(&bytes).unwrap(), expected);
+        assert_eq!(cbor2::from_reader::<i64, _>(&bytes[..]).unwrap(), expected);
+    }
+    let overflow = cbor2::cdn_to_vec("2(h'010000000000000000')").unwrap();
+    assert!(cbor2::from_slice::<u64>(&overflow).is_err());
+}

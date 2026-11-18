@@ -294,11 +294,11 @@ assert_eq!(cbor2::from_slice::<CoseSign>(&bytes).unwrap(), key);
 # }
 ```
 
-The tag is transparent on decode — any leading tag numbers are skipped
-without validation, so wrap a field in [`tag::RequireExact`] when a
-specific tag must be enforced — and the serde attributes (`alias`,
-`default`, `skip`, `with`, ...) work as usual; map types like
-`HashMap<String, _>` are unaffected. The declared keys, array shape and tag
+Map and array structs decode through tag layers. A newtype consumes its
+optional declared outer tag and delegates its payload, including any tag of
+its own, to the inner type. Use [`tag::RequireExact`] on a field to require
+a specific tag. Serde attributes such as `alias`, `default`, `skip` and
+`with` work as usual. The declared keys, array shape and tag
 stay inspectable at runtime through the [`Cbor`](trait@Cbor) trait, which the
 derive implements alongside the serde traits.
 
@@ -531,8 +531,8 @@ This implementation is wire-compatible with
   is treated as an in-memory detail, not a wire property: `1u64` encodes as
   one byte, and that byte happily decodes into a `u128` or an `i8`.
 * **`u128`/`i128` values outside the 64-bit range** are encoded as bignums
-  (tags 2 and 3), and bignums small enough to fit are accepted for any
-  integer type.
+  (tags 2 and 3). Primitive integer decoding accepts leading-zero padding
+  up to 4096 payload bytes, and checks the numeric range of the target type.
 * **Maps are represented as `Vec<(Value, Value)>`** in [`Value`], preserving
   wire order and arbitrary (even duplicate) keys.
 * **Be liberal in what you accept**: decoding handles indefinite-length
@@ -611,6 +611,9 @@ pub use serde as __serde;
 #[cfg(feature = "alloc")]
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::flatten::fields::{
+        deserializer as flatten_deserializer, serialize as flatten_serialize_fields,
+    };
     pub use crate::flatten::{deserialize as flatten_deserialize, serialize as flatten_serialize};
     use alloc::string::String;
 

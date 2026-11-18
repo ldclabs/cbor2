@@ -1,0 +1,12 @@
+[package]
+name = "cbor2-renamed-fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wire = { package = "cbor2", path = "../../..", features = ["derive"] }
+
+[[bin]]
+name = "renamed"
+path = "main.rs"

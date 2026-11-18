@@ -257,7 +257,8 @@ conclusions, and assess allocation counts separately from timing.
 ## Focused regression workloads
 
 `cargo bench --bench focused` covers raw-item encode/decode/sizing,
-canonical integer and compound keys, CDN integers at several sizes, flattened
+canonical integer and compound keys, length-first sorting of mixed keys, CDN
+arrays of small signed integers and individual large literals, flattened
 records and 1,024-chunk strings. The fixtures keep the same logical and wire
 shape when comparing revisions. `parse_results.py` also emits these results
 and includes the `validate_slice` structural-scan column.

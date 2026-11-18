@@ -47,8 +47,8 @@ let _value: cbor2::Value = cbor2::from_slice(bytes).unwrap();
 
 ## Decode a CBOR Sequence
 
-CBOR sequences are adjacent complete items. Use the deserializer iterator;
-the slice form can borrow from the buffer and stops after the first error.
+Use the deserializer iterators for sequences of adjacent CBOR items. Both stop
+after the first error. The slice iterator can borrow from its input.
 
 ```rust
 let mut stream = Vec::new();

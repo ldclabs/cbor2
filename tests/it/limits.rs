@@ -117,3 +117,36 @@ fn error_offsets() {
         other => panic!("expected syntax error at offset 2, got {other:?}"),
     }
 }
+
+#[test]
+fn transparent_tags_count_towards_the_enclosing_budget() {
+    use cbor2::de::Deserializer;
+    fn check<T: serde::de::DeserializeOwned>(input: &[u8], limit: usize, ok: bool) {
+        let mut slice = Deserializer::from_slice_with_recursion_limit(input, limit);
+        let mut reader = Deserializer::with_recursion_limit(input, limit);
+        for result in [T::deserialize(&mut slice), T::deserialize(&mut reader)] {
+            if ok {
+                assert!(result.is_ok());
+            } else {
+                assert!(matches!(result, Err(Error::RecursionLimitExceeded)));
+            }
+        }
+    }
+    for (limit, ok) in [(1, false), (2, true)] {
+        check::<u8>(&[0xc8, 0xc9, 1], limit, ok);
+        check::<Value>(&[0xc8, 0xc9, 1], limit, ok);
+        check::<Vec<u8>>(&[0xc8, 0x82, 1, 2], limit, ok);
+        check::<Vec<bool>>(&[0x82, 0xc8, 0xf5, 0xc9, 0xf4], limit, ok);
+        check::<u64>(&[0xc8, 0xc2, 0x41, 1], limit, ok);
+        check::<serde::de::IgnoredAny>(&[0xc8, 0xc9, 1], limit, ok);
+        #[cfg(feature = "derive")]
+        {
+            #[derive(cbor2::Cbor)]
+            struct Message {
+                #[serde(flatten)]
+                extra: std::collections::BTreeMap<String, Value>,
+            }
+            check::<Message>(&[0xa1, 0x61, b'x', 0xc1, 1], limit, ok);
+        }
+    }
+}

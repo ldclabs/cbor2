@@ -15,14 +15,10 @@ pub(super) enum Indicator<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct BigInt {
-    pub(super) negative: bool,
-    pub(super) magnitude: Vec<u8>,
-}
-
-#[derive(Clone, Debug)]
 pub(super) enum Atom {
-    Integer(BigInt),
+    // For negative integers the CBOR argument is -1 - value.
+    Integer { negative: bool, argument: u64 },
+    Bignum { negative: bool, argument: Vec<u8> },
     Float(f64),
     FloatRaw { bytes: Vec<u8>, value: f64 },
     Bytes(Vec<u8>),

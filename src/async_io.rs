@@ -332,10 +332,7 @@ pub mod tokio {
 ///
 /// Not cancellation-safe; see the [module docs](self).
 pub async fn read_item<R: AsyncRead + ?Sized>(reader: &mut R) -> Result<Vec<u8>, Error> {
-    let mut out = Vec::new();
-    let mut offset = 0;
-    read_item_inner(reader, &mut out, &mut offset, DEFAULT_RECURSION_LIMIT, None).await?;
-    Ok(out)
+    read_item_inner(reader, None).await
 }
 
 /// Reads one complete, well-formed CBOR item from an async reader,
@@ -351,17 +348,7 @@ pub async fn read_item_with_limit<R: AsyncRead + ?Sized>(
     reader: &mut R,
     max_len: usize,
 ) -> Result<Vec<u8>, Error> {
-    let mut out = Vec::new();
-    let mut offset = 0;
-    read_item_inner(
-        reader,
-        &mut out,
-        &mut offset,
-        DEFAULT_RECURSION_LIMIT,
-        Some(max_len),
-    )
-    .await?;
-    Ok(out)
+    read_item_inner(reader, Some(max_len)).await
 }
 
 /// Reads one complete CBOR item and deserializes it into an owned value.
@@ -423,13 +410,11 @@ where
 async fn read_exact_record<R: AsyncRead + ?Sized>(
     reader: &mut R,
     out: &mut Vec<u8>,
-    offset: &mut usize,
     buf: &mut [u8],
     max_len: Option<usize>,
 ) -> Result<(), Error> {
-    check_size_limit(*offset, buf.len(), max_len)?;
+    check_size_limit(out.len(), buf.len(), max_len)?;
     reader.read_exact(buf).await.map_err(Error::Io)?;
-    *offset += buf.len();
     out.extend_from_slice(buf);
     Ok(())
 }
@@ -446,12 +431,11 @@ fn check_size_limit(offset: usize, additional: usize, max_len: Option<usize>) ->
 async fn pull_header<R: AsyncRead + ?Sized>(
     reader: &mut R,
     out: &mut Vec<u8>,
-    offset: &mut usize,
     max_len: Option<usize>,
 ) -> Result<(Header, usize), Error> {
-    let start = *offset;
+    let start = out.len();
     let mut raw = [0u8; 9];
-    read_exact_record(reader, out, offset, &mut raw[..1], max_len).await?;
+    read_exact_record(reader, out, &mut raw[..1], max_len).await?;
     let minor = raw[0] & 31;
     let width = match minor {
         0..=23 | 31 => 0,
@@ -462,7 +446,7 @@ async fn pull_header<R: AsyncRead + ?Sized>(
         _ => return Err(Error::Syntax(start)),
     };
     if width != 0 {
-        read_exact_record(reader, out, offset, &mut raw[1..1 + width], max_len).await?;
+        read_exact_record(reader, out, &mut raw[1..1 + width], max_len).await?;
     }
     let arg = match minor {
         0..=23 => Some(u64::from(minor)),
@@ -481,11 +465,10 @@ async fn pull_header<R: AsyncRead + ?Sized>(
 async fn read_body<R: AsyncRead + ?Sized>(
     reader: &mut R,
     out: &mut Vec<u8>,
-    offset: &mut usize,
     mut remaining: usize,
     max_len: Option<usize>,
 ) -> Result<(), Error> {
-    check_size_limit(*offset, remaining, max_len)?;
+    check_size_limit(out.len(), remaining, max_len)?;
     // Grow `out` chunk by chunk and read straight into it: memory still
     // only grows as data actually arrives, without staging each chunk
     // through a separate buffer first.
@@ -497,7 +480,6 @@ async fn read_body<R: AsyncRead + ?Sized>(
             .read_exact(&mut out[used..])
             .await
             .map_err(Error::Io)?;
-        *offset += n;
         remaining -= n;
     }
     Ok(())
@@ -506,14 +488,12 @@ async fn read_body<R: AsyncRead + ?Sized>(
 async fn read_text_body<R: AsyncRead + ?Sized>(
     reader: &mut R,
     out: &mut Vec<u8>,
-    offset: &mut usize,
     len: usize,
     max_len: Option<usize>,
 ) -> Result<(), Error> {
-    let body_offset = *offset;
     let start = out.len();
-    read_body(reader, out, offset, len, max_len).await?;
-    core::str::from_utf8(&out[start..]).map_err(|_| Error::Syntax(body_offset))?;
+    read_body(reader, out, len, max_len).await?;
+    core::str::from_utf8(&out[start..]).map_err(|_| Error::Syntax(start))?;
     Ok(())
 }
 
@@ -539,11 +519,9 @@ enum Frame {
 // treated as a one-item container so its content is walked at the next level.
 async fn read_item_inner<R: AsyncRead + ?Sized>(
     reader: &mut R,
-    out: &mut Vec<u8>,
-    offset: &mut usize,
-    limit: usize,
     max_len: Option<usize>,
-) -> Result<(), Error> {
+) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::new();
     // The initial one-item frame is the budget for the single top-level item.
     let mut stack = Vec::with_capacity(8);
     stack.push(Frame::Array(1));
@@ -562,7 +540,7 @@ async fn read_item_inner<R: AsyncRead + ?Sized>(
             _ => {}
         }
 
-        let (header, start) = pull_header(reader, out, offset, max_len).await?;
+        let (header, start) = pull_header(reader, &mut out, max_len).await?;
 
         if header == Header::Break {
             match stack.last().expect("non-empty") {
@@ -578,7 +556,7 @@ async fn read_item_inner<R: AsyncRead + ?Sized>(
 
         // A container at the final permitted level can still be empty.
         // Its terminating break is accepted above, but another child is not.
-        if stack.len() > limit {
+        if stack.len() > DEFAULT_RECURSION_LIMIT {
             return Err(Error::RecursionLimitExceeded);
         }
 
@@ -605,36 +583,23 @@ async fn read_item_inner<R: AsyncRead + ?Sized>(
 
             Header::Break => unreachable!("handled above"),
 
-            Header::Bytes(Some(len)) => read_body(reader, out, offset, len, max_len).await?,
-            Header::Text(Some(len)) => read_text_body(reader, out, offset, len, max_len).await?,
-            Header::Bytes(None) => read_indef_string(reader, out, offset, false, max_len).await?,
-            Header::Text(None) => read_indef_string(reader, out, offset, true, max_len).await?,
+            Header::Bytes(Some(len)) => read_body(reader, &mut out, len, max_len).await?,
+            Header::Text(Some(len)) => read_text_body(reader, &mut out, len, max_len).await?,
+            Header::Bytes(None) => read_indef_string(reader, &mut out, false, max_len).await?,
+            Header::Text(None) => read_indef_string(reader, &mut out, true, max_len).await?,
 
-            Header::Tag(..) => push(&mut stack, Frame::Array(1), limit)?,
-            Header::Array(Some(len)) => push(&mut stack, Frame::Array(len), limit)?,
-            Header::Array(None) => push(&mut stack, Frame::IndefArray, limit)?,
-            Header::Map(Some(pairs)) => push(
-                &mut stack,
-                Frame::Map {
-                    pairs,
-                    value: false,
-                },
-                limit,
-            )?,
-            Header::Map(None) => push(&mut stack, Frame::IndefMap { value: false }, limit)?,
+            Header::Tag(..) => stack.push(Frame::Array(1)),
+            Header::Array(Some(len)) => stack.push(Frame::Array(len)),
+            Header::Array(None) => stack.push(Frame::IndefArray),
+            Header::Map(Some(pairs)) => stack.push(Frame::Map {
+                pairs,
+                value: false,
+            }),
+            Header::Map(None) => stack.push(Frame::IndefMap { value: false }),
         }
     }
 
-    Ok(())
-}
-
-// Pushes a nested container, enforcing the recursion limit on nesting depth.
-fn push(stack: &mut Vec<Frame>, frame: Frame, limit: usize) -> Result<(), Error> {
-    if stack.len() > limit {
-        return Err(Error::RecursionLimitExceeded);
-    }
-    stack.push(frame);
-    Ok(())
+    Ok(out)
 }
 
 // Reads the segments of an indefinite-length byte or text string until the
@@ -643,20 +608,15 @@ fn push(stack: &mut Vec<Frame>, frame: Frame, limit: usize) -> Result<(), Error>
 async fn read_indef_string<R: AsyncRead + ?Sized>(
     reader: &mut R,
     out: &mut Vec<u8>,
-    offset: &mut usize,
     text: bool,
     max_len: Option<usize>,
 ) -> Result<(), Error> {
     loop {
-        let (header, start) = pull_header(reader, out, offset, max_len).await?;
+        let (header, start) = pull_header(reader, out, max_len).await?;
         match header {
             Header::Break => return Ok(()),
-            Header::Text(Some(len)) if text => {
-                read_text_body(reader, out, offset, len, max_len).await?
-            }
-            Header::Bytes(Some(len)) if !text => {
-                read_body(reader, out, offset, len, max_len).await?
-            }
+            Header::Text(Some(len)) if text => read_text_body(reader, out, len, max_len).await?,
+            Header::Bytes(Some(len)) if !text => read_body(reader, out, len, max_len).await?,
             _ => return Err(Error::Syntax(start)),
         }
     }

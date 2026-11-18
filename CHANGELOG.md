@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.1.7] - Unreleased
+
+### Fixed
+
+* Tagged newtypes preserve their payload tags. Typed decoders count transparent
+  tags against the nesting limit and accept leading-zero bignum padding within
+  a separate 4096-byte primitive payload budget.
+* Reader sequence iteration ends after its first error.
+* Derived flattened fields preserve CBOR extension values and reject label
+  collisions on encode. The derive resolves renamed Cargo dependencies.
+* CLI JSON encoding preserves integer and float spellings. JSON decoding uses
+  signed decimal strings for out-of-range integers and decimal integer keys.
+* Relative CRI references distinguish missing sections and encode leading
+  parent-directory segments in the discard count.
+
+### Performance
+
+* Encode ordinary CDN integer literals without allocating a magnitude buffer.
+  Use one length-first sort for canonical maps with identical wire and
+  equivalence keys. Cap initial Value container capacities at 1024 entries
+  after reading the first entry.
+* Simplify async framing offsets and add focused small-integer and mixed-key
+  benchmark fixtures.
+
 ## [1.1.6] - 2026-09-24
 
 ### Fixed

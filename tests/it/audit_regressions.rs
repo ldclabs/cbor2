@@ -354,6 +354,7 @@ fn canonical_rejects_equivalent_signed_zero_keys() {
         (Value::Float(-0.0), 2.into()),
     ]);
     assert!(to_canonical_vec(&value).is_err());
+    assert!(cbor2::to_canonical_vec_with(&value, cbor2::KeyOrder::LengthFirst).is_err());
 }
 
 #[test]
@@ -363,6 +364,7 @@ fn canonical_rejects_signed_zero_nested_in_keys() {
         (Value::Array(vec![Value::Float(-0.0)]), 2.into()),
     ]);
     assert!(to_canonical_vec(&value).is_err());
+    assert!(cbor2::to_canonical_vec_with(&value, cbor2::KeyOrder::LengthFirst).is_err());
 }
 
 #[test]

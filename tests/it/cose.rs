@@ -781,3 +781,146 @@ fn tagged_claims_support_flattened_cose_label_map() {
     assert_eq!(value.deserialized::<LabelClaims>().unwrap(), claims);
     assert_eq!(untagged.deserialized::<LabelClaims>().unwrap(), claims);
 }
+
+#[test]
+fn tagged_newtypes_keep_the_contents_own_tag() {
+    use cbor2::tag::RequireExact;
+    #[derive(Debug, PartialEq, Cbor)]
+    #[cbor(tag = 42)]
+    struct Big(u128);
+    #[derive(Debug, PartialEq, Cbor)]
+    #[cbor(tag = 42)]
+    struct Date(RequireExact<u64, 1>);
+    #[derive(Debug, PartialEq, Cbor)]
+    #[cbor(tag = 42)]
+    struct Dynamic(Value);
+
+    fn check<T: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug + PartialEq>(
+        item: T,
+    ) {
+        let bytes = cbor2::to_vec(&item).unwrap();
+        assert_eq!(&bytes[..2], &[0xd8, 42]);
+        for bytes in [&bytes[..], &bytes[2..]] {
+            assert_eq!(cbor2::from_slice::<T>(bytes).unwrap(), item);
+            assert_eq!(cbor2::from_reader::<T, _>(bytes).unwrap(), item);
+            let value: Value = cbor2::from_slice(bytes).unwrap();
+            assert_eq!(value.deserialized::<T>().unwrap(), item);
+        }
+    }
+    check(Big(1 << 64));
+    check(Date(RequireExact(7)));
+    check(Dynamic(Value::Tag(1, Box::new(7.into()))));
+}
+
+#[test]
+fn flattened_extensions_keep_cbor_values_and_declaration_order() {
+    use std::collections::BTreeMap;
+    #[derive(Debug, PartialEq, Cbor)]
+    struct Fields {
+        #[cbor(key = 1)]
+        #[serde(alias = "old_id", skip_serializing_if = "Option::is_none")]
+        id: Option<u64>,
+        #[serde(flatten)]
+        extra: BTreeMap<String, Value>,
+        tail: bool,
+    }
+    let mut fields = Fields {
+        id: Some(7),
+        tail: true,
+        extra: [
+            ("s".into(), cbor2::Simple::new(59).unwrap().into()),
+            ("when".into(), Value::Tag(1, Box::new(7.into()))),
+        ]
+        .into(),
+    };
+    let bytes = cbor2::to_vec(&fields).unwrap();
+    assert_eq!(
+        cbor2::to_cdn(&bytes[..]).unwrap(),
+        r#"{1: 7, "s": simple(59), "when": 1(7), "tail": true}"#
+    );
+    assert_eq!(cbor2::from_slice::<Fields>(&bytes).unwrap(), fields);
+    assert_eq!(cbor2::from_reader::<Fields, _>(&bytes[..]).unwrap(), fields);
+    assert_eq!(
+        Value::serialized(&fields)
+            .unwrap()
+            .deserialized::<Fields>()
+            .unwrap(),
+        fields
+    );
+    for name in ["id", "old_id", "tail"] {
+        fields.extra.insert(name.into(), 8.into());
+        assert!(cbor2::to_vec(&fields)
+            .unwrap_err()
+            .to_string()
+            .contains("conflicts"));
+        fields.id = None;
+        assert!(Value::serialized(&fields).is_err());
+        fields.extra.remove(name);
+    }
+}
+
+#[test]
+fn multiple_flattened_fields_claim_struct_keys_and_borrow_extension_values() {
+    #[derive(Debug, PartialEq, Cbor)]
+    struct Inner {
+        when: cbor2::tag::RequireExact<u64, 1>,
+    }
+    #[derive(Debug, PartialEq, Cbor)]
+    struct Outer<'a> {
+        #[serde(flatten)]
+        inner: Inner,
+        id: bool,
+        #[serde(flatten, borrow)]
+        extra: std::collections::BTreeMap<&'a str, &'a str>,
+    }
+    let item = Outer {
+        inner: Inner {
+            when: cbor2::tag::RequireExact(8),
+        },
+        id: true,
+        extra: [("text", "borrowed")].into(),
+    };
+    let bytes = cbor2::to_vec(&item).unwrap();
+    assert_eq!(
+        cbor2::to_cdn(&bytes[..]).unwrap(),
+        r#"{"when": 1(8), "id": true, "text": "borrowed"}"#
+    );
+    let item2: Outer<'_> = cbor2::from_slice(&bytes).unwrap();
+    assert_eq!(item, item2);
+    assert!(bytes.as_ptr_range().contains(&item2.extra["text"].as_ptr()));
+}
+
+#[test]
+fn flattened_integer_collisions_fail_and_custom_struct_fields_keep_their_options() {
+    let extra = CoseMap([(Label::Int(1), Value::from("duplicate"))].into());
+    let claims = LabelClaims {
+        issuer: "me".into(),
+        expiration: 9,
+        extra,
+    };
+    assert!(cbor2::to_vec(&claims)
+        .unwrap_err()
+        .to_string()
+        .contains("conflicts"));
+
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Details {
+        name: String,
+    }
+    #[derive(Debug, PartialEq, Cbor)]
+    #[serde(deny_unknown_fields)]
+    struct Message {
+        id: u8,
+        #[serde(flatten)]
+        details: Option<Details>,
+    }
+    for details in [None, Some(Details { name: "abc".into() })] {
+        let value = Message { id: 1, details };
+        assert_eq!(
+            cbor2::from_slice::<Message>(&cbor2::to_vec(&value).unwrap()).unwrap(),
+            value
+        );
+    }
+    let unknown = cbor2::cdn_to_vec(r#"{"id":1,"unrecognized":true}"#).unwrap();
+    assert!(cbor2::from_slice::<Message>(&unknown).is_err());
+}

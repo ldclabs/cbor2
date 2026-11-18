@@ -51,6 +51,22 @@ macro_rules! mkvisit {
     };
 }
 
+// Wait for a real item before spending even the bounded capacity hint.
+fn collect_items<T, E>(
+    hint: Option<usize>,
+    mut next: impl FnMut() -> Result<Option<T>, E>,
+) -> Result<Vec<T>, E> {
+    let Some(first) = next()? else {
+        return Ok(Vec::new());
+    };
+    let mut items = Vec::with_capacity(hint.unwrap_or(0).min(1024));
+    items.push(first);
+    while let Some(item) = next()? {
+        items.push(item);
+    }
+    Ok(items)
+}
+
 struct Visitor;
 
 impl<'de> de::Visitor<'de> for Visitor {
@@ -115,28 +131,12 @@ impl<'de> de::Visitor<'de> for Visitor {
 
     #[inline]
     fn visit_seq<A: de::SeqAccess<'de>>(self, mut acc: A) -> Result<Self::Value, A::Error> {
-        // Like `visit_map` below: trust small size hints, so typical arrays
-        // allocate once, while a forged length cannot reserve much.
-        let mut seq = Vec::with_capacity(acc.size_hint().filter(|&l| l < 1024).unwrap_or(0));
-
-        while let Some(elem) = acc.next_element()? {
-            seq.push(elem);
-        }
-
-        Ok(Value::Array(seq))
+        collect_items(acc.size_hint(), || acc.next_element()).map(Value::Array)
     }
 
     #[inline]
     fn visit_map<A: de::MapAccess<'de>>(self, mut acc: A) -> Result<Self::Value, A::Error> {
-        let mut map = Vec::<(Value, Value)>::with_capacity(
-            acc.size_hint().filter(|&l| l < 1024).unwrap_or(0),
-        );
-
-        while let Some(kv) = acc.next_entry()? {
-            map.push(kv);
-        }
-
-        Ok(Value::Map(map))
+        collect_items(acc.size_hint(), || acc.next_entry()).map(Value::Map)
     }
 
     // The only enums a `Value` can absorb are this crate's internal CBOR
@@ -587,15 +587,17 @@ impl<'de> de::Deserializer<'de> for Deserializer<&Value> {
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
         // A `RawValue` captures the `Value` re-encoded in preferred form.
-        if name == crate::raw::NAME {
+        if name == crate::raw::NAME || name == crate::flatten::fields::RAW_ITEM {
             let bytes = crate::to_vec(self.0).map_err(de::Error::custom)?;
             return visitor.visit_byte_buf(bytes);
         }
 
-        match unwrap_struct_tag(name, self.0) {
-            Some(value) => visitor.visit_newtype_struct(self.nested(value)),
-            None => visitor.visit_newtype_struct(self),
+        if let Value::Tag(tag, inner) = self.0 {
+            if crate::ser::parse_struct_marker(name).and_then(|marker| marker.tag) == Some(*tag) {
+                return visitor.visit_newtype_struct(self.nested(inner.as_ref()));
+            }
         }
+        visitor.visit_newtype_struct(self)
     }
 
     #[inline]
@@ -768,24 +770,6 @@ impl<'a, 'de, T: Iterator<Item = &'a (Value, Value)>> de::MapAccess<'de>
             _ => None,
         }
     }
-}
-
-// Walks the tag layers of a tagged marked newtype struct's value, whose inner
-// type may not skip tags itself; every other struct form unwraps them. Returns
-// `None` — keep the value and the default handling — for unmarked or untagged
-// structs.
-fn unwrap_struct_tag<'x>(name: &'static str, mut value: &'x Value) -> Option<&'x Value> {
-    let Some(crate::ser::StructMarker { tag: Some(..), .. }) =
-        crate::ser::parse_struct_marker(name)
-    else {
-        return None;
-    };
-
-    while let Value::Tag(.., v) = value {
-        value = v;
-    }
-
-    Some(value)
 }
 
 // Map access for a marked struct: integer keys translate to field names

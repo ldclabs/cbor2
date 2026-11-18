@@ -3,7 +3,7 @@ use alloc::{format, string::String, vec::Vec};
 use crate::de::Error;
 
 use super::encode::{write_int, write_tag};
-use super::types::{Atom, BigInt};
+use super::types::Atom;
 
 pub(super) fn datetime_atom(content: &str, tagged: bool, offset: usize) -> Result<Atom, Error> {
     let (seconds, fractional) = parse_datetime(content, offset)?;
@@ -14,7 +14,11 @@ pub(super) fn datetime_atom(content: &str, tagged: bool, offset: usize) -> Resul
     if !tagged {
         return Ok(match float {
             Some(value) => Atom::Float(value),
-            None => Atom::Integer(BigInt::from_i128(seconds)),
+            None => Atom::Integer {
+                negative: seconds < 0,
+                // Four-digit years fit comfortably within a CBOR integer.
+                argument: if seconds < 0 { -1 - seconds } else { seconds } as u64,
+            },
         });
     }
 

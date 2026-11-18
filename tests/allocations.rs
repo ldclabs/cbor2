@@ -133,3 +133,28 @@ fn large_arrays_of_one_byte_items_do_not_overreserve() {
         );
     }
 }
+
+#[test]
+fn dynamic_containers_bound_capacity_without_a_threshold_cliff() {
+    for n in [1023usize, 1024, 1025] {
+        for map in [false, true] {
+            let mut input = vec![if map { 0xb9 } else { 0x99 }];
+            input.extend_from_slice(&(n as u16).to_be_bytes());
+            input.resize(3 + n * if map { 2 } else { 1 }, 0);
+            let (_, (calls, _)) = measured(|| cbor2::from_slice::<cbor2::Value>(&input).unwrap());
+            assert_eq!(calls, if n <= 1024 { 1 } else { 2 });
+            let (err, (_, bytes)) = measured(|| cbor2::from_slice::<cbor2::Value>(&input[..3]));
+            assert!(err.is_err());
+            assert!(bytes < 1024);
+        }
+    }
+}
+
+#[test]
+fn ordinary_cdn_integers_allocate_only_container_buffers() {
+    for literal in ["42", "-7"] {
+        let source = format!("[{}]", vec![literal; 1000].join(","));
+        let (_, (calls, _)) = measured(|| cbor2::cdn_to_vec(&source).unwrap());
+        assert!(calls < 24, "{literal}: {calls}");
+    }
+}

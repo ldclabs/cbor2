@@ -18,6 +18,8 @@
 //! cargo install cbor2-cli              # installs cbor
 //! ```
 
+mod json_input;
+
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -363,13 +365,13 @@ fn encode(mut input: Box<dyn Read>, json: bool, hex: bool) -> Result<(), Error> 
     };
 
     if json {
-        let mut item = Vec::new();
-        let input = serde_json::Deserializer::from_reader(streaming(input, &output));
-        for value in input.into_iter::<Value>() {
-            item.clear();
-            cbor2::to_writer(&value?, &mut item)?;
-            write(&item)?;
-        }
+        json_input::encode(
+            FlushBeforeRead {
+                input,
+                output: &output,
+            },
+            write,
+        )?;
     } else {
         let mut text = String::new();
         input.read_to_string(&mut text)?;
@@ -394,6 +396,30 @@ fn encode(mut input: Box<dyn Read>, json: bool, hex: bool) -> Result<(), Error> 
 // nested values or compound keys.
 struct Json<'a>(&'a Value);
 
+fn bignum(tag: u64, inner: &Value) -> Option<num_bigint::BigInt> {
+    use num_bigint::{BigInt, Sign};
+    let bytes = inner.as_bytes()?;
+    match tag {
+        2 => Some(BigInt::from_bytes_be(Sign::Plus, bytes)),
+        3 => Some(BigInt::from_bytes_be(Sign::Minus, bytes) - 1),
+        _ => None,
+    }
+}
+
+fn json_key(key: &Value) -> Result<Cow<'_, str>, serde_json::Error> {
+    match key {
+        Value::Text(text) => return Ok(Cow::Borrowed(text)),
+        Value::Integer(n) => return Ok(Cow::Owned(i128::from(*n).to_string())),
+        Value::Tag(tag, inner) => {
+            if let Some(n) = bignum(*tag, inner) {
+                return Ok(Cow::Owned(n.to_string()));
+            }
+        }
+        _ => {}
+    }
+    serde_json::to_string(&Json(key)).map(Cow::Owned)
+}
+
 impl serde::Serialize for Json<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::{Error as _, SerializeMap as _};
@@ -412,18 +438,16 @@ impl serde::Serialize for Json<'_> {
             Value::Bytes(x) => serializer.collect_str(&Hex(x)),
             Value::Text(x) => serializer.serialize_str(x),
             Value::Simple(x) => serializer.collect_str(&format_args!("simple({})", x.value())),
-            Value::Tag(_, x) => Json(x).serialize(serializer),
+            Value::Tag(tag, inner) => match bignum(*tag, inner) {
+                Some(n) => serializer.collect_str(&n),
+                None => Json(inner).serialize(serializer),
+            },
             Value::Array(x) => serializer.collect_seq(x.iter().map(Json)),
             Value::Map(x) => {
                 let mut keys = HashSet::with_capacity(x.len());
                 let mut map = serializer.serialize_map(Some(x.len()))?;
                 for (key, value) in x {
-                    let key = match key {
-                        Value::Text(key) => Cow::Borrowed(key.as_str()),
-                        key => {
-                            Cow::Owned(serde_json::to_string(&Json(key)).map_err(S::Error::custom)?)
-                        }
-                    };
+                    let key = json_key(key).map_err(S::Error::custom)?;
                     if !keys.insert(key.clone()) {
                         return Err(S::Error::custom(format_args!(
                             "duplicate JSON object key {key:?} after CBOR key conversion"

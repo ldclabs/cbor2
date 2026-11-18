@@ -93,7 +93,7 @@ struct Claims {
 
 启用 `cbor2` 的 `derive` 即可使用宏，无需额外 serde 依赖。支持容器默认值和递归 `Self` 类型。位置数组禁止条件省略或单向跳过字段；应使用 `Option` 占位或双向 `#[serde(skip)]`。
 
-flatten 结构体中已声明的 RawValue 字段保留原始编码，切片解码支持借用字段。二进制 flatten 适配器使用 cbor2 的原始条目协议，不支持其他二进制序列化器；可读格式仍使用普通 serde 表示。
+flatten 结构体中已声明的 RawValue 字段保留原始编码，切片解码支持借用字段。扩展值可包含 CBOR 标签和简单值，扩展键与声明字段的名称、别名或注册整数键冲突时，编码会报错。二进制 flatten 适配器使用 cbor2 的原始条目协议，不支持其他二进制序列化器；可读格式仍使用普通 serde 表示。
 
 将内层结构体 flatten 到外层时，使用的是 serde 字段名，不会继承内层类型的 `Cbor::KEYS`、tag 或 array 形状。请在外层结构体声明注册整数键，并使用扁平化 map 承载扩展标签。例如，flatten 一个包含 `#[cbor(key = 1)] value: u8` 的内层结构体，输出的键仍是文本 `"value"`。
 
@@ -102,3 +102,5 @@ flatten 结构体中已声明的 RawValue 字段保留原始编码，切片解�
 ## 许可协议
 
 采用 MIT 许可协议。
+
+Cargo 中将依赖重命名为 `wire` 时，可直接使用 `#[derive(wire::Cbor)]`。

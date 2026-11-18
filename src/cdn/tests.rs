@@ -685,3 +685,20 @@ fn rejects_invalid_cdn() {
         assert!(cdn_to_vec(input).is_err(), "{input}");
     }
 }
+
+#[cfg(feature = "cdn-cri")]
+#[test]
+fn relative_cri_sections_distinguish_missing_and_empty() {
+    for (literal, expected) in [
+        ("cri''", "[]"),
+        ("cri'?q'", r#"[0,null,["q"]]"#),
+        ("cri'#f'", r#"[0,null,null,"f"]"#),
+        ("cri'../a'", r#"[2,["a"]]"#),
+        ("cri'..//a'", r#"[2,["","a"]]"#),
+        ("CRI'../../a?q#f'", r#"99([3,["a"],["q"],"f"])"#),
+        ("cri'./a:b'", r#"[1,["a:b"]]"#),
+        ("cri'/a'", r#"[true,["a"]]"#),
+    ] {
+        assert_cdn_eq(literal, expected);
+    }
+}

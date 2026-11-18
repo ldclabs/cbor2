@@ -8,6 +8,7 @@ pub(super) fn build(
     input: &syn::DeriveInput,
     attrs: &SerdeAttrs,
     groups: &[FieldGroup<'_>],
+    runtime: &syn::Ident,
 ) -> (syn::Generics, syn::Generics, syn::Lifetime) {
     let lifetime = super::fresh_lifetime(&input.generics, "__de");
     let mut ser = input.generics.clone();
@@ -34,7 +35,7 @@ pub(super) fn build(
                     && !variant.serialize_with
                     && variant.ser_bound.is_none()
             },
-            syn::parse_quote!(::cbor2::__serde::Serialize),
+            syn::parse_quote!(::#runtime::__serde::Serialize),
         ),
     }
     match &attrs.de_bound {
@@ -51,7 +52,7 @@ pub(super) fn build(
                         && !variant.deserialize_with
                         && variant.de_bound.is_none()
                 },
-                syn::parse_quote!(::cbor2::__serde::Deserialize<#lifetime>),
+                syn::parse_quote!(::#runtime::__serde::Deserialize<#lifetime>),
             );
             infer(
                 &mut de,

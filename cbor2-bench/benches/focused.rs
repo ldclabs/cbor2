@@ -48,9 +48,6 @@ fn review(c: &mut Criterion) {
         b.iter(|| cbor2::cdn_to_vec(black_box(&text)).unwrap())
     });
     let map = Value::Map((0..1024u64).rev().map(|n| (n.into(), n.into())).collect());
-    c.bench_function("review/canonical_map", |b| {
-        b.iter(|| cbor2::to_canonical_vec(black_box(&map)).unwrap())
-    });
     c.bench_function("review/canonical_writer", |b| {
         let mut out = Vec::new();
         b.iter(|| {
@@ -192,6 +189,26 @@ fn focused(c: &mut Criterion) {
     canonical.bench_function("compound_keys", |b| {
         b.iter(|| cbor2::to_canonical_vec(black_box(&composite)).unwrap())
     });
+    let mixed = Value::Map(
+        (0..1024u64)
+            .map(|index| {
+                let i = (index * 619) % 1024;
+                let key = match i % 3 {
+                    0 => Value::from(u64::MAX - i),
+                    1 => Value::from(format!("k{i}")),
+                    _ => Value::from(format!("long text key {i}")),
+                };
+                (key, i.into())
+            })
+            .collect(),
+    );
+    let length_first = cbor2::to_canonical_vec_with(&mixed, cbor2::KeyOrder::LengthFirst).unwrap();
+    assert_ne!(length_first, cbor2::to_canonical_vec(&mixed).unwrap());
+    canonical.bench_function("length_first_mixed_1024", |b| {
+        b.iter(|| {
+            cbor2::to_canonical_vec_with(black_box(&mixed), cbor2::KeyOrder::LengthFirst).unwrap()
+        })
+    });
     canonical.finish();
 
     let mut cdn = c.benchmark_group("focused/cdn");
@@ -205,6 +222,17 @@ fn focused(c: &mut Criterion) {
                 b.iter(|| cbor2::cdn_to_vec(black_box(text)).unwrap())
             });
         }
+    }
+    for (name, value) in [("small_positive_array", 42), ("small_negative_array", -7)] {
+        let text = format!("[{}]", vec![value.to_string(); 1000].join(","));
+        assert_eq!(
+            cbor2::cdn_to_vec(&text).unwrap(),
+            cbor2::to_vec(&vec![value; 1000]).unwrap()
+        );
+        cdn.throughput(Throughput::Elements(1000));
+        cdn.bench_function(name, |b| {
+            b.iter(|| cbor2::cdn_to_vec(black_box(&text)).unwrap())
+        });
     }
     cdn.finish();
 

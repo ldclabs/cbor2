@@ -109,7 +109,9 @@ supported. Positional arrays reject conditional and one-directional skips;
 use `Option` placeholders or symmetric `#[serde(skip)]` instead.
 
 Flattened structs preserve the exact encoding of declared `RawValue` fields
-and support borrowed fields when decoding from a slice. The binary flatten
+and support borrowed fields when decoding from a slice. Extension values can
+carry tags and simple values. Encoding rejects an extension label that
+collides with a declared field name, alias, or registered integer label. The binary flatten
 adapter uses cbor2's raw-item protocol; other binary serializers are not
 supported. Human-readable formats keep the ordinary serde representation.
 
@@ -127,3 +129,6 @@ cannot contain `#[serde(untagged)]` variants. On structs, `#[serde(tag =
 ## License
 
 Licensed under the MIT License.
+
+Cargo dependency aliases work with the derive, for example `#[derive(wire::Cbor)]`
+when the dependency is named `wire`.

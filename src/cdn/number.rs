@@ -2,7 +2,7 @@ use alloc::{format, vec::Vec};
 
 use crate::de::Error;
 
-use super::types::BigInt;
+use super::types::Atom;
 
 pub(super) fn is_app_char_any(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '-'
@@ -26,24 +26,33 @@ pub(super) fn strip_sign(s: &str) -> (bool, &str) {
     }
 }
 
-pub(super) fn parse_bigint_digits(
+pub(super) fn parse_integer(
     negative: bool,
     digits: &str,
     base: u32,
     offset: usize,
-) -> Result<BigInt, Error> {
+) -> Result<Atom, Error> {
     let digits = digits.trim_start_matches('0');
-    let mut magnitude = Vec::new();
     if digits.is_empty() {
-        return Ok(BigInt {
+        return Ok(Atom::Integer {
             negative: false,
-            magnitude,
+            argument: 0,
         });
     }
     if let Ok(value) = u128::from_str_radix(digits, base) {
-        let bytes = value.to_be_bytes();
-        magnitude.extend_from_slice(&bytes[value.leading_zeros() as usize / 8..]);
-    } else if matches!(base, 2 | 8 | 16) {
+        let argument = value - u128::from(negative);
+        if let Ok(argument) = u64::try_from(argument) {
+            return Ok(Atom::Integer { negative, argument });
+        }
+        let bytes = argument.to_be_bytes();
+        return Ok(Atom::Bignum {
+            negative,
+            argument: bytes[argument.leading_zeros() as usize / 8..].to_vec(),
+        });
+    }
+
+    let mut magnitude = Vec::new();
+    if matches!(base, 2 | 8 | 16) {
         let width = base.trailing_zeros();
         let mut bits = 0;
         let mut acc = 0u16;
@@ -86,46 +95,25 @@ pub(super) fn parse_bigint_digits(
         for limb in limbs.into_iter().rev() {
             magnitude.extend_from_slice(&limb.to_be_bytes());
         }
-        strip_leading_zeroes(&mut magnitude);
     }
-    Ok(BigInt {
-        negative,
-        magnitude,
-    })
-}
-
-fn strip_leading_zeroes(bytes: &mut Vec<u8>) {
-    let keep = bytes
-        .iter()
-        .position(|&byte| byte != 0)
-        .unwrap_or(bytes.len());
-    if keep > 0 {
-        bytes.drain(..keep);
-    }
-}
-
-pub(super) fn bytes_to_u64(bytes: &[u8]) -> Option<u64> {
-    if bytes.len() > 8 {
-        return None;
-    }
-    let mut value = 0u64;
-    for &byte in bytes {
-        value = (value << 8) | u64::from(byte);
-    }
-    Some(value)
-}
-
-pub(super) fn subtract_one(bytes: &[u8]) -> Vec<u8> {
-    let mut out = bytes.to_vec();
-    for byte in out.iter_mut().rev() {
-        let (next, borrow) = byte.overflowing_sub(1);
-        *byte = next;
-        if !borrow {
-            break;
+    if negative {
+        for byte in magnitude.iter_mut().rev() {
+            let (next, borrow) = byte.overflowing_sub(1);
+            *byte = next;
+            if !borrow {
+                break;
+            }
         }
     }
-    strip_leading_zeroes(&mut out);
-    out
+    let first = magnitude
+        .iter()
+        .position(|&b| b != 0)
+        .unwrap_or(magnitude.len());
+    magnitude.drain(..first);
+    Ok(Atom::Bignum {
+        negative,
+        argument: magnitude,
+    })
 }
 
 pub(super) fn parse_hex_float(lex: &str, offset: usize) -> Result<f64, Error> {
@@ -211,21 +199,4 @@ pub(super) fn parse_hex_float(lex: &str, offset: usize) -> Result<f64, Error> {
     Ok(f64::from_bits(
         sign | (((exponent + 1023) as u64) << 52) | (rounded & ((1 << 52) - 1)),
     ))
-}
-
-impl BigInt {
-    pub(super) fn from_i128(value: i128) -> Self {
-        let negative = value < 0;
-        let magnitude = if negative {
-            value.unsigned_abs()
-        } else {
-            value as u128
-        };
-        let mut bytes = magnitude.to_be_bytes().to_vec();
-        strip_leading_zeroes(&mut bytes);
-        Self {
-            negative: negative && !bytes.is_empty(),
-            magnitude: bytes,
-        }
-    }
 }

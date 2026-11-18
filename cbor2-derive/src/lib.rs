@@ -52,6 +52,7 @@ use syn::spanned::Spanned as _;
 use syn::visit_mut::{self, VisitMut};
 
 mod bounds;
+mod flatten;
 
 // Returns a spanned compile error from the enclosing function or closure.
 macro_rules! bail {
@@ -72,7 +73,7 @@ const MARKER: &str = "@@CBOR@@";
 /// written on encode and transparent on decode, so input is accepted with
 /// or without it. The declared details are also exposed through an
 /// implementation of the `cbor2::Cbor` trait, so the generated code
-/// requires the `cbor2` crate under that name.
+/// uses the dependency name from the caller’s Cargo manifest.
 ///
 /// Do not also derive serde's `Serialize`/`Deserialize`: this macro
 /// generates both impls (the implementations would conflict).
@@ -301,8 +302,8 @@ fn expand(item: TokenStream) -> syn::Result<TokenStream> {
 // type's name and field names stay exactly as written.
 fn prepare_shadow(
     input: &syn::DeriveInput,
+    runtime: &syn::Ident,
     shadow_ident: &syn::Ident,
-    name: &str,
     serde: &SerdeAttrs,
     de_generics: &syn::Generics,
     de_lifetime: &syn::Lifetime,
@@ -321,15 +322,14 @@ fn prepare_shadow(
     let remote = ident.to_string();
 
     shadow.attrs = vec![
-        syn::parse_quote!(#[derive(::cbor2::__serde::Serialize, ::cbor2::__serde::Deserialize)]),
         syn::parse_quote!(#[serde(remote = #remote)]),
         syn::parse_quote!(#[automatically_derived]),
-        syn::parse_quote!(#[serde(rename = #name)]),
     ];
     if !serde.explicit_crate {
+        let serde_path = format!("::{runtime}::__serde");
         shadow
             .attrs
-            .push(syn::parse_quote!(#[serde(crate = "::cbor2::__serde")]));
+            .push(syn::parse_quote!(#[serde(crate = #serde_path)]));
     }
     shadow.attrs.extend(copied_attrs(&input.attrs));
     ReplaceSelf { original }.visit_derive_input_mut(&mut shadow);
@@ -400,14 +400,18 @@ fn generate(
     let tag = container.tag.as_ref().map(|tag| tag.value);
     let array = container.array.is_some();
     let ident = &input.ident;
+    let runtime = match proc_macro_crate::crate_name("cbor2") {
+        Ok(proc_macro_crate::FoundCrate::Name(name)) => format_ident!("{}", name),
+        _ => format_ident!("cbor2"),
+    };
     let type_name = ident.unraw().to_string();
-    let name = marker(tag, array, entries, &type_name).unwrap_or(type_name);
+    let name = marker(tag, array, entries, &type_name).unwrap_or_else(|| type_name.clone());
     let shadow_ident = format_ident!("__CborShadow");
-    let (ser_generics, de_generics, de_lifetime) = bounds::build(input, serde, groups);
-    let shadow = prepare_shadow(
+    let (ser_generics, de_generics, de_lifetime) = bounds::build(input, serde, groups, &runtime);
+    let mut shadow = prepare_shadow(
         input,
+        &runtime,
         &shadow_ident,
-        &name,
         serde,
         &de_generics,
         &de_lifetime,
@@ -416,109 +420,42 @@ fn generate(
     let (ser_impl_generics, _, ser_where_clause) = ser_generics.split_for_impl();
     let (de_impl_generics, _, de_where_clause) = de_generics.split_for_impl();
 
-    let serde_impls = if flatten {
-        let cbor_lifetime = fresh_lifetime(&input.generics, "__cbor");
-
-        let mut shadow_ref_generics = input.generics.clone();
-        shadow_ref_generics.params.insert(
-            0,
-            syn::GenericParam::Lifetime(syn::LifetimeParam::new(cbor_lifetime.clone())),
-        );
-        let (shadow_ref_impl_generics, _shadow_ref_ty_generics, shadow_ref_where_clause) =
-            shadow_ref_generics.split_for_impl();
-
-        let mut ser_ref_generics = ser_generics.clone();
-        ser_ref_generics.params.insert(
-            0,
-            syn::GenericParam::Lifetime(syn::LifetimeParam::new(cbor_lifetime.clone())),
-        );
-        let (ser_ref_impl_generics, ser_ref_ty_generics, ser_ref_where_clause) =
-            ser_ref_generics.split_for_impl();
-
-        quote! {
-            struct __CborShadowRef #shadow_ref_impl_generics #shadow_ref_where_clause {
-                value: &#cbor_lifetime #ident #ty_generics,
-            }
-
-            impl #ser_ref_impl_generics ::cbor2::__serde::Serialize for __CborShadowRef #ser_ref_ty_generics #ser_ref_where_clause {
-                fn serialize<__S>(&self, serializer: __S) -> ::core::result::Result<__S::Ok, __S::Error>
-                where
-                    __S: ::cbor2::__serde::Serializer,
-                {
-                    #shadow_ident::serialize(self.value, serializer)
-                }
-            }
-
-            struct __CborShadowOwned #impl_generics (#ident #ty_generics) #where_clause;
-
-            impl #de_impl_generics ::cbor2::__serde::Deserialize<#de_lifetime> for __CborShadowOwned #ty_generics #de_where_clause {
-                fn deserialize<__D>(deserializer: __D) -> ::core::result::Result<Self, __D::Error>
-                where
-                    __D: ::cbor2::__serde::Deserializer<#de_lifetime>,
-                {
-                    #shadow_ident::deserialize(deserializer).map(Self)
-                }
-            }
-
-            #[automatically_derived]
-            impl #ser_impl_generics ::cbor2::__serde::Serialize for #ident #ty_generics #ser_where_clause {
-                fn serialize<__S>(&self, serializer: __S) -> ::core::result::Result<__S::Ok, __S::Error>
-                where
-                    __S: ::cbor2::__serde::Serializer,
-                {
-                    if serializer.is_human_readable() {
-                        return #shadow_ident::serialize(self, serializer);
-                    }
-
-                    ::cbor2::__private::flatten_serialize(
-                        &__CborShadowRef { value: self }, serializer,
-                        <#ident #ty_generics as ::cbor2::Cbor>::TAG,
-                        <#ident #ty_generics as ::cbor2::Cbor>::KEYS,
-                    )
-                }
-            }
-
-            #[automatically_derived]
-            impl #de_impl_generics ::cbor2::__serde::Deserialize<#de_lifetime> for #ident #ty_generics #de_where_clause {
-                fn deserialize<__D>(deserializer: __D) -> ::core::result::Result<Self, __D::Error>
-                where
-                    __D: ::cbor2::__serde::Deserializer<#de_lifetime>,
-                {
-                    if deserializer.is_human_readable() {
-                        return #shadow_ident::deserialize(deserializer);
-                    }
-
-                    let __value: __CborShadowOwned #ty_generics = ::cbor2::__private::flatten_deserialize(
-                        deserializer, <#ident #ty_generics as ::cbor2::Cbor>::KEYS,
-                    )?;
-                    ::core::result::Result::Ok(__value.0)
-                }
-            }
-        }
+    let ordinary_ser = quote!(#shadow_ident::serialize(self, serializer));
+    let ordinary_de = quote!(#shadow_ident::deserialize(deserializer));
+    let (helpers, serialize, deserialize) = if flatten {
+        let expansion = if cfg!(feature = "runtime-1-1-7") {
+            flatten::fields(
+                &shadow,
+                &groups[0].fields,
+                serde,
+                &runtime,
+                &type_name,
+                entries,
+            )
+        } else {
+            flatten::legacy(
+                input,
+                &runtime,
+                &ser_generics,
+                &de_generics,
+                &de_lifetime,
+                &shadow_ident,
+            )
+        };
+        let binary_ser = expansion.serialize;
+        let binary_de = expansion.deserialize;
+        (
+            expansion.helpers,
+            quote!(if serializer.is_human_readable() {#ordinary_ser} else {#binary_ser}),
+            quote!(if deserializer.is_human_readable() {#ordinary_de} else {#binary_de}),
+        )
     } else {
-        quote! {
-            #[automatically_derived]
-            impl #ser_impl_generics ::cbor2::__serde::Serialize for #ident #ty_generics #ser_where_clause {
-                fn serialize<__S>(&self, serializer: __S) -> ::core::result::Result<__S::Ok, __S::Error>
-                where
-                    __S: ::cbor2::__serde::Serializer,
-                {
-                    #shadow_ident::serialize(self, serializer)
-                }
-            }
-
-            #[automatically_derived]
-            impl #de_impl_generics ::cbor2::__serde::Deserialize<#de_lifetime> for #ident #ty_generics #de_where_clause {
-                fn deserialize<__D>(deserializer: __D) -> ::core::result::Result<Self, __D::Error>
-                where
-                    __D: ::cbor2::__serde::Deserializer<#de_lifetime>,
-                {
-                    #shadow_ident::deserialize(deserializer)
-                }
-            }
-        }
+        (TokenStream::new(), ordinary_ser, ordinary_de)
     };
-
+    shadow.attrs.insert(0, syn::parse_quote!(#[derive(::#runtime::__serde::Serialize, ::#runtime::__serde::Deserialize)]));
+    shadow
+        .attrs
+        .push(syn::parse_quote!(#[serde(rename = #name)]));
     // The `cbor2::Cbor` trait exposes the declared protocol details.
     let key_pairs = entries.iter().map(|entry| {
         let name = &entry.name;
@@ -534,10 +471,22 @@ fn generate(
         #[doc(hidden)]
         const _: () = {
             #shadow
-            #serde_impls
+            #helpers
+            #[automatically_derived]
+            impl #ser_impl_generics ::#runtime::__serde::Serialize for #ident #ty_generics #ser_where_clause {
+                fn serialize<__S: ::#runtime::__serde::Serializer>(&self, serializer: __S) -> ::core::result::Result<__S::Ok,__S::Error> {
+                    #serialize
+                }
+            }
+            #[automatically_derived]
+            impl #de_impl_generics ::#runtime::__serde::Deserialize<#de_lifetime> for #ident #ty_generics #de_where_clause {
+                fn deserialize<__D: ::#runtime::__serde::Deserializer<#de_lifetime>>(deserializer: __D) -> ::core::result::Result<Self,__D::Error> {
+                    #deserialize
+                }
+            }
 
             #[automatically_derived]
-            impl #impl_generics ::cbor2::Cbor for #ident #ty_generics #where_clause {
+            impl #impl_generics ::#runtime::Cbor for #ident #ty_generics #where_clause {
                 const KEYS: &'static [(&'static str, i128)] = &[#(#key_pairs),*];
                 const TAG: ::core::option::Option<u64> = #tag_const;
                 const ARRAY: bool = #array;
@@ -1053,6 +1002,7 @@ impl<'a> FieldGroup<'a> {
 #[derive(Default)]
 struct SerdeAttrs {
     rename: Option<(String, proc_macro2::Span)>,
+    aliases: Vec<String>,
     split_rename: Option<proc_macro2::Span>,
     split_names: [Option<String>; 2],
     rename_all: Option<proc_macro2::Span>,
@@ -1084,6 +1034,7 @@ struct SerdeAttrs {
     // None: implicit borrowing only; Some(None): borrow all field lifetimes.
     borrow: Option<Option<Vec<syn::Lifetime>>>,
     explicit_crate: bool,
+    deny_unknown_fields: bool,
 }
 
 type BoundPredicates = syn::punctuated::Punctuated<syn::WherePredicate, syn::Token![,]>;
@@ -1107,6 +1058,11 @@ fn scan_serde(attrs: &[syn::Attribute]) -> SerdeAttrs {
         }
 
         let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("alias") {
+                let name: syn::LitStr = meta.value()?.parse()?;
+                out.aliases.push(name.value());
+                return Ok(());
+            }
             if meta.path.is_ident("rename") {
                 if meta.input.peek(syn::Token![=]) {
                     let expr: syn::Expr = meta.value()?.parse()?;
@@ -1149,6 +1105,8 @@ fn scan_serde(attrs: &[syn::Attribute]) -> SerdeAttrs {
                 return Ok(());
             } else if meta.path.is_ident("rename_all_fields") {
                 out.rename_all_fields = Some(meta.path.span());
+            } else if meta.path.is_ident("deny_unknown_fields") {
+                out.deny_unknown_fields = true;
             } else if meta.path.is_ident("flatten") {
                 out.flatten = Some(meta.path.span());
             } else if meta.path.is_ident("transparent") {

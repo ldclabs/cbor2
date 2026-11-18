@@ -78,7 +78,9 @@ CLI behavior to preserve:
   map keys become the same JSON object key (including duplicate text keys),
   fail with status 1 instead of overwriting a value. Do not output the failing item; earlier sequence items
   may already have been written. Use diagnostic output to inspect such maps.
-- Decode, validation and `encode --json` process one item at a time. Default
+- Decode, validation and `encode --json` process one item at a time. JSON
+  numbers keep their original spelling until CBOR encoding. JSON projection
+  renders bignums as signed decimal strings, including object keys. Default
   CDN encoding reads the whole source before parsing. `encode --json` keeps
   JSON member order and duplicate names, producing the same bytes as CDN
   input. Keep streaming output buffered and flush complete items before
@@ -116,7 +118,8 @@ CLI behavior to preserve:
   limit before expensive arbitrary-precision decimal conversion.
 - `#[cbor(tag = N)]` wraps the container in CBOR tag `N` on encode and treats
   tag layers as transparent on decode, so the same type accepts tagged *or*
-  untagged input — no separate "bare" struct plus a `From` impl.
+  untagged input. A tagged newtype consumes its declared outer tag and hands
+  the intact payload to its field type — no separate "bare" struct plus a `From` impl.
 - Generic CBOR simple values are represented by `cbor2::Simple` and
   `Value::Simple`. Use `Simple::new(N)` when a registered simple value such as
   SD-CWT `simple(59)` must appear as a map key.

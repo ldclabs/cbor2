@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [workspace]
+members = ["renamed"]
 
 [features]
 default = ["std"]

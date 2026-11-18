@@ -140,25 +140,32 @@ fn ordered<'a>(
             original,
         });
     }
-    // Equality may differ from wire order (notably for negative zero).
-    entries.sort_unstable_by(|a, b| arena[a.equivalent.clone()].cmp(&arena[b.equivalent.clone()]));
+    let sort_wire = |entries: &mut [Entry<'a>]| match order {
+        KeyOrder::Bytewise => {
+            entries.sort_unstable_by(|a, b| arena[a.encoded.clone()].cmp(&arena[b.encoded.clone()]))
+        }
+        KeyOrder::LengthFirst => entries.sort_unstable_by(|a, b| {
+            a.encoded
+                .len()
+                .cmp(&b.encoded.len())
+                .then_with(|| arena[a.encoded.clone()].cmp(&arena[b.encoded.clone()]))
+        }),
+    };
+    if same_order {
+        sort_wire(&mut entries);
+    } else {
+        // Signed-zero equivalence can put duplicates apart in wire order.
+        entries
+            .sort_unstable_by(|a, b| arena[a.equivalent.clone()].cmp(&arena[b.equivalent.clone()]));
+    }
     if entries
         .windows(2)
         .any(|w| arena[w[0].equivalent.clone()] == arena[w[1].equivalent.clone()])
     {
         return Err(crate::ser::Error::msg("duplicate map key"));
     }
-    // For ordinary bytewise keys, the duplicate check already established
-    // the output order. Only length-first or signed-zero keys need a re-sort.
-    if order != KeyOrder::Bytewise || !same_order {
-        entries.sort_unstable_by(|a, b| {
-            let a = &arena[a.encoded.clone()];
-            let b = &arena[b.encoded.clone()];
-            match order {
-                KeyOrder::Bytewise => a.cmp(b),
-                KeyOrder::LengthFirst => a.len().cmp(&b.len()).then_with(|| a.cmp(b)),
-            }
-        });
+    if !same_order {
+        sort_wire(&mut entries);
     }
     Ok((arena, entries))
 }

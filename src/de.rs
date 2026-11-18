@@ -178,47 +178,10 @@ fn big_to_u128(bytes: &[u8]) -> Option<u128> {
 }
 
 #[cfg(feature = "alloc")]
-struct BignumAccumulator {
-    value: u128,
-    significant: bool,
-    payload_len: usize,
-    max_bytes: usize,
-    too_large: &'static str,
-}
+// Limit the total bytes scanned for a primitive, independently of its
+// numeric range. Ordinary padded magnitudes can span several segments.
+const PRIMITIVE_BIGNUM_BYTE_LIMIT: usize = 4096;
 
-#[cfg(feature = "alloc")]
-impl BignumAccumulator {
-    fn new(max_bytes: usize, too_large: &'static str) -> Self {
-        Self {
-            value: 0,
-            significant: false,
-            payload_len: 0,
-            max_bytes,
-            too_large,
-        }
-    }
-
-    fn accept_segment(&mut self, len: usize) -> Result<(), Error> {
-        if len > self.max_bytes.saturating_sub(self.payload_len) {
-            return Err(de::Error::custom(self.too_large));
-        }
-
-        self.payload_len += len;
-        Ok(())
-    }
-
-    fn push(&mut self, byte: u8) {
-        if !self.significant && byte == 0 {
-            return;
-        }
-
-        self.significant = true;
-        self.value = (self.value << 8) | u128::from(byte);
-    }
-}
-
-// The identifier form of an integer map key that no field maps to. It can
-// match no ordinary field name, so such keys are simply unknown fields.
 #[cfg(feature = "alloc")]
 pub(crate) const INT_KEY_PLACEHOLDER: &str = "@@KEY@@";
 
@@ -358,7 +321,7 @@ impl<R: Read> Source for ReaderSource<R> {
     #[inline]
     fn skip_item(&mut self, recurse: usize) -> Result<(), Error> {
         let mut scratch = [0u8; SKIP_CHUNK];
-        validate_item(&mut self.0, recurse, &mut scratch)
+        validate_item::<_, true>(&mut self.0, recurse, &mut scratch)
     }
 
     fn capture(&mut self, recurse: usize) -> Result<Vec<u8>, Error> {
@@ -474,12 +437,12 @@ impl Source for SliceSource<'_> {
 
     #[inline]
     fn skip_item(&mut self, recurse: usize) -> Result<(), Error> {
-        validate_item_slice(&mut self.0, recurse)
+        validate_item_slice::<true>(&mut self.0, recurse)
     }
 
     fn capture(&mut self, recurse: usize) -> Result<Vec<u8>, Error> {
         let start = self.0.offset();
-        validate_item_slice(&mut self.0, recurse)?;
+        validate_item_slice::<true>(&mut self.0, recurse)?;
         Ok(self.1[start..self.0.offset()].to_vec())
     }
 }
@@ -492,7 +455,10 @@ impl<'de> BorrowSource<'de> for SliceSource<'de> {
     }
     fn borrow_item(&mut self, recurse: usize) -> Option<Result<&'de [u8], Error>> {
         let start = self.0.offset();
-        Some(validate_item_slice(&mut self.0, recurse).map(|()| &self.1[start..self.0.offset()]))
+        Some(
+            validate_item_slice::<true>(&mut self.0, recurse)
+                .map(|()| &self.1[start..self.0.offset()]),
+        )
     }
 }
 
@@ -503,7 +469,7 @@ impl<'de> BorrowSource<'de> for SliceSource<'de> {
 fn capture_item<R: Read>(decoder: &mut Decoder<R>, recurse: usize) -> Result<Vec<u8>, Error> {
     let mut scratch = [0u8; SKIP_CHUNK];
     decoder.start_recording();
-    let result = validate_item(decoder, recurse, &mut scratch);
+    let result = validate_item::<_, true>(decoder, recurse, &mut scratch);
     let bytes = decoder.take_recording();
     result.map(|()| bytes)
 }
@@ -557,7 +523,7 @@ impl<R: Read> Deserializer<ReaderSource<R>> {
     /// CBOR allows concatenating encoded items into a *sequence* (RFC 8742).
     /// The iterator yields decoded items until the input is exhausted; a
     /// clean end of input terminates the iterator, while anything else
-    /// (including a truncated item) yields an error.
+    /// (including a truncated item) yields one error and ends iteration.
     ///
     /// ```rust
     /// let mut stream = Vec::new();
@@ -575,7 +541,7 @@ impl<R: Read> Deserializer<ReaderSource<R>> {
     #[allow(clippy::should_implement_trait)]
     pub fn into_iter<T: de::DeserializeOwned>(self) -> Iter<T, R> {
         Iter {
-            de: self,
+            de: Some(self),
             _marker: core::marker::PhantomData,
         }
     }
@@ -659,23 +625,29 @@ impl<S: Source> Deserializer<S> {
         result
     }
 
-    // `#[cbor(tag = ...)]` emits a tag on encode, but tags are transparent on
-    // decode. Strip any leading tag layers for a marked newtype struct before
-    // delegating to serde's generated visitor, whose inner type may not skip
-    // tags itself; every other struct form skips them in its dispatch loop.
-    fn skip_struct_tags(&mut self, name: &'static str) -> Result<(), Error> {
-        let Some(crate::ser::StructMarker { tag: Some(..), .. }) =
-            crate::ser::parse_struct_marker(name)
-        else {
-            return Ok(());
-        };
-
+    // Typed positions ignore wrapper tags, but their payload (including
+    // nested containers) must still fit the remaining nesting budget.
+    #[inline]
+    fn with_header<T>(
+        &mut self,
+        keep_bignums: bool,
+        visit: impl FnOnce(&mut Self, Header, usize) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let mut remaining = self.recurse;
         loop {
-            match self.source.pull()? {
-                Header::Tag(..) => {}
-                header => {
-                    self.source.push(header);
-                    return Ok(());
+            let offset = self.offset();
+            let header = self.source.pull()?;
+            match header {
+                Header::Tag(t) if !(keep_bignums && matches!(t, tag::BIGPOS | tag::BIGNEG)) => {
+                    remaining = remaining
+                        .checked_sub(1)
+                        .ok_or(Error::RecursionLimitExceeded)?;
+                }
+                _ => {
+                    let saved = core::mem::replace(&mut self.recurse, remaining);
+                    let result = visit(self, header, offset);
+                    self.recurse = saved;
+                    return result;
                 }
             }
         }
@@ -701,161 +673,139 @@ impl<S: Source> Deserializer<S> {
         Ok(bytes)
     }
 
-    // Reads the byte string payload following a bignum tag into a bounded
-    // integer accumulator. The bound applies to the encoded payload length,
-    // not just significant bytes, so leading-zero padding cannot force
-    // primitive integer targets to scan an arbitrary body. Dynamic `Value`
-    // and `deserialize_any` keep using `bignum()` so they can preserve
-    // arbitrary-width payloads.
-    fn bounded_bignum(&mut self, max_bytes: usize, too_large: &'static str) -> Result<u128, Error> {
-        let mut acc = BignumAccumulator::new(max_bytes, too_large);
+    fn bounded_bignum(&mut self, too_large: &'static str) -> Result<u128, Error> {
+        if self.recurse == 0 {
+            return Err(Error::RecursionLimitExceeded);
+        }
+        let mut budget = PRIMITIVE_BIGNUM_BYTE_LIMIT;
+        let mut value = 0u128;
+        let mut segment = |source: &mut S, mut len: usize| -> Result<(), Error> {
+            budget = budget
+                .checked_sub(len)
+                .ok_or_else(|| <Error as de::Error>::custom(too_large))?;
+            let mut buf = [0; 64];
+            while len > 0 {
+                let n = len.min(buf.len());
+                source.read_exact(&mut buf[..n])?;
+                for &byte in &buf[..n] {
+                    value = value
+                        .checked_mul(256)
+                        .ok_or_else(|| <Error as de::Error>::custom(too_large))?
+                        | u128::from(byte);
+                }
+                len -= n;
+            }
+            Ok(())
+        };
         match self.source.pull()? {
-            Header::Bytes(Some(len)) => self.read_bignum_segment(len, &mut acc)?,
+            Header::Bytes(Some(len)) => segment(&mut self.source, len)?,
             Header::Bytes(None) => loop {
-                let offset = self.source.offset();
+                let offset = self.offset();
                 match self.source.pull()? {
                     Header::Break => break,
-                    Header::Bytes(Some(len)) => self.read_bignum_segment(len, &mut acc)?,
+                    Header::Bytes(Some(len)) => segment(&mut self.source, len)?,
                     _ => return Err(Error::Syntax(offset)),
                 }
             },
             header => return Err(header.expected("bytes")),
         }
-        Ok(acc.value)
-    }
-
-    fn read_bignum_segment(
-        &mut self,
-        mut len: usize,
-        acc: &mut BignumAccumulator,
-    ) -> Result<(), Error> {
-        acc.accept_segment(len)?;
-
-        let mut buffer = [0u8; 64];
-        while len > 0 {
-            let n = len.min(buffer.len());
-            self.source.read_exact(&mut buffer[..n])?;
-            for &byte in &buffer[..n] {
-                acc.push(byte);
-            }
-            len -= n;
-        }
-        Ok(())
+        Ok(value)
     }
 
     fn float(&mut self) -> Result<f64, Error> {
-        loop {
-            if let Some(result) = self.source.float() {
-                return result;
-            }
-            return match self.source.pull()? {
-                Header::Tag(_) => continue,
-                Header::Float(value) => Ok(value),
-                header => Err(header.expected("float")),
-            };
+        if let Some(result) = self.source.float() {
+            return result;
         }
+        self.with_header(false, |_, header, _| match header {
+            Header::Float(value) => Ok(value),
+            header => Err(header.expected("float")),
+        })
     }
 
     fn unsigned(&mut self) -> Result<u128, Error> {
-        loop {
-            return match self.source.pull()? {
-                Header::Positive(x) => Ok(x.into()),
-                Header::Tag(tag::BIGPOS) => self.bounded_bignum(16, "bigint too large"),
-                Header::Tag(tag::BIGNEG) | Header::Negative(..) => {
-                    Err(de::Error::custom("unexpected negative integer"))
-                }
-                Header::Tag(..) => continue,
-                header => Err(header.expected("integer")),
-            };
-        }
+        self.with_header(true, |me, header, _| match header {
+            Header::Positive(x) => Ok(x.into()),
+            Header::Tag(tag::BIGPOS) => me.bounded_bignum("bigint too large"),
+            Header::Tag(tag::BIGNEG) | Header::Negative(..) => {
+                Err(de::Error::custom("unexpected negative integer"))
+            }
+            header => Err(header.expected("integer")),
+        })
     }
 
     fn unsigned_u64(&mut self) -> Result<u64, Error> {
-        loop {
-            if let Some(res) = self.source.integer() {
-                let (negative, value) = res?;
-                return match negative {
-                    false => Ok(value),
-                    true => Err(de::Error::custom("unexpected negative integer")),
-                };
-            }
-
-            return match self.source.pull()? {
-                Header::Positive(x) => Ok(x),
-                Header::Tag(tag::BIGPOS) => {
-                    let raw = self.bounded_bignum(8, "integer too large")?;
-                    u64::try_from(raw).map_err(|_| de::Error::custom("integer too large"))
-                }
-                Header::Tag(tag::BIGNEG) | Header::Negative(..) => {
-                    Err(de::Error::custom("unexpected negative integer"))
-                }
-                Header::Tag(..) => continue,
-                header => Err(header.expected("integer")),
+        if let Some(res) = self.source.integer() {
+            let (negative, value) = res?;
+            return match negative {
+                false => Ok(value),
+                true => Err(de::Error::custom("unexpected negative integer")),
             };
         }
+
+        self.with_header(true, |me, header, _| match header {
+            Header::Positive(x) => Ok(x),
+            Header::Tag(tag::BIGPOS) => {
+                let raw = me.bounded_bignum("integer too large")?;
+                u64::try_from(raw).map_err(|_| de::Error::custom("integer too large"))
+            }
+            Header::Tag(tag::BIGNEG) | Header::Negative(..) => {
+                Err(de::Error::custom("unexpected negative integer"))
+            }
+            header => Err(header.expected("integer")),
+        })
     }
 
     fn signed(&mut self) -> Result<i128, Error> {
-        loop {
-            return match self.source.pull()? {
-                Header::Positive(x) => Ok(x.into()),
-                Header::Negative(x) => Ok(x as i128 ^ !0),
-                Header::Tag(tag::BIGPOS) => {
-                    self.bounded_bignum(16, "integer too large").and_then(|x| {
-                        i128::try_from(x).map_err(|_| de::Error::custom("integer too large"))
-                    })
+        self.with_header(true, |me, header, _| match header {
+            Header::Positive(x) => Ok(x.into()),
+            Header::Negative(x) => Ok(x as i128 ^ !0),
+            Header::Tag(tag::BIGPOS) => me.bounded_bignum("integer too large").and_then(|x| {
+                i128::try_from(x).map_err(|_| de::Error::custom("integer too large"))
+            }),
+            Header::Tag(tag::BIGNEG) => {
+                let raw = me.bounded_bignum("integer too large")?;
+                match i128::try_from(raw) {
+                    Ok(x) => Ok(x ^ !0),
+                    Err(..) => Err(de::Error::custom("integer too large")),
                 }
-                Header::Tag(tag::BIGNEG) => {
-                    let raw = self.bounded_bignum(16, "integer too large")?;
-                    match i128::try_from(raw) {
-                        Ok(x) => Ok(x ^ !0),
-                        Err(..) => Err(de::Error::custom("integer too large")),
-                    }
-                }
-                Header::Tag(..) => continue,
-                header => Err(header.expected("integer")),
-            };
-        }
+            }
+            header => Err(header.expected("integer")),
+        })
     }
 
     fn signed_i64(&mut self) -> Result<i64, Error> {
-        loop {
-            if let Some(res) = self.source.integer() {
-                let (negative, value) = res?;
-                return match negative {
-                    false => {
-                        i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
-                    }
-                    true => {
-                        let value = -1 - i128::from(value);
-                        i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
-                    }
-                };
-            }
-
-            return match self.source.pull()? {
-                Header::Positive(x) => {
-                    i64::try_from(x).map_err(|_| de::Error::custom("integer too large"))
-                }
-                Header::Negative(x) => {
-                    let value = -1 - i128::from(x);
+        if let Some(res) = self.source.integer() {
+            let (negative, value) = res?;
+            return match negative {
+                false => i64::try_from(value).map_err(|_| de::Error::custom("integer too large")),
+                true => {
+                    let value = -1 - i128::from(value);
                     i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
                 }
-                Header::Tag(tag::BIGPOS) => {
-                    let raw = self.bounded_bignum(8, "integer too large")?;
-                    i64::try_from(raw).map_err(|_| de::Error::custom("integer too large"))
-                }
-                Header::Tag(tag::BIGNEG) => {
-                    let raw = self.bounded_bignum(8, "integer too large")?;
-                    let value = -1
-                        - i128::try_from(raw)
-                            .map_err(|_| Error::semantic(None, "integer too large"))?;
-                    i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
-                }
-                Header::Tag(..) => continue,
-                header => Err(header.expected("integer")),
             };
         }
+
+        self.with_header(true, |me, header, _| match header {
+            Header::Positive(x) => {
+                i64::try_from(x).map_err(|_| de::Error::custom("integer too large"))
+            }
+            Header::Negative(x) => {
+                let value = -1 - i128::from(x);
+                i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
+            }
+            Header::Tag(tag::BIGPOS) => {
+                let raw = me.bounded_bignum("integer too large")?;
+                i64::try_from(raw).map_err(|_| de::Error::custom("integer too large"))
+            }
+            Header::Tag(tag::BIGNEG) => {
+                let raw = me.bounded_bignum("integer too large")?;
+                let value = -1
+                    - i128::try_from(raw)
+                        .map_err(|_| Error::semantic(None, "integer too large"))?;
+                i64::try_from(value).map_err(|_| de::Error::custom("integer too large"))
+            }
+            header => Err(header.expected("integer")),
+        })
     }
 }
 
@@ -905,6 +855,9 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
             // otherwise they survive as a tagged byte string. A bignum tag
             // around anything else is still well-formed and stays a tag.
             Header::Tag(tag @ (tag::BIGPOS | tag::BIGNEG)) => {
+                if self.recurse == 0 {
+                    return Err(Error::RecursionLimitExceeded);
+                }
                 let payload = self.source.pull()?;
                 let bytes = matches!(payload, Header::Bytes(..));
                 self.source.push(payload);
@@ -940,20 +893,14 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
 
     #[inline]
     fn deserialize_bool<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        loop {
-            if let Some(res) = self.source.bool() {
-                return visitor.visit_bool(res?);
-            }
-
-            let offset = self.source.offset();
-
-            return match self.source.pull()? {
-                Header::Tag(..) => continue,
-                Header::Simple(simple::FALSE) => visitor.visit_bool(false),
-                Header::Simple(simple::TRUE) => visitor.visit_bool(true),
-                _ => Err(Error::semantic(offset, "expected bool")),
-            };
+        if let Some(res) = self.source.bool() {
+            return visitor.visit_bool(res?);
         }
+        self.with_header(false, |_, header, offset| match header {
+            Header::Simple(simple::FALSE) => visitor.visit_bool(false),
+            Header::Simple(simple::TRUE) => visitor.visit_bool(true),
+            _ => Err(Error::semantic(offset, "expected bool")),
+        })
     }
 
     #[inline]
@@ -1011,125 +958,99 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
     }
 
     fn deserialize_char<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        loop {
-            let offset = self.source.offset();
-            let header = self.source.pull()?;
-
-            return match header {
-                Header::Tag(..) => continue,
-
-                // A char is at most four UTF-8 bytes; a reader fills a stack
-                // buffer so both sources report errors the same way.
-                Header::Text(Some(len)) if len <= 4 => {
-                    let mut buffer = [0u8; 4];
-                    let bytes = match self.source.borrow_body(len) {
-                        Some(res) => res?,
-                        None => {
-                            self.source.read_exact(&mut buffer[..len])?;
-                            &buffer[..len]
-                        }
-                    };
-                    let s = core::str::from_utf8(bytes).map_err(|_| Error::Syntax(offset))?;
-                    match single_char(s) {
-                        Some(c) => visitor.visit_char(c),
-                        None => Err(header.expected("char")),
+        self.with_header(false, |me, header, offset| match header {
+            // A char is at most four UTF-8 bytes; a reader fills a stack
+            // buffer so both sources report errors the same way.
+            Header::Text(Some(len)) if len <= 4 => {
+                let mut buffer = [0u8; 4];
+                let bytes = match me.source.borrow_body(len) {
+                    Some(res) => res?,
+                    None => {
+                        me.source.read_exact(&mut buffer[..len])?;
+                        &buffer[..len]
                     }
+                };
+                let s = core::str::from_utf8(bytes).map_err(|_| Error::Syntax(offset))?;
+                match single_char(s) {
+                    Some(c) => visitor.visit_char(c),
+                    None => Err(header.expected("char")),
                 }
+            }
 
-                Header::Text(None) => {
-                    let mut buffer = String::new();
-                    self.source.text_body(None, &mut buffer)?;
-                    match single_char(&buffer) {
-                        Some(c) => visitor.visit_char(c),
-                        None => Err(header.expected("char")),
-                    }
+            Header::Text(None) => {
+                let mut buffer = String::new();
+                me.source.text_body(None, &mut buffer)?;
+                match single_char(&buffer) {
+                    Some(c) => visitor.visit_char(c),
+                    None => Err(header.expected("char")),
                 }
+            }
 
-                _ => Err(header.expected("char")),
-            };
-        }
+            _ => Err(header.expected("char")),
+        })
     }
 
     fn deserialize_str<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        loop {
-            return match self.source.pull()? {
-                Header::Tag(..) => continue,
-                Header::Text(len) => {
-                    let offset = self.source.offset();
-                    self.visit_str(len, offset, visitor)
-                }
-                header => Err(header.expected("string")),
-            };
-        }
+        self.with_header(false, |me, header, _| match header {
+            Header::Text(len) => {
+                let offset = me.source.offset();
+                me.visit_str(len, offset, visitor)
+            }
+            header => Err(header.expected("string")),
+        })
     }
 
     fn deserialize_string<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        loop {
-            return match self.source.pull()? {
-                Header::Tag(..) => continue,
-                Header::Text(len) => self.visit_string(len, visitor),
-                header => Err(header.expected("string")),
-            };
-        }
+        self.with_header(false, |me, header, _| match header {
+            Header::Text(len) => me.visit_string(len, visitor),
+            header => Err(header.expected("string")),
+        })
     }
 
     fn deserialize_bytes<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        loop {
-            return match self.source.pull()? {
-                Header::Tag(..) => continue,
-                Header::Bytes(len) => self.visit_bytes(len, visitor),
-                // Be liberal: accept an array of integers as bytes.
-                Header::Array(len) => self.visit_array(len, visitor),
-                header => Err(header.expected("bytes")),
-            };
-        }
+        self.with_header(false, |me, header, _| match header {
+            Header::Bytes(len) => me.visit_bytes(len, visitor),
+            // Be liberal: accept an array of integers as bytes.
+            Header::Array(len) => me.visit_array(len, visitor),
+            header => Err(header.expected("bytes")),
+        })
     }
 
     fn deserialize_byte_buf<V: de::Visitor<'de>>(
         self,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        loop {
-            return match self.source.pull()? {
-                Header::Tag(..) => continue,
-                Header::Bytes(len) => self.visit_byte_buf(len, visitor),
-                // Be liberal: accept an array of integers as bytes.
-                Header::Array(len) => self.visit_array(len, visitor),
-                header => Err(header.expected("bytes")),
-            };
-        }
+        self.with_header(false, |me, header, _| match header {
+            Header::Bytes(len) => me.visit_byte_buf(len, visitor),
+            // Be liberal: accept an array of integers as bytes.
+            Header::Array(len) => me.visit_array(len, visitor),
+            header => Err(header.expected("bytes")),
+        })
     }
 
     fn deserialize_seq<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        loop {
-            return match self.source.pull()? {
-                Header::Tag(..) => continue,
+        self.with_header(false, |me, header, _| match header {
+            Header::Array(len) => me.visit_array(len, visitor),
 
-                Header::Array(len) => self.visit_array(len, visitor),
-
-                // Be liberal: accept a byte string as a sequence of integers.
-                Header::Bytes(len) => {
-                    if let Some(res) = len.and_then(|len| self.source.borrow_body(len)) {
-                        return visit_byte_seq(res?, visitor);
-                    }
-                    self.scratch.clear();
-                    self.source.bytes_body(len, &mut self.scratch)?;
-                    visit_byte_seq(&self.scratch, visitor)
+            // Be liberal: accept a byte string as a sequence of integers.
+            Header::Bytes(len) => {
+                if let Some(res) = len.and_then(|len| me.source.borrow_body(len)) {
+                    return visit_byte_seq(res?, visitor);
                 }
+                me.scratch.clear();
+                me.source.bytes_body(len, &mut me.scratch)?;
+                visit_byte_seq(&me.scratch, visitor)
+            }
 
-                header => Err(header.expected("array")),
-            };
-        }
+            header => Err(header.expected("array")),
+        })
     }
 
     fn deserialize_map<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        loop {
-            return match self.source.pull()? {
-                Header::Tag(..) => continue,
-                Header::Map(len) => self.visit_object(len, "", visitor),
-                header => Err(header.expected("map")),
-            };
-        }
+        self.with_header(false, |me, header, _| match header {
+            Header::Map(len) => me.visit_object(len, "", visitor),
+            header => Err(header.expected("map")),
+        })
     }
 
     fn deserialize_struct<V: de::Visitor<'de>>(
@@ -1142,21 +1063,18 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
             return self.deserialize_map(visitor);
         };
 
-        loop {
-            return match self.source.pull()? {
-                Header::Tag(..) => continue,
-                Header::Map(len) if marker.shape == crate::ser::StructShape::Map => {
-                    self.visit_object(len, marker.keys, visitor)
-                }
-                Header::Array(len) if marker.shape == crate::ser::StructShape::Array => {
-                    self.visit_array(len, visitor)
-                }
-                header if marker.shape == crate::ser::StructShape::Array => {
-                    Err(header.expected("array"))
-                }
-                header => Err(header.expected("map")),
-            };
-        }
+        self.with_header(false, |me, header, _| match header {
+            Header::Map(len) if marker.shape == crate::ser::StructShape::Map => {
+                me.visit_object(len, marker.keys, visitor)
+            }
+            Header::Array(len) if marker.shape == crate::ser::StructShape::Array => {
+                me.visit_array(len, visitor)
+            }
+            header if marker.shape == crate::ser::StructShape::Array => {
+                Err(header.expected("array"))
+            }
+            header => Err(header.expected("map")),
+        })
     }
 
     fn deserialize_tuple<V: de::Visitor<'de>>(
@@ -1180,42 +1098,36 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
         self,
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
-        loop {
-            let offset = self.source.offset();
+        self.with_header(false, |me, header, offset| match header {
+            Header::Text(len) => me.visit_str(len, offset, visitor),
+            Header::Bytes(len) => me.visit_bytes(len, visitor),
 
-            return match self.source.pull()? {
-                Header::Tag(..) => continue,
+            // Integer keys match struct fields through the key table
+            // of a marked struct (handled in `StructAccess`); in any
+            // other identifier position they take a placeholder form
+            // that matches no field, so they are simply unknown.
+            Header::Positive(x) => {
+                use core::fmt::Write as _;
 
-                Header::Text(len) => self.visit_str(len, offset, visitor),
-                Header::Bytes(len) => self.visit_bytes(len, visitor),
+                me.scratch.clear();
+                let _ = write!(FmtBuf(&mut me.scratch), "{INT_KEY_PLACEHOLDER}{x}");
+                visitor.visit_str(core::str::from_utf8(&me.scratch).expect("decimal"))
+            }
 
-                // Integer keys match struct fields through the key table
-                // of a marked struct (handled in `StructAccess`); in any
-                // other identifier position they take a placeholder form
-                // that matches no field, so they are simply unknown.
-                Header::Positive(x) => {
-                    use core::fmt::Write as _;
+            Header::Negative(x) => {
+                use core::fmt::Write as _;
 
-                    self.scratch.clear();
-                    let _ = write!(FmtBuf(&mut self.scratch), "{INT_KEY_PLACEHOLDER}{x}");
-                    visitor.visit_str(core::str::from_utf8(&self.scratch).expect("decimal"))
-                }
+                me.scratch.clear();
+                let _ = write!(
+                    FmtBuf(&mut me.scratch),
+                    "{INT_KEY_PLACEHOLDER}{}",
+                    -1 - i128::from(x)
+                );
+                visitor.visit_str(core::str::from_utf8(&me.scratch).expect("decimal"))
+            }
 
-                Header::Negative(x) => {
-                    use core::fmt::Write as _;
-
-                    self.scratch.clear();
-                    let _ = write!(
-                        FmtBuf(&mut self.scratch),
-                        "{INT_KEY_PLACEHOLDER}{}",
-                        -1 - i128::from(x)
-                    );
-                    visitor.visit_str(core::str::from_utf8(&self.scratch).expect("decimal"))
-                }
-
-                header => Err(header.expected("str, bytes or an integer")),
-            };
-        }
+            header => Err(header.expected("str, bytes or an integer")),
+        })
     }
 
     fn deserialize_ignored_any<V: de::Visitor<'de>>(
@@ -1240,14 +1152,11 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
 
     #[inline]
     fn deserialize_unit<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
-        loop {
-            return match self.source.pull()? {
-                Header::Simple(simple::UNDEFINED) => visitor.visit_unit(),
-                Header::Simple(simple::NULL) => visitor.visit_unit(),
-                Header::Tag(..) => continue,
-                header => Err(header.expected("unit")),
-            };
-        }
+        self.with_header(false, |_, header, _| match header {
+            Header::Simple(simple::UNDEFINED) => visitor.visit_unit(),
+            Header::Simple(simple::NULL) => visitor.visit_unit(),
+            header => Err(header.expected("unit")),
+        })
     }
 
     #[inline]
@@ -1269,6 +1178,12 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
         if name == crate::raw::NAME {
             return visitor.visit_byte_buf(self.capture_item()?);
         }
+        if name == crate::flatten::fields::RAW_ITEM {
+            return match self.source.borrow_item(self.recurse) {
+                Some(bytes) => visitor.visit_borrowed_bytes(bytes?),
+                None => visitor.visit_byte_buf(self.capture_item()?),
+            };
+        }
         if name == crate::raw::BORROWED_NAME {
             return match self.source.borrow_item(self.recurse) {
                 Some(bytes) => visitor.visit_borrowed_bytes(bytes?),
@@ -1279,7 +1194,13 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
             };
         }
 
-        self.skip_struct_tags(name)?;
+        if let Some(tag) = crate::ser::parse_struct_marker(name).and_then(|marker| marker.tag) {
+            let header = self.source.pull()?;
+            if header == Header::Tag(tag) {
+                return self.recurse(|me| visitor.visit_newtype_struct(me));
+            }
+            self.source.push(header);
+        }
         visitor.visit_newtype_struct(self)
     }
 
@@ -1291,53 +1212,53 @@ impl<'de, S: BorrowSource<'de>> de::Deserializer<'de> for &mut Deserializer<S> {
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
         if name == crate::simple::NAME {
-            loop {
-                return match self.source.pull()? {
-                    Header::Tag(..) => continue,
-                    Header::Simple(x) => {
-                        let simple =
-                            crate::Simple::new(x).expect("decoder returns valid simple values");
-                        visitor.visit_enum(SimpleAccess::new(simple))
-                    }
-                    header => Err(header.expected("simple value")),
-                };
-            }
+            return self.with_header(false, |_, header, _| match header {
+                Header::Simple(x) => {
+                    let simple =
+                        crate::Simple::new(x).expect("decoder returns valid simple values");
+                    visitor.visit_enum(SimpleAccess::new(simple))
+                }
+                header => Err(header.expected("simple value")),
+            });
         }
 
         if name == crate::tag::NAME {
-            let tag = match self.source.pull()? {
-                Header::Tag(x) => Some(x),
+            return match self.source.pull()? {
+                Header::Tag(tag) => {
+                    self.recurse(|me| visitor.visit_enum(TagAccess::new(me, Some(tag))))
+                }
                 header => {
                     self.source.push(header);
-                    None
+                    visitor.visit_enum(TagAccess::new(self, None))
                 }
             };
-
-            return self.recurse(|me| visitor.visit_enum(TagAccess::new(me, tag)));
         }
 
         let marker = crate::ser::parse_struct_marker(name);
         let keys = marker.as_ref().map_or("", |marker| marker.keys);
         let shape = marker.map_or(crate::ser::StructShape::Map, |marker| marker.shape);
-        loop {
+        self.with_header(false, |me, header, _| {
             // An enum variant is either encoded as a map with a single entry
             // (the variant name and its payload) or, for a unit variant, as
             // a bare text string. Be liberal: the map may be
             // indefinite-length, in which case the break is checked after
             // the entry.
-            let form = match self.source.pull()? {
-                Header::Tag(..) => continue,
+            let form = match header {
                 Header::Map(Some(1)) => EnumForm::Map,
                 Header::Map(None) => EnumForm::IndefiniteMap,
                 header @ Header::Text(..) => {
-                    self.source.push(header);
+                    me.source.push(header);
                     EnumForm::Text
                 }
                 header => return Err(header.expected("enum")),
             };
 
-            return self.recurse(|me| visitor.visit_enum(Enum(me, form, keys, shape)));
-        }
+            if form == EnumForm::Text {
+                visitor.visit_enum(Enum(me, form, keys, shape))
+            } else {
+                me.recurse(|me| visitor.visit_enum(Enum(me, form, keys, shape)))
+            }
+        })
     }
 
     #[inline]
@@ -1543,17 +1464,16 @@ impl<'de, S: BorrowSource<'de>> de::MapAccess<'de> for ObjectAccess<'_, S> {
         if self.keys.is_empty() {
             return seed.deserialize(&mut *self.base.de).map(Some);
         }
-        loop {
-            let key = match self.base.de.source.pull()? {
-                Header::Tag(..) => continue,
+        self.base.de.with_header(false, |me, header, _| {
+            let key = match header {
                 Header::Positive(x) => i128::from(x),
                 Header::Negative(x) => -1 - i128::from(x),
                 header => {
-                    self.base.de.source.push(header);
-                    return seed.deserialize(&mut *self.base.de).map(Some);
+                    me.source.push(header);
+                    return seed.deserialize(me).map(Some);
                 }
             };
-            return match crate::ser::field_for_key(self.keys, key) {
+            match crate::ser::field_for_key(self.keys, key) {
                 Some(field) => seed
                     .deserialize(de::value::StrDeserializer::new(field))
                     .map(Some),
@@ -1562,8 +1482,8 @@ impl<'de, S: BorrowSource<'de>> de::MapAccess<'de> for ObjectAccess<'_, S> {
                         "{INT_KEY_PLACEHOLDER}{key}"
                     )))
                     .map(Some),
-            };
-        }
+            }
+        })
     }
     #[inline]
     fn next_value_seed<V: de::DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value, Error> {
@@ -1705,21 +1625,16 @@ impl<'de, S: BorrowSource<'de>> de::VariantAccess<'de> for Enum<'_, S> {
 
         let keys = self.2;
         let shape = self.3;
-        let value = loop {
-            break match self.0.source.pull()? {
-                Header::Tag(..) => continue,
-                Header::Map(len) if shape == crate::ser::StructShape::Map => {
-                    self.0.visit_object(len, keys, visitor)?
-                }
-                Header::Array(len) if shape == crate::ser::StructShape::Array => {
-                    self.0.visit_array(len, visitor)?
-                }
-                header if shape == crate::ser::StructShape::Array => {
-                    return Err(header.expected("array"))
-                }
-                header => return Err(header.expected("map")),
-            };
-        };
+        let value = self.0.with_header(false, |me, header, _| match header {
+            Header::Map(len) if shape == crate::ser::StructShape::Map => {
+                me.visit_object(len, keys, visitor)
+            }
+            Header::Array(len) if shape == crate::ser::StructShape::Array => {
+                me.visit_array(len, visitor)
+            }
+            header if shape == crate::ser::StructShape::Array => Err(header.expected("array")),
+            header => Err(header.expected("map")),
+        })?;
         finish_enum_map(self.0, self.1)?;
         Ok(value)
     }
@@ -1774,7 +1689,7 @@ impl<'de> de::SeqAccess<'de> for BorrowedBytesAccess<'_> {
 /// Created by [`Deserializer::into_iter`].
 #[cfg(feature = "alloc")]
 pub struct Iter<T, R> {
-    de: Deserializer<ReaderSource<R>>,
+    de: Option<Deserializer<ReaderSource<R>>>,
     _marker: core::marker::PhantomData<T>,
 }
 
@@ -1783,23 +1698,30 @@ impl<T: de::DeserializeOwned, R: Read> Iterator for Iter<T, R> {
     type Item = Result<T, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let decoder = &mut self.de.source.0;
+        let de = self.de.as_mut()?;
+        let decoder = &mut de.source.0;
         let start = decoder.offset();
 
         // Probe for a clean end of input: end-of-file before the first byte
         // of an item terminates the stream, anywhere else it is an error.
-        match decoder.pull() {
-            Ok(header) => decoder.push(header),
+        let item = match decoder.pull() {
+            Ok(header) => {
+                decoder.push(header);
+                T::deserialize(de)
+            }
             Err(crate::core::Error::Io(err))
                 if err.kind() == crate::io::ErrorKind::UnexpectedEof
                     && decoder.offset() == start =>
             {
+                self.de = None;
                 return None;
             }
-            Err(err) => return Some(Err(err.into())),
+            Err(err) => Err(err.into()),
+        };
+        if item.is_err() {
+            self.de = None;
         }
-
-        Some(T::deserialize(&mut self.de))
+        Some(item)
     }
 }
 
@@ -1858,7 +1780,7 @@ impl<'de, T: de::Deserialize<'de>> Iterator for SliceIter<'de, T> {
 pub fn validate<R: Read>(reader: R) -> Result<(), Error> {
     let mut decoder = Decoder::from(reader);
     let mut scratch = [0u8; SKIP_CHUNK];
-    validate_item(&mut decoder, DEFAULT_RECURSION_LIMIT, &mut scratch)?;
+    validate_item::<_, false>(&mut decoder, DEFAULT_RECURSION_LIMIT, &mut scratch)?;
     expect_eof(&mut decoder)
 }
 
@@ -1879,7 +1801,7 @@ pub fn validate<R: Read>(reader: R) -> Result<(), Error> {
 /// ```
 pub fn validate_slice(slice: &[u8]) -> Result<(), Error> {
     let mut decoder = Decoder::from(slice);
-    validate_item_slice(&mut decoder, DEFAULT_RECURSION_LIMIT)?;
+    validate_item_slice::<false>(&mut decoder, DEFAULT_RECURSION_LIMIT)?;
     expect_eof(&mut decoder)
 }
 
@@ -1899,24 +1821,29 @@ pub(crate) fn expect_eof<R: Read>(decoder: &mut Decoder<R>) -> Result<(), Error>
 // its (zero-initialization) cost is paid once, not per string.
 const SKIP_CHUNK: usize = 1024;
 
-fn validate_item<R: Read>(
+// Typed deserialization budgets wrappers: after the final array, map or
+// tag, a scalar is still permitted. Exact-item validation retains its existing
+// item-depth boundary. Both modes walk skipped and captured data identically.
+fn validate_item<R: Read, const LEAF_AT_LIMIT: bool>(
     decoder: &mut Decoder<R>,
     depth: usize,
     scratch: &mut [u8; SKIP_CHUNK],
 ) -> Result<(), Error> {
     let offset = decoder.offset();
     let header = decoder.pull()?;
-    validate_header(decoder, header, offset, depth, scratch)
+    validate_header::<_, LEAF_AT_LIMIT>(decoder, header, offset, depth, scratch)
 }
 
-fn validate_header<R: Read>(
+fn validate_header<R: Read, const LEAF_AT_LIMIT: bool>(
     decoder: &mut Decoder<R>,
     header: Header,
     offset: usize,
     depth: usize,
     scratch: &mut [u8; SKIP_CHUNK],
 ) -> Result<(), Error> {
-    if depth == 0 {
+    if depth == 0
+        && (!LEAF_AT_LIMIT || matches!(header, Header::Array(_) | Header::Map(_) | Header::Tag(_)))
+    {
         return Err(Error::RecursionLimitExceeded);
     }
 
@@ -1927,7 +1854,7 @@ fn validate_header<R: Read>(
 
         Header::Break => Err(Error::Syntax(offset)),
 
-        Header::Tag(..) => validate_item(decoder, depth - 1, scratch),
+        Header::Tag(..) => validate_item::<_, LEAF_AT_LIMIT>(decoder, depth - 1, scratch),
 
         Header::Bytes(len) => match len {
             Some(len) => skip_body(decoder, len, scratch),
@@ -1958,7 +1885,7 @@ fn validate_header<R: Read>(
         Header::Array(len) => match len {
             Some(len) => {
                 for _ in 0..len {
-                    validate_item(decoder, depth - 1, scratch)?;
+                    validate_item::<_, LEAF_AT_LIMIT>(decoder, depth - 1, scratch)?;
                 }
                 Ok(())
             }
@@ -1966,7 +1893,13 @@ fn validate_header<R: Read>(
                 let offset = decoder.offset();
                 match decoder.pull()? {
                     Header::Break => return Ok(()),
-                    header => validate_header(decoder, header, offset, depth - 1, scratch)?,
+                    header => validate_header::<_, LEAF_AT_LIMIT>(
+                        decoder,
+                        header,
+                        offset,
+                        depth - 1,
+                        scratch,
+                    )?,
                 }
             },
         },
@@ -1974,8 +1907,9 @@ fn validate_header<R: Read>(
         Header::Map(len) => match len {
             Some(len) => {
                 for _ in 0..len {
-                    validate_item(decoder, depth - 1, scratch)?; // key
-                    validate_item(decoder, depth - 1, scratch)?; // value
+                    validate_item::<_, LEAF_AT_LIMIT>(decoder, depth - 1, scratch)?; // key
+                    validate_item::<_, LEAF_AT_LIMIT>(decoder, depth - 1, scratch)?;
+                    // value
                 }
                 Ok(())
             }
@@ -1989,7 +1923,13 @@ fn validate_header<R: Read>(
                         Header::Break if expecting_value => return Err(Error::Syntax(offset)),
                         Header::Break => return Ok(()),
                         header => {
-                            validate_header(decoder, header, offset, depth - 1, scratch)?;
+                            validate_header::<_, LEAF_AT_LIMIT>(
+                                decoder,
+                                header,
+                                offset,
+                                depth - 1,
+                                scratch,
+                            )?;
                             expecting_value = !expecting_value;
                         }
                     }
@@ -2001,19 +1941,24 @@ fn validate_header<R: Read>(
 
 // Walks one item directly over a byte slice: string bodies are borrowed
 // (and text checked) in place, with no intermediate buffer at all.
-fn validate_item_slice(decoder: &mut Decoder<&[u8]>, depth: usize) -> Result<(), Error> {
+fn validate_item_slice<const LEAF_AT_LIMIT: bool>(
+    decoder: &mut Decoder<&[u8]>,
+    depth: usize,
+) -> Result<(), Error> {
     let offset = decoder.offset();
     let header = decoder.pull_slice()?;
-    validate_header_slice(decoder, header, offset, depth)
+    validate_header_slice::<LEAF_AT_LIMIT>(decoder, header, offset, depth)
 }
 
-fn validate_header_slice(
+fn validate_header_slice<const LEAF_AT_LIMIT: bool>(
     decoder: &mut Decoder<&[u8]>,
     header: Header,
     offset: usize,
     depth: usize,
 ) -> Result<(), Error> {
-    if depth == 0 {
+    if depth == 0
+        && (!LEAF_AT_LIMIT || matches!(header, Header::Array(_) | Header::Map(_) | Header::Tag(_)))
+    {
         return Err(Error::RecursionLimitExceeded);
     }
 
@@ -2032,7 +1977,7 @@ fn validate_header_slice(
 
         Header::Break => Err(Error::Syntax(offset)),
 
-        Header::Tag(..) => validate_item_slice(decoder, depth - 1),
+        Header::Tag(..) => validate_item_slice::<LEAF_AT_LIMIT>(decoder, depth - 1),
 
         Header::Bytes(len) => match len {
             Some(len) => decoder.borrow_body(len).map(|_| ()).map_err(Error::Io),
@@ -2065,7 +2010,7 @@ fn validate_header_slice(
         Header::Array(len) => match len {
             Some(len) => {
                 for _ in 0..len {
-                    validate_item_slice(decoder, depth - 1)?;
+                    validate_item_slice::<LEAF_AT_LIMIT>(decoder, depth - 1)?;
                 }
                 Ok(())
             }
@@ -2073,7 +2018,9 @@ fn validate_header_slice(
                 let offset = decoder.offset();
                 match decoder.pull_slice()? {
                     Header::Break => return Ok(()),
-                    header => validate_header_slice(decoder, header, offset, depth - 1)?,
+                    header => {
+                        validate_header_slice::<LEAF_AT_LIMIT>(decoder, header, offset, depth - 1)?
+                    }
                 }
             },
         },
@@ -2081,8 +2028,8 @@ fn validate_header_slice(
         Header::Map(len) => match len {
             Some(len) => {
                 for _ in 0..len {
-                    validate_item_slice(decoder, depth - 1)?; // key
-                    validate_item_slice(decoder, depth - 1)?; // value
+                    validate_item_slice::<LEAF_AT_LIMIT>(decoder, depth - 1)?; // key
+                    validate_item_slice::<LEAF_AT_LIMIT>(decoder, depth - 1)?; // value
                 }
                 Ok(())
             }
@@ -2096,7 +2043,12 @@ fn validate_header_slice(
                         Header::Break if expecting_value => return Err(Error::Syntax(offset)),
                         Header::Break => return Ok(()),
                         header => {
-                            validate_header_slice(decoder, header, offset, depth - 1)?;
+                            validate_header_slice::<LEAF_AT_LIMIT>(
+                                decoder,
+                                header,
+                                offset,
+                                depth - 1,
+                            )?;
                             expecting_value = !expecting_value;
                         }
                     }

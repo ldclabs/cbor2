@@ -20,11 +20,8 @@ use super::float::{f64_to_f16_preserving, float_atom};
 #[cfg(feature = "cdn-hash")]
 use super::hash::{hash_args, hash_atom};
 use super::ip::ip_atom;
-use super::number::{
-    bytes_to_u64, is_app_char_any, is_tag_uint, parse_bigint_digits, parse_hex_float, strip_sign,
-    subtract_one,
-};
-use super::types::{Arg, Atom, BigInt, Indicator};
+use super::number::{is_app_char_any, is_tag_uint, parse_hex_float, parse_integer, strip_sign};
+use super::types::{Arg, Atom, Indicator};
 
 pub(super) fn item_to_vec(input: &str) -> Result<Vec<u8>, Error> {
     normalized(input, |input| {
@@ -672,25 +669,19 @@ impl<'a> Parser<'a> {
             if lex.contains('p') || lex.contains('P') {
                 return Ok(Atom::Float(parse_hex_float(lex, offset)?));
             }
-            return Ok(Atom::Integer(parse_bigint_digits(
-                negative, digits, 16, offset,
-            )?));
+            return parse_integer(negative, digits, 16, offset);
         }
         if let Some(digits) = digits
             .strip_prefix("0o")
             .or_else(|| digits.strip_prefix("0O"))
         {
-            return Ok(Atom::Integer(parse_bigint_digits(
-                negative, digits, 8, offset,
-            )?));
+            return parse_integer(negative, digits, 8, offset);
         }
         if let Some(digits) = digits
             .strip_prefix("0b")
             .or_else(|| digits.strip_prefix("0B"))
         {
-            return Ok(Atom::Integer(parse_bigint_digits(
-                negative, digits, 2, offset,
-            )?));
+            return parse_integer(negative, digits, 2, offset);
         }
 
         if lex.contains('.') || lex.contains('e') || lex.contains('E') {
@@ -708,9 +699,7 @@ impl<'a> Parser<'a> {
             return Ok(Atom::Float(value));
         }
 
-        Ok(Atom::Integer(parse_bigint_digits(
-            negative, digits, 10, offset,
-        )?))
+        parse_integer(negative, digits, 10, offset)
     }
 
     fn quoted_string(&mut self, quote: char) -> Result<String, Error> {
@@ -899,7 +888,18 @@ impl<'a> Parser<'a> {
 
     fn emit_atom(&self, out: &mut Vec<u8>, atom: Atom, spec: Indicator<'a>) -> Result<(), Error> {
         match atom {
-            Atom::Integer(x) => self.write_integer(out, &x, spec),
+            Atom::Integer { negative, argument } => {
+                self.write_len(out, u8::from(negative), argument, spec)
+            }
+            Atom::Bignum { negative, argument } => {
+                self.write_len(
+                    out,
+                    6,
+                    if negative { tag::BIGNEG } else { tag::BIGPOS },
+                    Indicator::None,
+                )?;
+                write_definite_bytes(out, &argument, Indicator::None)
+            }
             Atom::Float(x) => self.write_float(out, x, spec),
             Atom::FloatRaw { bytes, value } => {
                 if spec == Indicator::None {
@@ -938,31 +938,6 @@ impl<'a> Parser<'a> {
                 out.extend_from_slice(&x);
                 Ok(())
             }
-        }
-    }
-
-    fn write_integer(
-        &self,
-        out: &mut Vec<u8>,
-        int: &BigInt,
-        spec: Indicator<'a>,
-    ) -> Result<(), Error> {
-        if int.magnitude.is_empty() {
-            return self.write_len(out, 0, 0, spec);
-        }
-
-        if int.negative {
-            let arg = subtract_one(&int.magnitude);
-            if let Some(arg) = bytes_to_u64(&arg) {
-                return self.write_len(out, 1, arg, spec);
-            }
-            self.write_len(out, 6, tag::BIGNEG, Indicator::None)?;
-            write_definite_bytes(out, &arg, Indicator::None)
-        } else if let Some(arg) = bytes_to_u64(&int.magnitude) {
-            self.write_len(out, 0, arg, spec)
-        } else {
-            self.write_len(out, 6, tag::BIGPOS, Indicator::None)?;
-            write_definite_bytes(out, &int.magnitude, Indicator::None)
         }
     }
 

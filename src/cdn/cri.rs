@@ -25,6 +25,9 @@ pub(super) fn cri_atom(content: &str, tagged: bool, offset: usize) -> Result<Ato
 fn cri_reference_bytes(iri: &iref::IriRef, offset: usize) -> Result<Vec<u8>, Error> {
     let mut sections = Vec::new();
 
+    let original_path = iri.path().as_str();
+    let mut path = original_path;
+    let relative = iri.scheme().is_none() && iri.authority().is_none();
     match iri.scheme() {
         Some(scheme) => {
             sections.push(cri_scheme_bytes(scheme.as_str())?);
@@ -38,14 +41,21 @@ fn cri_reference_bytes(iri: &iref::IriRef, offset: usize) -> Result<Vec<u8>, Err
                 sections.push(write_simple_value(22));
                 sections.push(cri_authority_bytes(authority, offset)?);
             } else {
-                sections.push(cri_discard_bytes(iri.path().as_str()));
+                let (discard, tail) = cri_discard(path, offset)?;
+                sections.push(discard);
+                path = tail;
             }
         }
     }
 
-    sections.push(cri_path_bytes(iri.path().as_str(), offset)?);
+    sections.push(if relative && path.is_empty() {
+        write_simple_value(22)
+    } else {
+        cri_path_bytes(path, original_path.starts_with('/'), offset)?
+    });
     sections.push(match iri.query() {
         Some(query) => cri_query_bytes(query.as_str(), offset)?,
+        None if relative => write_simple_value(22),
         None => write_empty_array()?,
     });
     sections.push(match iri.fragment() {
@@ -58,6 +68,9 @@ fn cri_reference_bytes(iri: &iref::IriRef, offset: usize) -> Result<Vec<u8>, Err
     });
 
     trim_cri_defaults(&mut sections);
+    if relative && sections.len() == 1 && sections[0] == [0] {
+        sections.clear(); // The empty URI reference has the interchange form [].
+    }
 
     let mut out = Vec::new();
     write_array_len(&mut out, sections.len())?;
@@ -109,14 +122,34 @@ fn cri_no_authority_bytes(path: &str) -> Vec<u8> {
     }
 }
 
-fn cri_discard_bytes(path: &str) -> Vec<u8> {
-    if path.starts_with('/') {
-        write_simple_value(21)
-    } else if path.is_empty() {
-        write_i128(0)
-    } else {
-        write_i128(1)
+fn cri_discard(mut path: &str, offset: usize) -> Result<(Vec<u8>, &str), Error> {
+    if path.is_empty() {
+        return Ok((write_i128(0), path));
     }
+    if path.starts_with('/') {
+        return Ok((write_simple_value(21), path));
+    }
+    let mut discard = 1;
+    while let Some(rest) = path.strip_prefix("../") {
+        discard += 1;
+        if discard > 127 {
+            return Err(Error::semantic(offset, "CRI discard must fit in 0..=127"));
+        }
+        path = rest;
+    }
+    // A leading "./" disambiguates a colon in the first relative segment.
+    if discard == 1 {
+        if let Some(rest) = path.strip_prefix("./") {
+            if rest
+                .split('/')
+                .next()
+                .is_some_and(|first| first.contains(':'))
+            {
+                path = rest;
+            }
+        }
+    }
+    Ok((write_i128(discard), path))
 }
 
 fn cri_authority_bytes(authority: &iref::iri::Authority, offset: usize) -> Result<Vec<u8>, Error> {
@@ -186,18 +219,15 @@ fn host_ip_bytes(host: &str, offset: usize) -> Result<Option<Vec<u8>>, Error> {
     Ok(None)
 }
 
-fn cri_path_bytes(path: &str, offset: usize) -> Result<Vec<u8>, Error> {
-    let raw_segments: Vec<&str> = if path.is_empty() {
-        Vec::new()
-    } else if let Some(rest) = path.strip_prefix('/') {
-        rest.split('/').collect()
-    } else {
-        path.split('/').collect()
-    };
-
+fn cri_path_bytes(path: &str, rooted: bool, offset: usize) -> Result<Vec<u8>, Error> {
+    if path.is_empty() {
+        return write_empty_array();
+    }
+    let path = if rooted { &path[1..] } else { path };
+    let segments = path.split('/');
     let mut out = Vec::new();
-    write_array_len(&mut out, raw_segments.len())?;
-    for segment in raw_segments {
+    write_array_len(&mut out, segments.clone().count())?;
+    for segment in segments {
         let segment = percent_decode_component(segment, PercentContext::Path, offset)?;
         if segment == "." || segment == ".." {
             return Err(Error::semantic(
