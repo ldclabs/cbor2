@@ -21,6 +21,7 @@
   `RawValue`. An incorrect container length now returns an error.
 * Reject field aliases that would accidentally inherit another enum variant's
   integer key.
+* Accept C-style block comments inside CDN hexadecimal literals.
 * CLI JSON projection applies the same key conversion through nested tags.
   Report collisions before writing the item. Handle non-UTF-8 file paths and
   a closed output pipe during help or version output.
@@ -32,11 +33,14 @@
   a separate 4096-byte primitive payload budget.
 * Reader sequence iteration ends after its first error.
 * Derived flattened fields preserve CBOR extension values and reject label
-  collisions on encode. The derive resolves renamed Cargo dependencies.
+  collisions on encode. Serde container conversions and struct discriminators
+  retain their wire representation. The derive resolves renamed Cargo
+  dependencies.
 * CLI JSON encoding preserves integer and float spellings. JSON decoding uses
   signed decimal strings for out-of-range integers and decimal integer keys.
 * Relative CRI references distinguish missing sections and encode leading
-  parent-directory segments in the discard count.
+  parent-directory segments in the discard count, preserving the final
+  empty path segment in references such as `../`.
 
 ### Performance
 

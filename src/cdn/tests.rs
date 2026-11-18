@@ -387,9 +387,8 @@ fn draft29_lexical_boundaries() {
         "[1 // comment\n2]",
         "1 # missing newline",
         "h'01// comment\n02'",
-        "h'01/* comment */02'",
         "h`01// comment\n02`",
-        r#"h<<"0/* comment */1">>"#,
+        "h'01/* unclosed comment'",
         "`````````raw`````````",
         "``abc```",
     ] {
@@ -403,6 +402,12 @@ fn draft29_lexical_boundaries() {
     assert_cdn_eq(r#"````````a```````b````````"#, r#""a```````b""#);
     assert_cdn_eq("1 # comment\r\n", "1");
     assert_cdn_eq("h'0 / digit / 1 # comment'", "h'01'");
+    assert_all_eq(&[
+        "h'0102'",
+        "h'01/* first/second byte */02'",
+        "h`01/* first/second byte */02`",
+        r#"h<<"01/* first/second byte */02">>"#,
+    ]);
     assert_cdn_eq("b64'//8='", "h'ffff'");
     assert_hex("1_reserved", "01");
 }
@@ -727,6 +732,8 @@ fn relative_cri_sections_distinguish_missing_and_empty() {
         ("cri''", "[]"),
         ("cri'?q'", r#"[0,null,["q"]]"#),
         ("cri'#f'", r#"[0,null,null,"f"]"#),
+        ("cri'../'", r#"[2,[""]]"#),
+        ("CRI'../../?q#f'", r#"99([3,[""],["q"],"f"])"#),
         ("cri'../a'", r#"[2,["a"]]"#),
         ("cri'..//a'", r#"[2,["","a"]]"#),
         ("CRI'../../a?q#f'", r#"99([3,["a"],["q"],"f"])"#),

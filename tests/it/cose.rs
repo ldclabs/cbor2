@@ -924,3 +924,78 @@ fn flattened_integer_collisions_fail_and_custom_struct_fields_keep_their_options
     let unknown = cbor2::cdn_to_vec(r#"{"id":1,"unrecognized":true}"#).unwrap();
     assert!(cbor2::from_slice::<Message>(&unknown).is_err());
 }
+
+#[test]
+fn flattened_struct_honors_serde_container_conversions() {
+    use std::collections::BTreeMap;
+    type WireMap = BTreeMap<String, u8>;
+
+    #[derive(Clone, Debug, PartialEq, Cbor)]
+    #[serde(into = "WireMap", try_from = "WireMap")]
+    struct Record {
+        id: u8,
+        #[serde(flatten)]
+        extra: WireMap,
+    }
+
+    impl From<Record> for WireMap {
+        fn from(mut record: Record) -> Self {
+            record.extra.insert("id".into(), record.id);
+            record.extra
+        }
+    }
+
+    impl TryFrom<WireMap> for Record {
+        type Error = &'static str;
+
+        fn try_from(mut extra: WireMap) -> Result<Self, Self::Error> {
+            let id = extra.remove("id").ok_or("missing id")?;
+            Ok(Self { id, extra })
+        }
+    }
+
+    let record = Record {
+        id: 7,
+        extra: [("x".into(), 8)].into(),
+    };
+    let wire = cbor2::cdn_to_vec(r#"{"id":7, "x":8}"#).unwrap();
+    assert_eq!(cbor2::to_vec(&record).unwrap(), wire);
+    assert_eq!(cbor2::from_slice::<Record>(&wire).unwrap(), record);
+    assert_eq!(cbor2::from_reader::<Record, _>(&wire[..]).unwrap(), record);
+    assert_eq!(
+        Value::serialized(&record)
+            .unwrap()
+            .deserialized::<Record>()
+            .unwrap(),
+        record
+    );
+
+    #[derive(Debug, PartialEq, Cbor)]
+    #[serde(transparent)]
+    struct Transparent {
+        #[serde(flatten)]
+        fields: WireMap,
+    }
+
+    let wrapper = Transparent {
+        fields: record.into(),
+    };
+    assert_eq!(cbor2::to_vec(&wrapper).unwrap(), wire);
+    assert_eq!(cbor2::from_slice::<Transparent>(&wire).unwrap(), wrapper);
+}
+
+#[test]
+fn flattened_struct_serializes_serde_tag_when_all_fields_are_skipped() {
+    #[derive(Cbor)]
+    #[serde(tag = "kind")]
+    struct Record {
+        #[serde(flatten, skip_serializing)]
+        _extra: std::collections::BTreeMap<String, u8>,
+    }
+
+    let record = Record {
+        _extra: [("x".into(), 8)].into(),
+    };
+    let wire = cbor2::cdn_to_vec(r#"{"kind":"Record"}"#).unwrap();
+    assert_eq!(cbor2::to_vec(&record).unwrap(), wire);
+}

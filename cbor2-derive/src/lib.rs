@@ -442,13 +442,19 @@ fn generate(
                 &shadow_ident,
             )
         };
-        let binary_ser = expansion.serialize;
-        let binary_de = expansion.deserialize;
-        (
-            expansion.helpers,
-            quote!(if serializer.is_human_readable() {#ordinary_ser} else {#binary_ser}),
-            quote!(if deserializer.is_human_readable() {#ordinary_de} else {#binary_de}),
-        )
+        let serialize = match expansion.serialize {
+            Some(binary_ser) => {
+                quote!(if serializer.is_human_readable() {#ordinary_ser} else {#binary_ser})
+            }
+            None => ordinary_ser,
+        };
+        let deserialize = match expansion.deserialize {
+            Some(binary_de) => {
+                quote!(if deserializer.is_human_readable() {#ordinary_de} else {#binary_de})
+            }
+            None => ordinary_de,
+        };
+        (expansion.helpers, serialize, deserialize)
     } else {
         (TokenStream::new(), ordinary_ser, ordinary_de)
     };

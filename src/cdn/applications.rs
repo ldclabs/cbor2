@@ -117,12 +117,16 @@ pub(super) fn hex_content(mut text: &str, offset: usize) -> Result<Vec<u8>, Erro
                 text = rest;
             }
             b'/' => {
-                // Inside hex, only /text/ and # comments are available.
-                let (comment, rest) = text[1..].split_once('/').ok_or(Error::Syntax(offset))?;
-                if comment.is_empty()
-                    || comment.starts_with('*')
-                    || comment.bytes().any(|b| b < b' ' && b != b'\n')
-                {
+                if text.starts_with("//") {
+                    return Err(Error::Syntax(offset));
+                }
+                let (comment, rest) = if let Some(block) = text.strip_prefix("/*") {
+                    block.split_once("*/")
+                } else {
+                    text[1..].split_once('/')
+                }
+                .ok_or(Error::Syntax(offset))?;
+                if comment.bytes().any(|b| b < b' ' && b != b'\n') {
                     return Err(Error::Syntax(offset));
                 }
                 text = rest;

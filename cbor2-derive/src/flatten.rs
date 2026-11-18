@@ -1,10 +1,11 @@
 //! Binary serialization and deserialization for structs with extension fields.
 use super::*;
 
+#[derive(Default)]
 pub(super) struct Expansion {
     pub helpers: TokenStream,
-    pub serialize: TokenStream,
-    pub deserialize: TokenStream,
+    pub serialize: Option<TokenStream>,
+    pub deserialize: Option<TokenStream>,
 }
 
 pub(super) fn fields(
@@ -15,19 +16,6 @@ pub(super) fn fields(
     type_name: &str,
     entries: &[Entry],
 ) -> Expansion {
-    let mut fields_shadow = shadow.clone();
-    let fields_ident = format_ident!("__CborFields");
-    fields_shadow.ident = fields_ident.clone();
-    let syn::Data::Struct(shadow_fields) = &mut fields_shadow.data else {
-        unreachable!()
-    };
-    fields_shadow.attrs.insert(
-        0,
-        syn::parse_quote!(#[derive(::#runtime::__serde::Deserialize)]),
-    );
-    fields_shadow
-        .attrs
-        .push(syn::parse_quote!(#[serde(rename = #type_name)]));
     let declared_names: Vec<String> = fields
         .iter()
         .filter(|f| f.attrs.flatten.is_none() && f.attrs.skip.is_none())
@@ -43,6 +31,60 @@ pub(super) fn fields(
             names
         })
         .collect();
+
+    // Container attributes can delegate directly to another type. Apply the
+    // field adapter only in directions that use this struct's fields.
+    let transparent = serde.transparent.is_some();
+    let mut expansion = Expansion::default();
+    if !transparent && serde.into.is_none() {
+        let (helpers, serialize) = serialize_fields(
+            shadow,
+            fields,
+            runtime,
+            type_name,
+            entries,
+            &declared_names,
+            serde.tag.is_some(),
+        );
+        expansion.helpers.extend(helpers);
+        expansion.serialize = Some(serialize);
+    }
+    if !transparent && serde.from.is_none() && serde.try_from.is_none() {
+        let (helpers, deserialize) = deserialize_fields(
+            shadow,
+            fields,
+            runtime,
+            type_name,
+            &declared_names,
+            serde.deny_unknown_fields,
+        );
+        expansion.helpers.extend(helpers);
+        expansion.deserialize = Some(deserialize);
+    }
+    expansion
+}
+
+fn deserialize_fields(
+    shadow: &syn::DeriveInput,
+    fields: &[FieldInfo<'_>],
+    runtime: &syn::Ident,
+    type_name: &str,
+    declared_names: &[String],
+    deny_unknown: bool,
+) -> (TokenStream, TokenStream) {
+    let mut fields_shadow = shadow.clone();
+    let fields_ident = format_ident!("__CborFields");
+    fields_shadow.ident = fields_ident.clone();
+    let syn::Data::Struct(shadow_fields) = &mut fields_shadow.data else {
+        unreachable!()
+    };
+    fields_shadow.attrs.insert(
+        0,
+        syn::parse_quote!(#[derive(::#runtime::__serde::Deserialize)]),
+    );
+    fields_shadow
+        .attrs
+        .push(syn::parse_quote!(#[serde(rename = #type_name)]));
     let mut extension_names = Vec::new();
     for (field, info) in shadow_fields.fields.iter_mut().zip(fields) {
         if info.attrs.flatten.is_some() && info.attrs.skip.is_none() {
@@ -70,6 +112,25 @@ pub(super) fn fields(
             }
         }
     }
+    (
+        quote!(#fields_shadow),
+        quote! {
+            #fields_ident::deserialize(::#runtime::__private::flatten_deserializer(
+                deserializer, <Self as ::#runtime::Cbor>::KEYS, &[#(#extension_names),*], #deny_unknown,
+            ))
+        },
+    )
+}
+
+fn serialize_fields(
+    shadow: &syn::DeriveInput,
+    fields: &[FieldInfo<'_>],
+    runtime: &syn::Ident,
+    type_name: &str,
+    entries: &[Entry],
+    declared_names: &[String],
+    has_serde_tag: bool,
+) -> (TokenStream, TokenStream) {
     // Each run retains serde's field order, skip predicates and custom
     // serializers. Boundaries identify extension keys without reserving
     // any representation in the user's data.
@@ -82,10 +143,13 @@ pub(super) fn fields(
     for run in runs {
         let start = offset;
         offset += run.len();
-        if run.iter().all(|f| f.attrs.skip_serializing) {
+        let skipped = run.iter().all(|f| f.attrs.skip_serializing);
+        // Keep one group for the discriminator if every field is skipped.
+        let tag_only = has_serde_tag && group_shadows.is_empty() && offset == fields.len();
+        if skipped && !tag_only {
             continue;
         }
-        let is_extra = run[0].attrs.flatten.is_some();
+        let is_extra = !skipped && run[0].attrs.flatten.is_some();
         let mut group = shadow.clone();
         let group_ident = format_ident!("__CborGroup{}", start);
         group.ident = group_ident.clone();
@@ -121,22 +185,16 @@ pub(super) fn fields(
             (#is_extra, bytes.len())
         }});
     }
-    let deny_unknown = serde.deny_unknown_fields;
-    Expansion {
-        helpers: quote!(#fields_shadow #(#group_shadows)*),
-        serialize: quote! {
+    (
+        quote!(#(#group_shadows)*),
+        quote! {
             ::#runtime::__private::flatten_serialize_fields(
                 serializer, <Self as ::#runtime::Cbor>::TAG, <Self as ::#runtime::Cbor>::KEYS,
                 &[#(#declared_names),*],
                 |bytes| ::core::result::Result::Ok([#(#encode_groups),*]),
             )
         },
-        deserialize: quote! {
-            #fields_ident::deserialize(::#runtime::__private::flatten_deserializer(
-                deserializer, <Self as ::#runtime::Cbor>::KEYS, &[#(#extension_names),*], #deny_unknown,
-            ))
-        },
-    }
+    )
 }
 
 // A pinned, older cbor2 runtime can still resolve a newer 1.x derive. It
@@ -198,10 +256,12 @@ pub(super) fn legacy(
     };
     Expansion {
         helpers,
-        serialize: quote!(::#runtime::__private::flatten_serialize(&__CborShadowRef { value:self }, serializer, <Self as ::#runtime::Cbor>::TAG, <Self as ::#runtime::Cbor>::KEYS)),
-        deserialize: quote! {
+        serialize: Some(
+            quote!(::#runtime::__private::flatten_serialize(&__CborShadowRef { value:self }, serializer, <Self as ::#runtime::Cbor>::TAG, <Self as ::#runtime::Cbor>::KEYS)),
+        ),
+        deserialize: Some(quote! {
             let __value:__CborShadowOwned #ty_generics = ::#runtime::__private::flatten_deserialize(deserializer, <Self as ::#runtime::Cbor>::KEYS)?;
             ::core::result::Result::Ok(__value.0)
-        },
+        }),
     }
 }

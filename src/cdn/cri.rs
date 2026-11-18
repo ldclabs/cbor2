@@ -48,10 +48,16 @@ fn cri_reference_bytes(iri: &iref::IriRef, offset: usize) -> Result<Vec<u8>, Err
         }
     }
 
-    sections.push(if relative && path.is_empty() {
-        write_simple_value(22)
+    sections.push(if original_path.is_empty() {
+        if relative {
+            write_simple_value(22)
+        } else {
+            write_empty_array()?
+        }
     } else {
-        cri_path_bytes(path, original_path.starts_with('/'), offset)?
+        // Keep the empty segment in a path like "/" or "../".
+        let path = original_path.strip_prefix('/').unwrap_or(path);
+        cri_path_bytes(path, offset)?
     });
     sections.push(match iri.query() {
         Some(query) => cri_query_bytes(query.as_str(), offset)?,
@@ -219,11 +225,7 @@ fn host_ip_bytes(host: &str, offset: usize) -> Result<Option<Vec<u8>>, Error> {
     Ok(None)
 }
 
-fn cri_path_bytes(path: &str, rooted: bool, offset: usize) -> Result<Vec<u8>, Error> {
-    if path.is_empty() {
-        return write_empty_array();
-    }
-    let path = if rooted { &path[1..] } else { path };
+fn cri_path_bytes(path: &str, offset: usize) -> Result<Vec<u8>, Error> {
     let segments = path.split('/');
     let mut out = Vec::new();
     write_array_len(&mut out, segments.clone().count())?;
