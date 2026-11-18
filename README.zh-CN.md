@@ -27,7 +27,7 @@
 
 ## 与其他 CBOR Crate 的对比
 
-[`cbor2-bench`](cbor2-bench/README.md) 工作区在功能和速度上将 cbor2 与 `ciborium 0.2`、`serde_cbor 0.11`、`cbor4ii 1.2` 和 `minicbor 2.2` 进行了对比。这是一个*独立的*（detached）工作区，因此这些 crate 不会进入本库的依赖图、CI 或 MSRV 中。
+[`cbor2-bench`](cbor2-bench/README.md) 工作区在功能和速度上将 cbor2 与 `ciborium 0.2`、`serde_cbor 0.11`、`cbor4ii 1.2` 和 `minicbor 2.2` 进行了对比。基准依赖位于独立工作区，由单独的稳定版 CI 任务检查。
 
 ### 功能特性对比
 
@@ -36,7 +36,7 @@
 | 原生 serde `Serialize`/`Deserialize`    |   ✅   |    ✅     |     ✅      |    ✅    |    ❌¹    |
 | `no_std` + `alloc`                      |   ✅   |    ✅     |     ✅      |    ✅    |    ✅     |
 | 零分配编码（固定缓冲区）                |   ✅   |    ✅     |     ✅      |   ✅⁵    |    ✅     |
-| 无需 `alloc` 的类型化解码               |  ❌²   |    ❌     |     ❌      |   ❌²    |    ✅     |
+| 无需 `alloc` 的类型化解码               |  ❌²   |    ❌     |     ✅²     |   ❌²    |    ✅     |
 | 从输入中借用 `&str`/`&[u8]`             |   ✅   |    ❌     |     ✅      |    ✅    |    ✅     |
 | 确定性 / 规范编码³                      |   ✅   |    ❌     |     ❌      |    ❌    |    ❌     |
 | 动态 `Value` 类型                       |   ✅   |    ✅     |     ✅      |    ✅    |    ❌     |
@@ -45,15 +45,15 @@
 | 结构体的整数 map 键 (COSE)              |   ✅   |    ❌     |     ❌      |    ❌    |    ✅     |
 | 诊断表示法 (RFC 8949 §8)                |   ✅   |    ❌     |     ❌      |    ❌    |    ✅     |
 | 异步项 I/O (futures / tokio)            |   ✅   |    ❌     |     ❌      |    ❌    |    ❌     |
-| 在不解码的情况下进行验证 / 获取准确大小 |   ✅   |    ❌     |     ❌      |    ❌    |    ◑⁴    |
+| 获取编码长度，无需写出字节              |   ✅   |    ❌     |     ❌      |    ❌    |    ✅⁴    |
 
 ¹ minicbor 使用其自有的 `#[derive(Encode, Decode)]`；serde 支持位于一个单独的 `minicbor-serde` crate 中。
 
-² 没有一个基于 serde 的 CBOR crate 可以在不使用堆的情况下进行反序列化 —— 但 cbor2 的底层 [`core::Decoder`](https://docs.rs/cbor2/latest/cbor2/core/struct.Decoder.html)（以及 cbor4ii 的底层 `Decode`）仍可在零分配的情况下手动解码。
+² `serde_cbor` 允许调用方提供临时缓冲区来解码类型化数据。cbor2 和 cbor4ii 的底层 API 支持手动解码。
 
 ³ 排序的 map 键，RFC 8949 §4.2.1；大多数 crate 会输出首选的最短格式数字（cbor4ii 将浮点数保持为 64 位），但只有 cbor2 附带了完整的规范编码器。
 
-⁴ minicbor 的 `Decoder::skip` 可以验证结构，但没有获取精确大小的原语。
+⁴ minicbor 的 `len` 和 `len_with` 要求类型实现 `CborLen`。cbor2 使用类型已有的 serde `Serialize` 实现。
 
 ⁵ cbor4ii 没有公开的 `no_std` 切片（slice）序列化器；它通过 `&mut [u8]` 上的 `to_writer` 填充固定缓冲区，这需要 `std`。
 
@@ -63,27 +63,11 @@
 
 ### 基准测试
 
-Apple M1 Pro 上每次操作的中间时间，采用 `no_std + alloc` 路径 (`to_vec` / `from_slice`)；越低越好。完整的 `std` 和 `no_std + no_alloc` 表格、负载定义和测试方法位于 [`cbor2-bench`](cbor2-bench/README.md#results)。
-
-| 操作 / 负载        | cbor2   | ciborium | serde_cbor | cbor4ii | minicbor |
-| ------------------ | ------- | -------- | ---------- | ------- | -------- |
-| `encode/int_array` | 2.79 µs | 6.59 µs  | 1.67 µs    | 2.92 µs | 3.29 µs  |
-| `encode/log_batch` | 13.3 µs | 16.1 µs  | 9.54 µs    | 6.09 µs | 4.56 µs  |
-| `encode/blob`      | 102 ns  | 131 ns   | 133 ns     | 127 ns  | 130 ns   |
-| `decode/int_array` | 5.34 µs | 11.0 µs  | 3.24 µs    | 3.43 µs | 5.23 µs  |
-| `decode/log_batch` | 38.5 µs | 66.3 µs  | 34.0 µs    | 36.8 µs | 21.8 µs  |
-| `decode/blob`      | 97.5 ns | 224 ns   | 88.5 ns    | 90.1 ns | 91.1 ns  |
-
-`int_array`（1024 × `u64`）和 `blob`（4 KiB 字节字符串）在所有五个 crate 中生成的字节是完全相同的，因此这些行是严格的同等对比；`log_batch`（128 个结构化记录）使用了每个 crate 特有的推荐编码方式（minicbor 采用整数键数组，体积缩小约 37%；cbor4ii 将浮点数保持为 64 位）。
-cbor2 在各项测试中都极具竞争力，**在 `no_std + no_alloc` 路径下表现尤为突出** —— 它拥有 serde 类 crate 中最快的固定缓冲区编码速度，也是唯一提供 `serialized_size` / `validate` 原语的 crate。在 `std`/`alloc` 的结构化吞吐量方面，**cbor4ii 的表现非常亮眼**（且 minicbor 的借用解码器在结构化解码中处于领先地位）；cbor2 在不同场景下与它们交替领先 —— 详情请参见完整表格。在 `no_std + no_alloc` 模式下，cbor2 还提供零分配的*编码*（[`to_slice`]）、*验证*（[`validate`]）和精确的*大小计算*（[`serialized_size`]）。
+基准在宿主机上分别测量新建缓冲区、复用写入器和固定缓冲区。五种编解码器对整数数组和字节串生成相同的字节，日志记录的布局和浮点宽度则有差异。Apple M1 Pro 的旧计时早于基准框架修正。参见[历史数据和复测方法](cbor2-bench/README.md#results)。
 
 ```bash
 cd cbor2-bench && cargo bench
 ```
-
-[`to_slice`]: https://docs.rs/cbor2/latest/cbor2/fn.to_slice.html
-[`validate`]: https://docs.rs/cbor2/latest/cbor2/fn.validate.html
-[`serialized_size`]: https://docs.rs/cbor2/latest/cbor2/fn.serialized_size.html
 
 ## 快速开始
 
@@ -142,11 +126,11 @@ assert_eq!(photo, back);
 * **COSE 风格的整数 map 键、数组和带有 `#[derive(Cbor)]` 的标签** —— 启用 `derive` 特性后，`#[derive(cbor2::Cbor)]` 会生成带有 CBOR 协议细节的 serde `Serialize`/`Deserialize` 实现：标注了 `#[cbor(key = ...)]` 的字段在编码时使用整数 map 键，且容器在编码时会被包装在 CBOR 标签（`#[cbor(tag = ...)]`）中。标签层在解码时是透明的，因此同一类型可以处理包含或不包含标签的协议，而无需定义第二个“裸”结构体并实现 `From`。命名的结构体还可以使用 `#[cbor(array)]` 编码为紧凑的字段顺序 CBOR 数组，同时在 JSON 和代码中保持 Rust 字段名。字段名和类型名保持不变，因此相同的类型仍然可以平滑地序列化为普通 JSON —— `serde_json::to_string(&v)` 可以直接工作，保持原始字段名且不带标签。声明的键、数组形状和标签在运行时仍可通过 `cbor2::Cbor` 特征（trait）进行检查。
 * **原始值** —— `RawValue` 延迟解码并保留单个数据项的精确传输字节：序列化时将它们原封不动地拼接进流中，反序列化时则逐字节捕获，适用于签名负载、透传项和延迟解码。`TryFrom` 可在 `RawValue` 和 `Value` 之间进行双向转换。
 * **鲁棒的解码** —— 妥善处理不定长数据项、分段字符串、重复 map 键、未知标签和 CBOR 序列（RFC 8742）；限制递归深度，并防止伪造的长度触发巨额内存分配。
-* **简明诊断表示法 (Concise Diagnostic Notation)** —— `to_cdn` 可以将原始 CBOR 渲染为由 IETF 简明诊断表示法草案（CDN，`draft-ietf-cbor-edn-literals`）规范化的易读文本形式，在保留不定长标记的同时，与 RFC 8949 附录 A 的普通数据项示例相匹配。API 命名保持了显式的方向性：`to_cdn*` 将 CBOR 字节渲染为 CDN 文本，而 `cdn_to_vec`、`cdn_sequence_to_vec` 和 `from_cdn` 则将 CDN 文本解析为 CBOR 字节或 serde 值；较旧的 `diagnostic*` 名称作为兼容类别名予以保留。CDN 输入支持注释、基于编码的字节字符串、嵌入式 CBOR 序列、编码指示器、标签、简单值，以及 `dt`/`DT`、`ip`/`IP`、`b1`/`t1`、`ilbs`/`ilts`、`bytes`、`same` 和 `float` 等应用扩展；启用 `cdn` 特性后还会添加依赖外部 crate 的 `hash`、`cri` 和 `CRI`。`bytes<<"ä", h'2f'>>` 会生成 `h'c3a42f'`，而 `same<< float'47110815', 0x1.22102ap+15 >>` 会校验同一数据项的不同写法并输出第一个实参。`Value` 通过相同的表示法实现 `Display`，并将其缩进形式作为 `Debug` 实现。对于整数键协议 map，`to_cdn_pretty_with_key_comments` 可以在传输整数键旁边添加 CDN `// "iss"` 类似的注释。
+* **简明诊断表示法 (Concise Diagnostic Notation)** —— `to_cdn` 可以将原始 CBOR 渲染为由 IETF 简明诊断表示法草案（CDN，`draft-ietf-cbor-edn-literals-29`）规范化的易读文本形式。分段字节串和文本串分别输出为 `ilbs<<...>>` 和 `ilts<<...>>`，保留原有分段边界。API 命名保持了显式的方向性：`to_cdn*` 将 CBOR 字节渲染为 CDN 文本，而 `cdn_to_vec`、`cdn_sequence_to_vec` 和 `from_cdn` 则将 CDN 文本解析为 CBOR 字节或 serde 值；较旧的 `diagnostic*` 名称作为兼容类别名予以保留。CDN 输入支持注释、基于编码的字节字符串、嵌入式 CBOR 序列、编码指示器、标签、简单值，以及 `dt`/`DT`、`ip`/`IP`、`b1`/`t1`、`ilbs`/`ilts`、`bytes`、`same` 和 `float` 等应用扩展；启用 `cdn` 特性后还会添加依赖外部 crate 的 `hash`、`cri` 和 `CRI`。`bytes<<"ä", h'2f'>>` 会生成 `h'c3a42f'`，而 `same<< float'47110815', 0x1.22102ap+15 >>` 会校验同一数据项的不同写法并输出第一个实参。`Value` 通过相同的表示法实现 `Display`，并将其缩进形式作为 `Debug` 实现。对于整数键协议 map，`to_cdn_pretty_with_key_comments` 可以在传输整数键旁边添加 CDN `# "iss"` 类似的注释。
 * **无分配辅助函数** —— `validate` 与零拷贝的 `validate_slice` 是针对单个 CBOR 数据项的格式完好性检查（RFC 8949 §5.3.1，包括文本 UTF-8），`serialized_size` 计算任何可序列化值的精确编码大小，而 `to_slice` 则将数据编码到调用者提供的缓冲区中；这些操作均不分配堆内存。
 * **异步项 I/O** —— `async_io` 模块在异步字节流上对完整的 CBOR 项进行分帧，随后在数据项缓冲完成后复用正常的同步 serde API。针对不受信任的流，提供了有界的读取辅助函数。
 * **底层标头编解码器** —— `core` 模块为需要精确传输控制的应用暴露了拉取/推送式 `Header` 接口。
-* **`no_std` 支持** —— `default-features = false, features = ["alloc"]` 保持了完整的 API（减去了 `std::io` 互操作和 `HashMap` 转换）；即使在没有 `alloc` 的情况下，此 crate 仍然可以进行序列化（`to_writer`/`to_slice`/`serialized_size`）、格式完好性检查，并支持 `core` 标头编解码器。
+* **`no_std` 支持** —— `default-features = false, features = ["alloc"]` 可使用基于堆的编解码和诊断 API；即使在没有 `alloc` 的情况下，此 crate 仍然可以进行序列化（`to_writer`/`to_slice`/`serialized_size`）、格式完好性检查，并支持 `core` 标头编解码器。
 
 ## Crate 特性
 
@@ -320,13 +304,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```text
 61({
-  1: "coap://as.example.com", // "iss"
-  2: "erikw", // "sub"
-  3: "coap://light.example.com", // "aud"
-  4: 1444064944, // "exp"
-  5: 1443944944, // "nbf"
-  6: 1443944944, // "iat"
-  7: h'0b71' // "cti"
+  1: "coap://as.example.com", # "iss"
+  2: "erikw", # "sub"
+  3: "coap://light.example.com", # "aud"
+  4: 1444064944, # "exp"
+  5: 1443944944, # "nbf"
+  6: 1443944944, # "iat"
+  7: h'0b71' # "cti"
 })
 ```
 

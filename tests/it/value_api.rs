@@ -210,6 +210,7 @@ fn integer_conversions() {
     );
 }
 
+#[cfg(feature = "std")]
 #[test]
 fn std_collection_conversions() {
     use std::collections::{BTreeMap, HashMap};

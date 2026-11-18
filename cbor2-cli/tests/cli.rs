@@ -102,6 +102,8 @@ fn decode_json_pretty_prints_json() {
 fn decode_json_rejects_colliding_keys_before_writing_the_item() {
     for text in [
         r#"{1: "a", "1": "b"}"#,
+        r#"{42("id"): 1, "id": 2}"#,
+        r#"{42(43(18446744073709551617)): 1, "18446744073709551617": 2}"#,
         r#"{null: 1, "null": 2}"#,
         r#"{"same": 1, "same": 2}"#,
         r#"[{"nested": {1: 2, "1": 3}}]"#,
@@ -221,6 +223,13 @@ fn streaming_commands_flush_each_item_before_input_eof() {
 
 #[test]
 fn closing_the_output_pipe_is_not_a_data_error() {
+    for arg in ["--help", "--version"] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let output = Command::new(CBOR).arg(arg).stdout(writer).output().unwrap();
+        assert!(output.status.success(), "{arg}: {:?}", output.stderr);
+        assert!(output.stderr.is_empty());
+    }
     let json = format!("\"{}\"", "x".repeat(100_000));
     let bytes = cbor2::to_vec(&"x".repeat(100_000)).unwrap();
     for (args, input) in [
@@ -322,6 +331,35 @@ fn encode_default_and_cdn_flags_read_cdn_text() {
 }
 
 #[test]
+fn cdn_revision_29_rejects_removed_syntax_and_renders_string_chunks() {
+    for args in [
+        &["encode"][..],
+        &["encode", "--cdn"][..],
+        &["encode", "--diag"][..],
+    ] {
+        for text in [
+            "1 ...",
+            "unknown'x'",
+            "+1",
+            "01",
+            "simple(23)_i",
+            "1 // old comment\n",
+        ] {
+            let out = run(args, text.as_bytes());
+            assert_eq!(out.status.code(), Some(1), "{args:?}: {text}");
+            assert!(out.stdout.is_empty());
+        }
+    }
+    let text = "ilbs<<h'01', h'0203'>>";
+    let wire = hex("5f4101420203ff");
+    assert_eq!(ok(&["decode"], &wire), format!("{text}\n").as_bytes());
+    assert_eq!(
+        ok(&["encode", "--cdn"], format!("# chunks\n{text}").as_bytes()),
+        wire
+    );
+}
+
+#[test]
 fn validate_reports_complete_cbor_sequences() {
     assert_eq!(ok(&["validate", "a1616101"], b""), b"valid\n");
     assert_eq!(ok(&["validate"], &hex("01a16374776f02")), b"valid\n");
@@ -362,6 +400,27 @@ fn reads_from_a_file_argument() {
     std::fs::remove_file(&path).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn handles_non_utf8_file_names() {
+    use std::os::unix::ffi::OsStrExt;
+    let name = format!("cbor_cli_path_{}_", std::process::id()).into_bytes();
+    let name = [name.as_slice(), b"\xff.cbor"].concat();
+    let path = std::env::temp_dir().join(std::ffi::OsStr::from_bytes(&name));
+    let output = Command::new(CBOR).arg(&path).output().unwrap();
+    assert_eq!(output.status.code(), Some(2), "{:?}", output.stderr);
+    // Linux also accepts these filenames on disk. macOS filesystems can
+    // reject the filename at creation time.
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::write(&path, [1]).unwrap();
+        let output = Command::new(CBOR).arg(&path).output().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert_eq!(output.stdout, b"1\n");
+    }
+}
+
 #[test]
 fn help_and_version_print_and_exit_cleanly() {
     for args in [&["--help"][..], &["-h"][..], &["decode", "--help"][..]] {
@@ -400,6 +459,7 @@ fn usage_errors_exit_with_status_2() {
         &["encode", "--json", "--diag"][..],
         &["encode", "--json", "--cdn"][..],
         &["/nonexistent/cbor_cli_test"][..],
+        &["--", "-/"][..],
         // A directory is an unreadable input on every platform.
         &[dir][..],
         &["decode", dir][..],
@@ -490,20 +550,23 @@ fn json_numeric_spelling_and_bignum_sign_survive_conversion() {
 #[test]
 fn json_sequences_cross_buffers_and_keep_strict_boundaries() {
     // A number may stop at the buffer edge and continue with more digits.
-    let text = format!("{}18446744073709551617 [1,2]\n-0", " ".repeat(8191));
-    assert_eq!(
-        ok(&["encode", "--json"], text.as_bytes()),
-        ok(&["encode", "--cdn"], text.as_bytes())
-    );
-    // Long items switch to reader framing and still preserve duplicate keys.
-    let text = format!(r#"["{}"]{{"a":1,"a":2}}-0"#, "x".repeat(32000));
+    let capacity = 32 * 1024;
+    for prefix in [8191, capacity - 1] {
+        let text = format!("{}18446744073709551617 [1,2]\n-0", " ".repeat(prefix));
+        assert_eq!(
+            ok(&["encode", "--json"], text.as_bytes()),
+            ok(&["encode", "--cdn"], text.as_bytes())
+        );
+    }
+    // After a long string the next items can start at the closing delimiter.
+    let text = format!(r#"["{}"]{{"a":1,"a":2}}-0"#, "x".repeat(3 * capacity));
     let bytes = ok(&["encode", "--json"], text.as_bytes());
     let mut stream = cbor2::de::Deserializer::from_slice(&bytes).into_iter::<cbor2::Value>();
     assert_eq!(stream.next().unwrap().unwrap().as_array().unwrap().len(), 1);
     assert_eq!(stream.next().unwrap().unwrap().as_map().unwrap().len(), 2);
     assert_eq!(stream.next().unwrap().unwrap(), 0.into());
     assert!(stream.next().is_none());
-    let invalid = format!("{}truefalse", " ".repeat(8188));
+    let invalid = format!("{}truefalse", " ".repeat(capacity - 4));
     let out = run(&["encode", "--json"], invalid.as_bytes());
     assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty());

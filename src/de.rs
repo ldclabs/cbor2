@@ -1766,8 +1766,9 @@ impl<'de, T: de::Deserialize<'de>> Iterator for SliceIter<'de, T> {
 /// its own, as the RFC requires). Unassigned simple values are accepted:
 /// they are well-formed and can be represented by [`crate::Simple`].
 ///
-/// Trailing data after the item is an error; to handle a CBOR sequence
-/// (RFC 8742), validate items one at a time from the shared reader.
+/// Trailing data after the item is an error. With `alloc`, check a CBOR
+/// sequence by iterating `Deserializer::from_reader(reader).into_iter::<serde::de::IgnoredAny>()`
+/// and checking each result.
 ///
 /// For input that is already a byte slice, [`validate_slice`] performs the
 /// same checks without copying string bodies.

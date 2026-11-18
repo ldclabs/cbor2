@@ -113,6 +113,12 @@ CLI behavior to preserve:
   placeholders or symmetric `#[serde(skip)]`.
 - The Cbor derive resolves serde through cbor2; a direct serde dependency is
   only needed when the caller itself uses serde APIs or derives.
+- With `#[serde(flatten)]`, tags around registered integer labels still match
+  the declared field. Other tagged keys go to the extension map with their
+  tags. Use `RawValue` when the exact key bytes must survive a round trip.
+- Generate CDN revision 29 text with `#` line comments and `ilbs<<...>>` or
+  `ilts<<...>>` for segmented strings. Ellipses and unknown extensions are
+  data errors.
 - For untrusted CDN text, use `cdn_to_vec_with_limit` or
   `cdn_sequence_to_vec_with_limit` with an application-appropriate source-byte
   limit before expensive arbitrary-precision decimal conversion.
@@ -192,8 +198,8 @@ of:
 cargo fmt --all --check
 cargo test --workspace --all-targets --all-features
 cargo test -p cbor2 --features derive
-cargo test -p cbor2 --no-default-features --lib
-cargo test -p cbor2 --no-default-features --features alloc --lib
+cargo test -p cbor2 --no-default-features
+cargo test -p cbor2 --no-default-features --features alloc
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 git diff --check
 ```

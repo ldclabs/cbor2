@@ -11,7 +11,7 @@
 //! provided for (possibly segmented) byte and text strings.
 //!
 //! Most users should prefer the serde interface in the crate root or the
-//! dynamic [`Value`](crate::Value) type; this module is for applications
+//! dynamic `Value` type available with `alloc`; this module is for applications
 //! that need precise control over the wire format.
 //!
 //! # Example
@@ -21,6 +21,7 @@
 //! string structure for you:
 //!
 //! ```rust
+//! # #[cfg(feature = "alloc")] {
 //! use cbor2::core::{Decoder, Encoder, Header};
 //!
 //! let mut encoded = Vec::new();
@@ -36,6 +37,7 @@
 //! let mut body = Vec::new();
 //! dec.bytes_body(len, &mut body).unwrap();
 //! assert_eq!(body, [0xde, 0xad, 0xbe, 0xef]);
+//! # }
 //! ```
 
 #[cfg(feature = "alloc")]
@@ -455,9 +457,8 @@ impl<R: Read> Decoder<R> {
     /// Pulls the next header from the input.
     ///
     /// For byte and text strings this returns the string header only; read
-    /// the body with [`bytes_body`](Self::bytes_body),
-    /// [`text_body`](Self::text_body) or [`read_exact`](Self::read_exact)
-    /// before continuing.
+    /// the body with [`read_exact`](Self::read_exact) before continuing.
+    /// With `alloc`, `bytes_body` and `text_body` also handle segmented strings.
     #[inline]
     pub fn pull(&mut self) -> Result<Header, Error> {
         if let Some((header, end)) = self.pushback.take() {
@@ -545,8 +546,8 @@ impl<R: Read> Decoder<R> {
     ///
     /// Use this after pulling a definite-length [`Header::Bytes`] or
     /// [`Header::Text`] when you want to own body validation. The higher
-    /// level [`bytes_body`](Self::bytes_body) and
-    /// [`text_body`](Self::text_body) helpers also handle segmented strings.
+    /// level `bytes_body` and `text_body` helpers available with `alloc`
+    /// also handle segmented strings.
     #[inline]
     pub fn read_exact(&mut self, data: &mut [u8]) -> Result<(), crate::io::Error> {
         debug_assert!(self.pushback.is_none());

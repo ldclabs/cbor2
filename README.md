@@ -35,8 +35,8 @@ Licensed under the MIT License.
 
 The [`cbor2-bench`](cbor2-bench/README.md) workspace measures cbor2 against
 `ciborium 0.2`, `serde_cbor 0.11`, `cbor4ii 1.2` and `minicbor 2.2` on both
-features and speed. It is a *detached* workspace, so none of those crates enter
-this library's dependency graph, CI or MSRV.
+features and speed. Its dependencies are isolated from the library, and a
+separate stable-toolchain CI job checks the benchmarks.
 
 ### Feature comparison
 
@@ -45,7 +45,7 @@ this library's dependency graph, CI or MSRV.
 | serde-native `Serialize`/`Deserialize` |   ✅   |    ✅     |     ✅      |    ✅    |    ❌¹    |
 | `no_std` + `alloc`                     |   ✅   |    ✅     |     ✅      |    ✅    |    ✅     |
 | zero-alloc encode (fixed buffer)       |   ✅   |    ✅     |     ✅      |   ✅⁵    |    ✅     |
-| typed decode without `alloc`           |  ❌²   |    ❌     |     ❌      |   ❌²    |    ✅     |
+| typed decode without `alloc`           |  ❌²   |    ❌     |     ✅²     |   ❌²    |    ✅     |
 | borrow `&str`/`&[u8]` from the input   |   ✅   |    ❌     |     ✅      |    ✅    |    ✅     |
 | deterministic / canonical encoding³    |   ✅   |    ❌     |     ❌      |    ❌    |    ❌     |
 | dynamic `Value` type                   |   ✅   |    ✅     |     ✅      |    ✅    |    ❌     |
@@ -54,15 +54,15 @@ this library's dependency graph, CI or MSRV.
 | integer map keys for structs (COSE)    |   ✅   |    ❌     |     ❌      |    ❌    |    ✅     |
 | diagnostic notation (RFC 8949 §8)      |   ✅   |    ❌     |     ❌      |    ❌    |    ✅     |
 | async item I/O (futures / tokio)       |   ✅   |    ❌     |     ❌      |    ❌    |    ❌     |
-| validate / exact size without decoding |   ✅   |    ❌     |     ❌      |    ❌    |    ◑⁴    |
+| exact encoded size without writing     |   ✅   |    ❌     |     ❌      |    ❌    |    ✅⁴    |
 
 ¹ minicbor uses its own `#[derive(Encode, Decode)]`; serde is a separate `minicbor-serde` crate.
 
-² No serde-based CBOR crate deserializes without a heap — but cbor2's low-level [`core::Decoder`](https://docs.rs/cbor2/latest/cbor2/core/struct.Decoder.html) (and cbor4ii's low-level `Decode`) still decode manually with zero allocation.
+² `serde_cbor` supports typed decoding with caller-provided scratch space. cbor2 and cbor4ii provide manual decoding through their core APIs.
 
 ³ Sorted map keys, RFC 8949 §4.2.1; most crates emit preferred shortest-form numbers (cbor4ii keeps floats at 64-bit), but only cbor2 ships a full canonical encoder.
 
-⁴ minicbor's `Decoder::skip` validates structure but there is no exact-size primitive.
+⁴ minicbor has `len` and `len_with` for types implementing `CborLen`. cbor2 uses the type’s serde `Serialize` implementation.
 
 ⁵ cbor4ii has no public `no_std` slice serializer; it fills a fixed buffer through `to_writer` over `&mut [u8]`, which needs `std`.
 
@@ -72,40 +72,15 @@ this library's dependency graph, CI or MSRV.
 
 ### Benchmarks
 
-Median time per operation on an Apple M1 Pro, the `no_std + alloc` path
-(`to_vec` / `from_slice`); lower is better. The full `std` and
-`no_std + no_alloc` tables, payload definitions and methodology are in
-[`cbor2-bench`](cbor2-bench/README.md#results).
-
-| op / payload       | cbor2   | ciborium | serde_cbor | cbor4ii | minicbor |
-| ------------------ | ------- | -------- | ---------- | ------- | -------- |
-| `encode/int_array` | 2.79 µs | 6.59 µs  | 1.67 µs    | 2.92 µs | 3.29 µs  |
-| `encode/log_batch` | 13.3 µs | 16.1 µs  | 9.54 µs    | 6.09 µs | 4.56 µs  |
-| `encode/blob`      | 102 ns  | 131 ns   | 133 ns     | 127 ns  | 130 ns   |
-| `decode/int_array` | 5.34 µs | 11.0 µs  | 3.24 µs    | 3.43 µs | 5.23 µs  |
-| `decode/log_batch` | 38.5 µs | 66.3 µs  | 34.0 µs    | 36.8 µs | 21.8 µs  |
-| `decode/blob`      | 97.5 ns | 224 ns   | 88.5 ns    | 90.1 ns | 91.1 ns  |
-
-`int_array` (1024 × `u64`) and `blob` (a 4 KiB byte string) are byte-identical
-across all five crates, so those rows are exact apples-to-apples; `log_batch`
-(128 structured records) uses each crate's idiomatic encoding (minicbor's
-integer-keyed arrays run ~37% smaller, and cbor4ii keeps floats at 64-bit).
-cbor2 is competitive across the board and **uniquely strong in `no_std +
-no_alloc`** — it has the fastest fixed-buffer encode of the serde crates and
-the only `serialized_size`/`validate` primitives. On `std`/`alloc` structured
-throughput **cbor4ii is the standout** (and minicbor's borrowing decoder leads
-structured decode); cbor2 trades the encode lead with them by scenario — see
-the full tables. In `no_std + no_alloc`, cbor2 also offers zero-alloc
-*encoding* ([`to_slice`]), *validation* ([`validate`]) and exact *sizing*
-([`serialized_size`]).
+The suite measures fresh buffers, reused writers and fixed buffers on a host
+build. The integer-array and byte-string fixtures have identical wire bytes
+across all five codecs. The log records use different layouts and float widths.
+The original Apple M1 Pro timings predate changes to the benchmark harness.
+[Historical measurements and reproduction instructions](cbor2-bench/README.md#results).
 
 ```bash
 cd cbor2-bench && cargo bench
 ```
-
-[`to_slice`]: https://docs.rs/cbor2/latest/cbor2/fn.to_slice.html
-[`validate`]: https://docs.rs/cbor2/latest/cbor2/fn.validate.html
-[`serialized_size`]: https://docs.rs/cbor2/latest/cbor2/fn.serialized_size.html
 
 ## Quick start
 
@@ -208,9 +183,9 @@ CBOR sequences and canonical encoding.
   huge allocations.
 * **Concise Diagnostic Notation** — `to_cdn` renders raw CBOR as the
   human-readable text form formalized by the IETF Concise Diagnostic
-  Notation draft (CDN, `draft-ietf-cbor-edn-literals`), matching the RFC
-  8949 Appendix A examples for ordinary items while preserving
-  indefinite-length markers. The API names keep direction explicit:
+  Notation draft (CDN, `draft-ietf-cbor-edn-literals-29`). Segmented
+  byte and text strings render as `ilbs<<...>>` and `ilts<<...>>` with
+  their original chunk boundaries. The API names keep direction explicit:
   `to_cdn*` renders CBOR bytes to CDN text, while `cdn_to_vec`,
   `cdn_sequence_to_vec` and `from_cdn` parse CDN text to CBOR bytes or serde
   values; the older `diagnostic*` names remain as compatibility aliases. CDN
@@ -224,7 +199,7 @@ CBOR sequences and canonical encoding.
   the same item and emits the first one. `Value` implements `Display` with
   the same notation and `Debug` as
   its indented form. For integer-keyed protocol maps,
-  `to_cdn_pretty_with_key_comments` can add CDN `// "iss"` comments beside the
+  `to_cdn_pretty_with_key_comments` can add CDN `# "iss"` comments beside the
   wire integer keys.
 * **Allocation-free helpers** — `validate` and the copy-free `validate_slice`
   are well-formedness checks for exactly one CBOR item (RFC 8949 §5.3.1,
@@ -237,7 +212,7 @@ CBOR sequences and canonical encoding.
 * **A low-level header codec** — the `core` module exposes the pull/push
   `Header` interface for applications that need precise wire control.
 * **`no_std` support** — `default-features = false, features = ["alloc"]`
-  keeps the full API minus `std::io` interop and `HashMap` conversions;
+  provides heap-backed encoding, decoding and diagnostics;
   without `alloc` the crate still serializes (`to_writer`/`to_slice`/
   `serialized_size`), checks well-formedness and speaks the `core` header codec.
 
@@ -454,13 +429,13 @@ the matching string keys as code comments:
 
 ```text
 61({
-  1: "coap://as.example.com", // "iss"
-  2: "erikw", // "sub"
-  3: "coap://light.example.com", // "aud"
-  4: 1444064944, // "exp"
-  5: 1443944944, // "nbf"
-  6: 1443944944, // "iat"
-  7: h'0b71' // "cti"
+  1: "coap://as.example.com", # "iss"
+  2: "erikw", # "sub"
+  3: "coap://light.example.com", # "aud"
+  4: 1444064944, # "exp"
+  5: 1443944944, # "nbf"
+  6: 1443944944, # "iat"
+  7: h'0b71' # "cti"
 })
 ```
 

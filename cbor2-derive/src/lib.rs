@@ -423,7 +423,7 @@ fn generate(
     let ordinary_ser = quote!(#shadow_ident::serialize(self, serializer));
     let ordinary_de = quote!(#shadow_ident::deserialize(deserializer));
     let (helpers, serialize, deserialize) = if flatten {
-        let expansion = if cfg!(feature = "runtime-1-1-7") {
+        let expansion = if cfg!(feature = "runtime-1-2-0") {
             flatten::fields(
                 &shadow,
                 &groups[0].fields,
@@ -807,22 +807,19 @@ fn merge_entry(entries: &mut Vec<Entry>, entry: Entry) -> syn::Result<()> {
     Ok(())
 }
 
-// A marker's key table is shared by every variant. Reject unkeyed fields
-// whose effective serde name would inherit another variant's integer key.
+// A marker's key table is shared by every variant. Field names and input
+// aliases must not inherit an integer key from a different field.
 fn validate_enum_keys(groups: &[FieldGroup<'_>], entries: &[Entry]) -> syn::Result<()> {
     for group in groups {
         for info in &group.fields {
             let Some(ident) = &info.field.ident else {
                 continue;
             };
-            if info
+            let keyed = info
                 .field
                 .attrs
                 .iter()
-                .any(|attr| attr.path().is_ident("cbor"))
-            {
-                continue;
-            }
+                .any(|attr| attr.path().is_ident("cbor"));
             for (side, skipped) in [
                 group.attrs.skip_serializing || info.attrs.skip_serializing,
                 group.attrs.skip_deserializing || info.attrs.skip_deserializing,
@@ -833,21 +830,18 @@ fn validate_enum_keys(groups: &[FieldGroup<'_>], entries: &[Entry]) -> syn::Resu
                 if skipped {
                     continue;
                 }
-                let name = info
-                    .attrs
-                    .rename
-                    .as_ref()
-                    .map(|(name, _)| name.clone())
-                    .or_else(|| info.attrs.split_names[side].clone())
-                    .unwrap_or_else(|| {
-                        let rule = group.attrs.rename_rules[side].as_deref();
-                        rename_field(&ident.unraw().to_string(), rule)
-                    });
-                if let Some(entry) = entries.iter().find(|entry| entry.name == name) {
+                let name = info.attrs.field_name(ident, side, &group.attrs);
+                if let Some(entry) = entries.iter().find(|entry| {
+                    (!keyed && entry.name == name)
+                        || (side == 1
+                            && entry.name != name
+                            && info.attrs.aliases.contains(&entry.name))
+                }) {
                     bail!(
                         info.field.span(),
-                        "field `{name}` must declare #[cbor(key = {})] consistently \
+                        "field label `{}` must declare #[cbor(key = {})] consistently \
                          across enum variants",
+                        entry.name,
                         entry.key
                     );
                 }
@@ -884,6 +878,21 @@ fn rename_field(name: &str, rule: Option<&str>) -> String {
             out
         }
         _ => name.to_owned(),
+    }
+}
+
+impl SerdeAttrs {
+    fn field_name(&self, ident: &syn::Ident, side: usize, container: &SerdeAttrs) -> String {
+        self.rename
+            .as_ref()
+            .map(|(name, _)| name.clone())
+            .or_else(|| self.split_names[side].clone())
+            .unwrap_or_else(|| {
+                rename_field(
+                    &ident.unraw().to_string(),
+                    container.rename_rules[side].as_deref(),
+                )
+            })
     }
 }
 

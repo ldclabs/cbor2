@@ -1,6 +1,6 @@
 //! Tests for error types, error plumbing and I/O failure paths.
 
-use std::io;
+use cbor2::io;
 
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +38,7 @@ fn ser_value_error() {
 
 #[test]
 fn ser_from_io_error() {
-    let err = cbor2::ser::Error::from(io::Error::other("x"));
+    let err = cbor2::ser::Error::from(io::Error::from(io::ErrorKind::Other));
     assert!(matches!(err, cbor2::ser::Error::Io(..)));
 }
 
@@ -53,7 +53,7 @@ fn serializer_from_encoder() {
 
 #[test]
 fn de_io_error() {
-    let err = cbor2::from_reader::<cbor2::Value, _>(FailReader).unwrap_err();
+    let err = cbor2::from_reader::<cbor2::Value, _>(FailReader(&[])).unwrap_err();
     assert!(matches!(err, cbor2::de::Error::Io(..)));
     assert!(err.to_string().contains("i/o error"));
     assert!(std::error::Error::source(&err).is_some());
@@ -82,10 +82,12 @@ fn de_error_api() {
     );
     assert!(std::error::Error::source(&Error::Syntax(7)).is_none());
 
-    let err = Error::from(io::Error::other("x"));
+    let err = Error::from(io::Error::from(io::ErrorKind::Other));
     assert!(matches!(err, Error::Io(..)));
 
-    let err = Error::from(cbor2::core::Error::Io(io::Error::other("x")));
+    let err = Error::from(cbor2::core::Error::Io(io::Error::from(
+        io::ErrorKind::Other,
+    )));
     assert!(matches!(err, Error::Io(..)));
     let err = Error::from(cbor2::core::Error::Syntax(3));
     assert!(matches!(err, Error::Syntax(3)));
@@ -99,7 +101,7 @@ fn de_error_api() {
 fn core_error_api() {
     use cbor2::core::Error;
 
-    let err = Error::Io(io::Error::other("x"));
+    let err = Error::Io(io::Error::from(io::ErrorKind::Other));
     assert!(err.to_string().contains("i/o error"));
     assert!(std::error::Error::source(&err).is_some());
 

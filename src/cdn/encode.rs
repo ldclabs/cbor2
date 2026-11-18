@@ -2,17 +2,17 @@ use alloc::vec::Vec;
 
 use crate::de::Error;
 
-use super::types::{ElidedStringPart, Indicator, ELLIPSIS_TAG};
+use super::types::Indicator;
 
 pub(super) fn write_uint(
     out: &mut Vec<u8>,
     major: u8,
     value: u64,
-    spec: Indicator<'_>,
+    spec: Indicator,
 ) -> Result<(), &'static str> {
     let prefix = major << 5;
     match spec {
-        Indicator::None | Indicator::Other(..) | Indicator::Indefinite => {
+        Indicator::None | Indicator::Reserved | Indicator::Indefinite => {
             write_preferred_uint(out, major, value);
         }
         Indicator::Immediate => {
@@ -69,7 +69,7 @@ pub(super) fn write_int(out: &mut Vec<u8>, value: i128) {
 pub(super) fn write_definite_bytes(
     out: &mut Vec<u8>,
     bytes: &[u8],
-    spec: Indicator<'_>,
+    spec: Indicator,
 ) -> Result<(), Error> {
     write_uint(out, 2, bytes.len() as u64, spec).map_err(|msg| Error::semantic(None, msg))?;
     out.extend_from_slice(bytes);
@@ -79,51 +79,18 @@ pub(super) fn write_definite_bytes(
 pub(super) fn write_definite_text(
     out: &mut Vec<u8>,
     text: &str,
-    spec: Indicator<'_>,
+    spec: Indicator,
 ) -> Result<(), Error> {
     write_uint(out, 3, text.len() as u64, spec).map_err(|msg| Error::semantic(None, msg))?;
     out.extend_from_slice(text.as_bytes());
     Ok(())
 }
 
+#[cfg(feature = "cdn-cri")]
 pub(super) fn write_array_len(out: &mut Vec<u8>, len: usize) -> Result<(), Error> {
     write_uint(out, 4, len as u64, Indicator::None).map_err(|msg| Error::semantic(None, msg))
 }
 
 pub(super) fn write_tag(out: &mut Vec<u8>, tag: u64) -> Result<(), Error> {
     write_uint(out, 6, tag, Indicator::None).map_err(|msg| Error::semantic(None, msg))
-}
-
-fn write_null(out: &mut Vec<u8>) {
-    out.push(0xf6);
-}
-
-pub(super) fn ellipsis_item() -> Vec<u8> {
-    let mut out = Vec::new();
-    // These tags are still CPA placeholders in draft-ietf-cbor-edn-literals-26.
-    write_tag(&mut out, ELLIPSIS_TAG).expect("CPA tag is encodable");
-    write_null(&mut out);
-    out
-}
-
-pub(super) fn write_elided_string(
-    out: &mut Vec<u8>,
-    parts: &[ElidedStringPart],
-) -> Result<(), Error> {
-    write_tag(out, ELLIPSIS_TAG)?;
-    write_array_len(out, parts.len())?;
-    for part in parts {
-        match part {
-            ElidedStringPart::Bytes(bytes) => {
-                write_definite_bytes(out, bytes, Indicator::None)?;
-            }
-            ElidedStringPart::Text(text) => {
-                write_definite_text(out, text, Indicator::None)?;
-            }
-            ElidedStringPart::Ellipsis => {
-                out.extend_from_slice(&ellipsis_item());
-            }
-        }
-    }
-    Ok(())
 }

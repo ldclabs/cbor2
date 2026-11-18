@@ -6,12 +6,12 @@ use alloc::{
 use crate::value::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Indicator<'a> {
+pub(super) enum Indicator {
     None,
     Indefinite,
     Immediate,
     Ai(u8),
-    Other(&'a str),
+    Reserved,
 }
 
 #[derive(Clone, Debug)]
@@ -20,15 +20,12 @@ pub(super) enum Atom {
     Integer { negative: bool, argument: u64 },
     Bignum { negative: bool, argument: Vec<u8> },
     Float(f64),
-    FloatRaw { bytes: Vec<u8>, value: f64 },
     Bytes(Vec<u8>),
     Text(String),
-    Simple(u8),
     Raw(Vec<u8>),
 }
 
-// Decode only when an extension needs the data model; unresolved extensions
-// and byte-oriented consumers can carry the exact encoding without a Value.
+// Keep argument bytes for extensions that preserve the original encoding.
 pub(super) enum Arg {
     Encoded(Vec<u8>),
     Text(String),
@@ -50,14 +47,5 @@ impl Arg {
     }
 }
 
-pub(super) const ELLIPSIS_TAG: u64 = 888;
-pub(super) const UNRESOLVED_APP_TAG: u64 = 999;
 #[cfg(feature = "cdn-cri")]
 pub(super) const CRI_TAG: u64 = 99;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum ElidedStringPart {
-    Bytes(Vec<u8>),
-    Text(String),
-    Ellipsis,
-}

@@ -8,8 +8,9 @@ use serde::{
     ser, Deserialize, Serialize,
 };
 
-use super::{Entries, Keys};
+use super::Keys;
 use crate::core::{Decoder, Header};
+use crate::raw::RawSlice;
 
 type Names = &'static [&'static str];
 pub(crate) const RAW_ITEM: &str = "@@CBOR_FLATTEN_ITEM@@";
@@ -40,23 +41,16 @@ pub fn serialize<S: ser::Serializer, const N: usize>(
                 "flattened fields must serialize as a map",
             ));
         };
-        if is_extension || length.is_none() {
-            let entries: Entries<'_> = crate::from_slice(group).map_err(ser::Error::custom)?;
-            count += entries.0.len();
-            if is_extension {
-                for (key, _) in entries.0 {
-                    if let Some(name) =
-                        field_name(key.0, keys, names, false).map_err(ser::Error::custom)?
-                    {
-                        return Err(ser::Error::custom(format_args!(
-                            "flattened key conflicts with declared field `{name}`"
-                        )));
-                    }
-                }
-            }
-        } else if let Some(n) = length {
-            count += n;
-        }
+        count += match (is_extension, length) {
+            (false, Some(n)) => n,
+            _ => de::Deserializer::deserialize_map(
+                &mut crate::de::Deserializer::from_slice(group),
+                CountEntries {
+                    declared: is_extension.then_some((keys, names)),
+                },
+            )
+            .map_err(ser::Error::custom)?,
+        };
         let body = start + decoder.offset()..end - usize::from(length.is_none());
         let len = body.len();
         bytes.copy_within(body, write);
@@ -70,10 +64,38 @@ pub fn serialize<S: ser::Serializer, const N: usize>(
         .map_err(ser::Error::custom)?;
     let start = slot.len();
     bytes[start..MAX_HEADER].copy_from_slice(&header[..MAX_HEADER - start]);
-    let map = super::RawSlice(&bytes[start..write]);
+    let map = RawSlice(&bytes[start..write]);
     match tag {
         Some(tag) => crate::tag::RequireAny(tag, map).serialize(serializer),
         None => map.serialize(serializer),
+    }
+}
+
+// Count extension entries and check their labels as they arrive. Their
+// encoded values are already in the output buffer.
+struct CountEntries {
+    declared: Option<(Keys, Names)>,
+}
+
+impl<'de> Visitor<'de> for CountEntries {
+    type Value = usize;
+    fn expecting(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.write_str("a flattened map")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<usize, A::Error> {
+        let mut count = 0;
+        while let Some(key) = map.next_key::<RawSlice<'de>>()? {
+            if let Some((keys, names)) = self.declared {
+                if let Some(name) = field_name(key.0, keys, names).map_err(de::Error::custom)? {
+                    return Err(de::Error::custom(format_args!(
+                        "flattened key conflicts with declared field `{name}`"
+                    )));
+                }
+            }
+            map.next_value::<de::IgnoredAny>()?;
+            count += 1;
+        }
+        Ok(count)
     }
 }
 
@@ -83,7 +105,6 @@ fn field_name(
     bytes: &[u8],
     keys: Keys,
     names: Names,
-    reject_tagged: bool,
 ) -> Result<Option<&'static str>, crate::de::Error> {
     let registered = |n| {
         keys.iter()
@@ -98,36 +119,18 @@ fn field_name(
         _ => {}
     }
     let mut decoder = Decoder::from(bytes);
-    let mut tag = None;
-    let header = loop {
-        match decoder.pull_slice()? {
-            Header::Tag(n) => {
-                tag.get_or_insert(n);
-            }
-            header => break header,
-        }
-    };
-    let int = match header {
-        Header::Positive(n) => Some(i128::from(n)),
-        Header::Negative(n) => Some(-1 - i128::from(n)),
-        _ => None,
-    };
-    if let Some(name) = int.and_then(registered) {
-        return Ok(Some(name));
-    }
-    if let Some(tag) = tag {
-        if reject_tagged {
-            return Err(crate::de::Error::semantic(
-                None,
-                alloc::format!(
-                    "tagged extension key {tag} cannot be represented by #[serde(flatten)]"
-                ),
-            ));
-        }
-        return Ok(None);
+    let mut header = decoder.pull_slice()?;
+    let tagged = matches!(header, Header::Tag(_));
+    while let Header::Tag(_) = header {
+        header = decoder.pull_slice()?;
     }
     let mut chunks = Vec::new();
     let text = match header {
+        Header::Positive(n) => return Ok(registered(i128::from(n))),
+        Header::Negative(n) => return Ok(registered(-1 - i128::from(n))),
+        // Only registered integer labels are transparent through tags. Pass
+        // every other tagged key, including tagged text, to the extension map.
+        _ if tagged => return Ok(None),
         Header::Text(Some(n)) | Header::Bytes(Some(n)) => decoder.borrow_body(n)?,
         Header::Text(None) => {
             let text = crate::from_slice::<alloc::string::String>(bytes)?;
@@ -268,7 +271,7 @@ impl<'de, A: MapAccess<'de>> MapAccess<'de> for FieldsAccess<'_, 'de, A> {
     ) -> Result<Option<K::Value>, A::Error> {
         if let Some(parent) = &mut self.parent {
             while let Some(key) = parent.next_key::<Item<'de>>()? {
-                let name = field_name(&key.0, self.schema.keys, self.schema.declared, true)
+                let name = field_name(&key.0, self.schema.keys, self.schema.declared)
                     .map_err(de::Error::custom)?;
                 if let Some(name) = name.filter(|name| !self.schema.extensions.contains(name)) {
                     return seed.deserialize(name.into_deserializer()).map(Some);
@@ -330,7 +333,7 @@ impl<'de> de::Deserializer<'de> for Extensions<'_, 'de> {
         visitor: V,
     ) -> Result<V::Value, Self::Error> {
         for entry in self.0 {
-            if !entry.claimed && field_name(&entry.key.0, &[], names, false)?.is_some() {
+            if !entry.claimed && field_name(&entry.key.0, &[], names)?.is_some() {
                 let map = ExtensionMap {
                     iter: core::slice::from_mut(entry).iter_mut(),
                     fields: Some(names),
@@ -386,7 +389,7 @@ impl<'de> MapAccess<'de> for ExtensionMap<'_, 'de> {
                 continue;
             }
             if let Some(names) = self.fields {
-                if field_name(&entry.key.0, &[], names, false)?.is_none() {
+                if field_name(&entry.key.0, &[], names)?.is_none() {
                     continue;
                 }
                 entry.claimed = true;

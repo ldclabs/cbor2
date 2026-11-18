@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Check that the tag matches the crate versions
-        run: scripts/check-release-version.sh "${{ github.ref_name }}"
+        run: scripts/check-release-version.sh
       - name: Authenticate to crates.io (Trusted Publishing)
         uses: rust-lang/crates-io-auth-action@v1
         id: auth

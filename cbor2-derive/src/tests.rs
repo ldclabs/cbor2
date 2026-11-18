@@ -17,9 +17,14 @@ fn rejects_cross_variant_key_inheritance_after_renaming() {
         quote! { enum E { A { #[cbor(key = 1)] value: u8 }, B { #[serde(rename = "value")] other: u8 } } },
         quote! { enum E { A { #[cbor(key = 1)] #[serde(rename = "VALUE")] value: u8 }, #[serde(rename_all = "UPPERCASE")] B { value: u8 } } },
         quote! { enum E { A { #[cbor(key = 1)] value: u8 }, B { #[serde(rename(deserialize = "value"))] other: u8 } } },
+        quote! { enum E { A { #[cbor(key = 1)] value: u8 }, B { #[serde(alias = "value")] other: u8 } } },
+        quote! { enum E { A { #[cbor(key = 1)] value: u8 }, B { #[cbor(key = 2)] #[serde(alias = "value")] other: u8 } } },
     ] {
         assert!(error(item).contains("consistently across enum variants"));
     }
+    expanded(
+        quote! { enum E { A { #[cbor(key = 1)] value: u8 }, B { #[serde(skip_deserializing, alias = "value")] other: u8 } } },
+    );
 }
 
 #[test]

@@ -25,7 +25,8 @@ mod types;
 /// Encodes one Concise Diagnostic Notation (CDN) item as CBOR bytes.
 ///
 /// This accepts the formalized diagnostic input syntax from
-/// `draft-ietf-cbor-edn-literals`: JSON-compatible values, CBOR byte strings
+/// [CDN draft revision 29](https://datatracker.ietf.org/doc/html/draft-ietf-cbor-edn-literals-29),
+/// including JSON-compatible values, CBOR byte strings
 /// (`'..'`, `h'..'`, `b64'..'`), comments, optional separator commas,
 /// embedded CBOR sequence literals (`<<..>>`), tags, simple values, the core
 /// encoding indicators (`_i`, `_0` through `_3`, and indefinite arrays or
@@ -39,19 +40,15 @@ mod types;
 /// opening delimiter in the source, since decoded or computed arguments may
 /// no longer correspond byte for byte to the original text.
 ///
-/// Encoding indicators that carry no defined meaning here — the reserved
-/// `_4` through `_7`, indicator words from future registrations, and the
-/// bare `_` on an item that has no indefinite-length form — are accepted
-/// and ignored, as the CDN draft requires of consumers.
+/// Reserved encoding indicators are ignored on items whose grammar allows
+/// an indicator. Simple values have no encoding indicator. A leading plus
+/// sign, extra leading decimal zeros, an ellipsis, or an unsupported prefix
+/// produces an error. Use `#` for line comments and terminate them with a
+/// newline. Raw string delimiters contain one to eight backticks.
 ///
-/// Two inputs encode as the draft's provisional (CPA) placeholder tags
-/// rather than as final data: an ellipsis (`...`) becomes the Diagnostic
-/// Notation Ellipsis Tag 888, and an application-extension prefix this
-/// crate does not implement becomes the Unresolved Application-Extension
-/// Tag 999 wrapping the prefix and its arguments (`cri`/`CRI` similarly
-/// use the provisional tag 99). These tag numbers may change when IANA
-/// assigns final values; consumers that cannot process elided or
-/// unresolved data should treat those tags as errors.
+/// The optional `cri` and `CRI` prefixes are defined in a
+/// [separate CRI extension](https://www.ietf.org/archive/id/draft-bormann-core-cri-diagnostic-notation-00.html).
+/// Uppercase `CRI` wraps its value in the registered tag 99.
 ///
 /// ```rust
 /// let bytes = cbor2::cdn_to_vec(r#"{ /kty/ 1: 4, "kid": h'deadbeef' }"#).unwrap();

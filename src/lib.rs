@@ -1,4 +1,6 @@
-/*!
+#![cfg_attr(
+    feature = "alloc",
+    doc = r####"
 This crate provides a full-featured implementation of [RFC
 8949](https://www.rfc-editor.org/rfc/rfc8949) — the Concise Binary Object
 Representation (CBOR) — built on [serde](https://serde.rs).
@@ -11,7 +13,7 @@ Feature coverage includes ordinary serde encode/decode, RFC 8949 preferred
 serialization, deterministic/canonical encoders, a dynamic [`Value`] type,
 validated [`RawValue`] pass-through bytes, CBOR simple values, semantic tags,
 bignums, COSE-style integer map keys, arrays and tags through `#[derive(Cbor)]`, CBOR
-sequences, async item I/O through [`async_io`], diagnostic notation,
+sequences, async item I/O through `async_io`, diagnostic notation,
 exact-one-item [`validate`], allocation-free serialization helpers and
 `no_std` modes.
 
@@ -229,13 +231,14 @@ assert!(cbor2::validate_slice(&stream).is_err()); // not exactly one item
 
 # Async Item I/O
 
-Serde itself is synchronous. The [`async_io`] module handles the async
+Serde itself is synchronous. The `async_io` module handles the async
 transport boundary by reading or writing one complete CBOR item; once an item
 is buffered, use the regular serde API. For untrusted peers, use
 `read_item_with_limit` or `read_value_with_limit` unless an outer transport
 layer already enforces a message size limit:
 
 ```rust
+# #[cfg(feature = "std")]
 # async fn example<R: cbor2::async_io::AsyncRead + ?Sized>(reader: &mut R) -> Result<(), cbor2::de::Error> {
 let value: cbor2::Value = cbor2::async_io::read_value_with_limit(reader, 1 << 20).await?;
 # let _ = value;
@@ -380,7 +383,7 @@ assert_eq!(cbor2::to_slice(&value, &mut buffer).unwrap(), &bytes[..]);
 # Crate features
 
 * **`std`** *(default)* — implements the [`io`] traits for every
-  `std::io::Read`/`std::io::Write`, adds [`async_io`] and adds the
+  `std::io::Read`/`std::io::Write`, adds `async_io` and adds the
   `HashMap` conversions. Implies `alloc`.
 * **`alloc`** — everything that needs a heap, without `std`: [`Value`],
   [`to_vec`]/[`from_slice`]/[`from_reader`], [`RawValue`],
@@ -413,7 +416,7 @@ The API names keep the two directions separate:
 
 [`to_cdn`] renders raw CBOR as the compact human-readable text form
 formalized by the IETF Concise Diagnostic Notation draft
-(`draft-ietf-cbor-edn-literals`); [`to_cdn_pretty`] does the same with
+(`draft-ietf-cbor-edn-literals-29`); [`to_cdn_pretty`] does the same with
 two-space indentation. Both work on the wire and preserve what a [`Value`]
 cannot represent: indefinite-length markers, `undefined`, and unassigned
 simple values. [`cdn_to_vec`] parses CDN text into CBOR bytes, including
@@ -421,11 +424,11 @@ comments, byte-string literals, embedded CBOR sequences, encoding indicators,
 tags, simple values and the CDN application extensions implemented by this
 crate. Enable the `cdn` feature for `hash`, `cri`, and `CRI`. `Value`
 implements
-[`Display`](std::fmt::Display) with the same compact notation, and
-[`Debug`](std::fmt::Debug) pretty-prints it with indentation.
+[`Display`](::core::fmt::Display) with the same compact notation, and
+[`Debug`](::core::fmt::Debug) pretty-prints it with indentation.
 When integer-keyed maps also have a known string-key table such as
 [`Cbor::KEYS`], [`to_cdn_pretty_with_key_comments`] can annotate the
-pretty output with `// "field"` comments without changing the decoded
+pretty output with `# "field"` comments without changing the decoded
 wire item.
 
 ```rust
@@ -443,7 +446,7 @@ let keyed = hex::decode("a201626d6504182a").unwrap();
 let keys = [("iss", 1), ("exp", 4)];
 assert_eq!(
     cbor2::to_cdn_pretty_with_key_comments(&keyed[..], &keys).unwrap(),
-    "{\n  1: \"me\", // \"iss\"\n  4: 42 // \"exp\"\n}"
+    "{\n  1: \"me\", # \"iss\"\n  4: 42 # \"exp\"\n}"
 );
 
 let value = cbor2::cbor!({ "k": [1, -2.5, null] }).unwrap();
@@ -550,8 +553,26 @@ releases were built on the long-deprecated `rustc-serialize` framework and
 predate both serde 1.0 and RFC 8949. Version 0.5 was a from-scratch rewrite
 published under the `cbor2` name — the original crates.io name stays with
 the legacy release — and 1.0 stabilizes it; none of the old API survives.
-*/
+"####
+)]
+#![cfg_attr(
+    not(feature = "alloc"),
+    doc = r#"
+CBOR encoding and validation without a heap. Use [`to_slice`] to encode into
+a fixed buffer, [`serialized_size`] to measure an item, and [`validate_slice`]
+to check an exact item. [`core::Decoder`] reads individual CBOR headers.
 
+```rust
+let mut buffer = [0; 8];
+let bytes = cbor2::to_slice(&(1u8, 42u8), &mut buffer).unwrap();
+assert_eq!(bytes, &[0x82, 0x01, 0x18, 0x2a]);
+cbor2::validate_slice(bytes).unwrap();
+```
+
+Enable `alloc` for typed decoding, dynamic values, canonical encoding and
+diagnostics. The default `std` feature also supplies standard I/O adapters.
+"#
+)]
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -762,6 +783,7 @@ pub use cbor2_derive::Cbor;
 /// assert_eq!(CoseSign::TAG, Some(98));
 ///
 /// let key = CoseSign { kty: 2, alg: -7, comment: "".into() };
+/// # #[cfg(feature = "alloc")]
 /// assert_eq!(key.keys()["kty"], 1);
 /// # }
 /// ```

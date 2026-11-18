@@ -62,6 +62,17 @@ fn optional_raw_values_capture_exactly() {
 
 #[test]
 fn constructors_enforce_well_formedness() {
+    struct IncompletePair;
+    impl Serialize for IncompletePair {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            use serde::ser::SerializeTuple;
+            let mut tuple = serializer.serialize_tuple(2)?;
+            tuple.serialize_element(&1u8)?;
+            tuple.end()
+        }
+    }
+    assert!(RawValue::serialized(&IncompletePair).is_err());
+
     assert!(RawValue::new(hex::decode("01").unwrap()).is_ok());
     // Truncated, trailing data, lone break and invalid UTF-8 all fail.
     assert!(RawValue::new(hex::decode("1a0000").unwrap()).is_err());

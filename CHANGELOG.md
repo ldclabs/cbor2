@@ -1,9 +1,32 @@
 # Changelog
 
-## [1.1.7] - Unreleased
+## [1.2.0] - Unreleased
+
+### Changed
+
+* Adopt `draft-ietf-cbor-edn-literals-29` for library and CLI diagnostic
+  input and output. Use `#` for line comments. Segmented byte and text
+  strings render as `ilbs<<...>>` and `ilts<<...>>`.
+* Reject elided data and unsupported extensions during encoding. Explicit
+  numeric tags 888 and 999 still encode as ordinary CBOR tags. Leading plus
+  signs, redundant decimal leading zeros, encoding indicators on simple
+  values and raw-string delimiters longer than eight backticks are errors.
+  Bit-pattern float literals use preferred width unless a width is specified.
+* Pass tagged extension keys to flattened maps in their original CBOR form.
+  Wrapped registered integer keys still identify the declared fields.
 
 ### Fixed
 
+* Validate the output of custom serde serializers when constructing a
+  `RawValue`. An incorrect container length now returns an error.
+* Reject field aliases that would accidentally inherit another enum variant's
+  integer key.
+* CLI JSON projection applies the same key conversion through nested tags.
+  Report collisions before writing the item. Handle non-UTF-8 file paths and
+  a closed output pipe during help or version output.
+* Build and test the available examples, integration tests and documentation
+  with `alloc` or with the core-only feature set.
+* Include the MIT license text in the CLI and derive crate archives.
 * Tagged newtypes preserve their payload tags. Typed decoders count transparent
   tags against the nesting limit and accept leading-zero bignum padding within
   a separate 4096-byte primitive payload budget.
@@ -17,6 +40,10 @@
 
 ### Performance
 
+* Write CDN tags and segmented strings directly into the output buffer.
+  Resume buffered JSON encoding after each large or fragmented item.
+* Check flattened extension labels while counting entries, avoiding a
+  temporary table of all encoded key/value pairs.
 * Encode ordinary CDN integer literals without allocating a magnitude buffer.
   Use one length-first sort for canonical maps with identical wire and
   equivalence keys. Cap initial Value container capacities at 1024 entries

@@ -32,16 +32,10 @@ pub(super) fn fields(
         .iter()
         .filter(|f| f.attrs.flatten.is_none() && f.attrs.skip.is_none())
         .flat_map(|f| {
-            let id = f.field.ident.as_ref().unwrap().unraw().to_string();
+            let ident = f.field.ident.as_ref().unwrap();
             let mut names = f.attrs.aliases.clone();
             for side in 0..2 {
-                let name = f
-                    .attrs
-                    .rename
-                    .as_ref()
-                    .map(|(n, _)| n.clone())
-                    .or_else(|| f.attrs.split_names[side].clone())
-                    .unwrap_or_else(|| rename_field(&id, serde.rename_rules[side].as_deref()));
+                let name = f.attrs.field_name(ident, side, serde);
                 if !names.contains(&name) {
                     names.push(name);
                 }

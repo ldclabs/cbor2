@@ -19,7 +19,7 @@ proc-macro = true
 
 [features]
 # Selected by runtimes with grouped flatten fields.
-runtime-1-1-7 = []
+runtime-1-2-0 = []
 
 [dependencies]
 proc-macro-crate = "3.5"

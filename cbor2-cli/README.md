@@ -83,12 +83,15 @@ the strict JSON parser, or `--diag`/`--cdn` to force the CDN parser.
 
 The everyday command. It renders each item as the human-readable text
 form of RFC 8949 §8 — what CBOR specs and test vectors are written in —
-and it is exact: every item is captured as its wire bytes, so
-indefinite-length items keep their `_` markers, segmented strings appear
-as `(_ ...)`, `undefined` and unassigned simple values appear as
+using the original wire bytes. As a result,
+indefinite-length maps and arrays keep their `_` markers, segmented strings appear
+as `ilbs<<...>>` or `ilts<<...>>`, `undefined` and unassigned simple values appear as
 themselves, byte strings render as `h'...'` and bignums print as plain
 integers, exactly as in RFC 8949 Appendix A. Very large bignum payloads
 fall back to explicit tag/bytes notation to keep rendering bounded.
+Integer and float widths can be shortened when encoding the displayed text.
+For example, both `01` and `1801` display as `1`. Keep the original input
+when exact bytes matter.
 
 ```bash
 $ cbor a201020326                  # hex, pasted straight from a spec
@@ -168,7 +171,8 @@ lowercase hex strings, non-string map keys are JSON-encoded into strings,
 non-finite floats and `undefined` become `null`, integers beyond the
 64-bit ranges, including bignums, become signed decimal strings. Integer
 object keys use the same decimal spelling. Other tags are dropped, keeping their
-inner value. Object members keep the CBOR map order. If multiple CBOR keys become
+inner value, including when a tagged value is a map key. Object members keep
+the CBOR map order. If multiple CBOR keys become
 the same JSON object key (including duplicate text keys), conversion fails
 with status 1 instead of overwriting a value. The failing item is not written;
 preceding sequence items may already have been output. Output is buffered,
@@ -205,6 +209,12 @@ $ printf "bytes<<\"sig:\", h'deadbeef'>>" | cbor encode --cdn --hex
 $ printf "same<<float'47110815', 0x1.22102ap+15>>" | cbor encode --diag --hex
 fa47110815
 ```
+
+CDN input follows draft revision 29. Use `#` for line comments and
+`ilbs<<...>>` or `ilts<<...>>` to describe segmented strings. Elided data
+and unrecognized extensions produce a data error (exit status 1).
+For `hash`, `cri` and `CRI`, install with
+`cargo install cbor2-cli --features cbor2/cdn`.
 
 ## validate
 

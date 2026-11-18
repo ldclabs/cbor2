@@ -3,143 +3,29 @@ use alloc::{format, string::String, vec::Vec};
 use crate::de::Error;
 use crate::value::Value;
 
-use super::encode::{
-    ellipsis_item, write_array_len, write_definite_text, write_elided_string, write_tag,
-};
-use super::types::{Arg, Atom, ElidedStringPart, Indicator, ELLIPSIS_TAG, UNRESOLVED_APP_TAG};
+use super::types::{Arg, Atom};
 
-pub(super) fn unresolved_app_sequence(prefix: &str, args: Vec<Arg>) -> Result<Atom, Error> {
+pub(super) fn concat_strings(prefix: &str, args: Vec<Arg>, offset: usize) -> Result<Atom, Error> {
     let mut out = Vec::new();
-    write_tag(&mut out, UNRESOLVED_APP_TAG)?;
-    write_array_len(&mut out, 2)?;
-    write_definite_text(&mut out, prefix, Indicator::None)?;
-    write_array_len(&mut out, args.len())?;
-    for arg in args {
-        out.extend_from_slice(&arg.into_encoded()?);
-    }
-    Ok(Atom::Raw(out))
-}
-
-fn push_elided_part(parts: &mut Vec<ElidedStringPart>, part: ElidedStringPart) {
-    match (parts.last_mut(), part) {
-        (Some(ElidedStringPart::Bytes(prev)), ElidedStringPart::Bytes(bytes)) => {
-            prev.extend_from_slice(&bytes);
-        }
-        (Some(ElidedStringPart::Text(prev)), ElidedStringPart::Text(text)) => {
-            prev.push_str(&text);
-        }
-        (Some(ElidedStringPart::Ellipsis), ElidedStringPart::Ellipsis) => {}
-        (_, part) => parts.push(part),
-    }
-}
-
-pub(super) fn concat_app_strings(
-    prefix: &str,
-    args: Vec<Arg>,
-    offset: usize,
-) -> Result<Atom, Error> {
-    let mut concat = StringConcat {
-        text: prefix == "t1",
-        bytes: Vec::new(),
-        parts: Vec::new(),
-        elided: false,
-    };
-    for arg in args {
-        concat.collect(arg.into_value()?, offset)?;
-    }
-    if !concat.elided {
-        return if concat.text {
-            String::from_utf8(concat.bytes)
-                .map(Atom::Text)
-                .map_err(|_| Error::semantic(offset, "t1 result is not UTF-8"))
-        } else {
-            Ok(Atom::Bytes(concat.bytes))
-        };
-    }
-    concat.flush(offset)?;
-    if concat
-        .parts
-        .iter()
-        .all(|part| matches!(part, ElidedStringPart::Ellipsis))
-    {
-        return Ok(Atom::Raw(ellipsis_item()));
-    }
-    let mut out = Vec::new();
-    write_elided_string(&mut out, &concat.parts)?;
-    Ok(Atom::Raw(out))
-}
-
-struct StringConcat {
-    text: bool,
-    bytes: Vec<u8>,
-    parts: Vec<ElidedStringPart>,
-    elided: bool,
-}
-
-impl StringConcat {
-    fn flush(&mut self, offset: usize) -> Result<(), Error> {
-        if self.bytes.is_empty() {
-            return Ok(());
-        }
-        let bytes = core::mem::take(&mut self.bytes);
-        let part = if self.text {
-            ElidedStringPart::Text(
-                String::from_utf8(bytes)
-                    .map_err(|_| Error::semantic(offset, "t1 span is not UTF-8"))?,
-            )
-        } else {
-            ElidedStringPart::Bytes(bytes)
-        };
-        push_elided_part(&mut self.parts, part);
-        Ok(())
-    }
-    fn collect(&mut self, value: Value, offset: usize) -> Result<(), Error> {
-        match value {
-            Value::Text(text) => self.bytes.extend_from_slice(text.as_bytes()),
-            Value::Bytes(bytes) => self.bytes.extend_from_slice(&bytes),
-            Value::Tag(ELLIPSIS_TAG, inner) => {
-                self.elided = true;
-                match *inner {
-                    Value::Null => {
-                        self.flush(offset)?;
-                        push_elided_part(&mut self.parts, ElidedStringPart::Ellipsis);
-                    }
-                    Value::Array(items) => {
-                        for item in items {
-                            self.collect(item, offset)?;
-                        }
-                    }
-                    _ => {
-                        return Err(Error::semantic(
-                            offset,
-                            "ellipsis must contain null or string parts",
-                        ))
-                    }
-                }
-            }
-            _ => {
-                return Err(Error::semantic(
-                    offset,
-                    "concatenation arguments must be strings or ellipses",
-                ))
-            }
-        }
-        Ok(())
-    }
-}
-
-pub(super) fn concat_bytes(args: Vec<Arg>, offset: usize) -> Result<Atom, Error> {
-    let mut out = Vec::new();
-
     for arg in args {
         match arg.into_value()? {
             Value::Text(text) => out.extend_from_slice(text.as_bytes()),
             Value::Bytes(bytes) => out.extend_from_slice(&bytes),
-            _ => return Err(Error::semantic(offset, "bytes arguments must be strings")),
+            _ => {
+                return Err(Error::semantic(
+                    offset,
+                    format!("{prefix} arguments must be strings"),
+                ))
+            }
         }
     }
-
-    Ok(Atom::Bytes(out))
+    if prefix == "t1" {
+        String::from_utf8(out)
+            .map(Atom::Text)
+            .map_err(|_| Error::semantic(offset, "t1 result is not UTF-8"))
+    } else {
+        Ok(Atom::Bytes(out))
+    }
 }
 
 pub(super) fn same_args(args: Vec<Arg>, offset: usize) -> Result<Atom, Error> {
@@ -217,172 +103,59 @@ fn values_equal(left: &Value, right: &Value, key: bool) -> bool {
     }
 }
 
-pub(super) fn hex_atom(content: &str, offset: usize) -> Result<Atom, Error> {
-    match hex_content_parts(content, offset)? {
-        HexParsed::Complete(bytes) => Ok(Atom::Bytes(bytes)),
-        HexParsed::Elided(parts) => {
-            let mut out = Vec::new();
-            write_elided_string(&mut out, &parts)?;
-            Ok(Atom::Raw(out))
-        }
-    }
-}
-
-pub(super) fn hex_content(content: &str, offset: usize) -> Result<Vec<u8>, Error> {
-    let mut parser = HexContent {
-        input: content,
-        pos: 0,
-        base_offset: offset.saturating_sub(content.len()),
-    };
-    match parser.parse()? {
-        HexParsed::Complete(bytes) => Ok(bytes),
-        HexParsed::Elided(..) => Err(Error::semantic(
-            offset,
-            "CDN ellipses are not supported here",
-        )),
-    }
-}
-
-fn hex_content_parts(content: &str, offset: usize) -> Result<HexParsed, Error> {
-    let mut parser = HexContent {
-        input: content,
-        pos: 0,
-        base_offset: offset.saturating_sub(content.len()),
-    };
-    parser.parse()
-}
-
-struct HexContent<'a> {
-    input: &'a str,
-    pos: usize,
-    base_offset: usize,
-}
-
-impl HexContent<'_> {
-    fn syntax(&self) -> Error {
-        Error::Syntax(self.base_offset + self.pos)
-    }
-
-    fn rest(&self) -> &str {
-        &self.input[self.pos..]
-    }
-
-    fn peek(&self) -> Option<char> {
-        self.rest().chars().next()
-    }
-
-    fn bump(&mut self) -> Option<char> {
-        let ch = self.peek()?;
-        self.pos += ch.len_utf8();
-        Some(ch)
-    }
-
-    fn eat(&mut self, s: &str) -> bool {
-        if self.rest().starts_with(s) {
-            self.pos += s.len();
-            true
-        } else {
-            false
-        }
-    }
-
-    fn skip(&mut self) -> Result<(), Error> {
-        loop {
-            let before = self.pos;
-            while matches!(self.peek(), Some('\n' | ' ')) {
-                self.bump();
-            }
-            if self.eat("//") || self.eat("#") {
-                while let Some(ch) = self.bump() {
-                    if ch == '\n' {
-                        break;
-                    }
+pub(super) fn hex_content(mut text: &str, offset: usize) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
+    let mut high = None;
+    while let Some(&byte) = text.as_bytes().first() {
+        match byte {
+            b' ' | b'\n' => text = &text[1..],
+            b'#' => {
+                let (comment, rest) = text.split_once('\n').unwrap_or((text, ""));
+                if comment.bytes().any(|b| b < b' ') {
+                    return Err(Error::Syntax(offset));
                 }
-                continue;
+                text = rest;
             }
-            if self.eat("/*") {
-                let Some(end) = self.rest().find("*/") else {
-                    return Err(self.syntax());
-                };
-                self.pos += end + 2;
-                continue;
-            }
-            if self.rest().starts_with('/') {
-                self.bump();
-                let Some(end) = self.rest().find('/') else {
-                    return Err(self.syntax());
-                };
-                self.pos += end + 1;
-                continue;
-            }
-            if before == self.pos {
-                return Ok(());
-            }
-        }
-    }
-
-    fn parse(&mut self) -> Result<HexParsed, Error> {
-        let mut bytes = Vec::new();
-        let mut high = None;
-        let mut parts = Vec::new();
-        let mut saw_elision = false;
-        loop {
-            self.skip()?;
-            if self.pos == self.input.len() {
-                break;
-            }
-            if self.rest().starts_with("...") {
-                if high.is_some() {
-                    return Err(self.syntax());
+            b'/' => {
+                // Inside hex, only /text/ and # comments are available.
+                let (comment, rest) = text[1..].split_once('/').ok_or(Error::Syntax(offset))?;
+                if comment.is_empty()
+                    || comment.starts_with('*')
+                    || comment.bytes().any(|b| b < b' ' && b != b'\n')
+                {
+                    return Err(Error::Syntax(offset));
                 }
-                flush_hex_bytes(&mut bytes, &mut parts);
-                while self.eat(".") {}
-                saw_elision = true;
-                push_elided_part(&mut parts, ElidedStringPart::Ellipsis);
-                continue;
+                text = rest;
             }
-            let ch = self.bump().ok_or_else(|| self.syntax())?;
-            let Some(digit) = ch.to_digit(16) else {
-                return Err(self.syntax());
-            };
-            match high.take() {
-                Some(high) => bytes.push((high << 4) | digit as u8),
-                None => high = Some(digit as u8),
+            _ => {
+                let digit = char::from(byte).to_digit(16).ok_or(Error::Syntax(offset))? as u8;
+                text = &text[1..];
+                match high.take() {
+                    Some(hi) => bytes.push(hi << 4 | digit),
+                    None => high = Some(digit),
+                }
             }
         }
-        if high.is_some() {
-            return Err(self.syntax());
-        }
-        if saw_elision {
-            flush_hex_bytes(&mut bytes, &mut parts);
-            Ok(HexParsed::Elided(parts))
-        } else {
-            Ok(HexParsed::Complete(bytes))
-        }
     }
-}
-
-enum HexParsed {
-    Complete(Vec<u8>),
-    Elided(Vec<ElidedStringPart>),
-}
-
-fn flush_hex_bytes(bytes: &mut Vec<u8>, parts: &mut Vec<ElidedStringPart>) {
-    if !bytes.is_empty() {
-        push_elided_part(parts, ElidedStringPart::Bytes(core::mem::take(bytes)));
+    if high.is_some() {
+        return Err(Error::Syntax(offset));
     }
+    Ok(bytes)
 }
 
 pub(super) fn base64_content(content: &str, offset: usize) -> Result<Vec<u8>, Error> {
     let mut filtered = Vec::new();
-    let mut chars = content.char_indices().peekable();
+    let mut chars = content.char_indices();
     while let Some((idx, ch)) = chars.next() {
         match ch {
             '\n' | ' ' => {}
             '#' => {
-                for (_, next) in chars.by_ref() {
+                for (i, next) in chars.by_ref() {
                     if next == '\n' {
                         break;
+                    }
+                    if next < ' ' {
+                        return Err(Error::Syntax(offset.saturating_sub(content.len()) + i));
                     }
                 }
             }

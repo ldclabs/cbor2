@@ -7,7 +7,9 @@
 //!
 //! ```rust
 //! let simple = cbor2::Simple::new(59).unwrap();
-//! assert_eq!(hex::encode(cbor2::to_vec(&simple).unwrap()), "f83b");
+//! let mut buf = [0; 2];
+//! assert_eq!(cbor2::to_slice(&simple, &mut buf).unwrap(), &[0xf8, 0x3b]);
+//! # #[cfg(feature = "alloc")]
 //! assert_eq!(cbor2::from_slice::<cbor2::Simple>(&[0xf8, 0x3b]).unwrap(), simple);
 //! ```
 

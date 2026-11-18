@@ -6,6 +6,10 @@ fn derive_consumer_fixtures() {
     use std::{path::Path, process::Command};
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let manifest = root.join("tests/derive-fixtures/Cargo.toml");
+    // Cargo omits nested packages from the published crate archive.
+    if !manifest.is_file() && root.join("Cargo.toml.orig").is_file() {
+        return;
+    }
     let target = root.join("target/derive-fixtures");
     for (binary, expected_error) in [
         ("pass", None),

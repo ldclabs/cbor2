@@ -65,13 +65,13 @@ let size = cbor2::serialized_size(&value)?;    // exact length, no output buffer
 cbor2::validate(&item[..])?;                   // well-formed? (incl. UTF-8)
 ```
 
-Here's the honest caveat, and it's worth saying plainly: **no serde-based CBOR crate can deserialize without a heap** — the deserializer needs a scratch buffer. cbor2 included. Only `minicbor`, which isn't serde-based, decodes typed values with no allocator. What cbor2 offers instead is its low-level `core::Decoder` pull API, which reads CBOR with zero allocation if you're willing to drive it by hand:
+cbor2’s serde decoder uses a heap-backed scratch buffer. For typed decoding without an allocator, `serde_cbor` accepts caller-provided scratch space and `minicbor` uses its own decoding traits. Within cbor2, I use `core::Decoder` to read items manually.
 
 ```rust
 use cbor2::core::{Decoder, Header};
 
 let mut dec = Decoder::from(&bytes[..]);
-let Header::Array(Some(n)) = dec.pull()? else { /* ... */ };
+let Header::Array(Some(n)) = dec.pull()? else { return Err("expected array".into()) };
 // pull headers; read string/byte bodies into your own &mut [u8]
 ```
 
@@ -79,17 +79,14 @@ So the no-alloc story is: zero-alloc encode, validate, and sizing through the hi
 
 ## Is it fast?
 
-Yes, but I'm not going to claim it's the fastest, because it isn't, and you'd check. I built a [detached benchmark workspace](https://github.com/ldclabs/cbor2/tree/main/cbor2-bench#results) that compares cbor2 against ciborium, serde_cbor, cbor4ii, and minicbor across all three deployment modes (`std`, `no_std + alloc`, `no_std + no_alloc`) on byte-identical payloads where possible, so the integer-array and byte-string rows are exact apples-to-apples.
-
-The honest summary: cbor2's encode and decode land in the top tier and beat ciborium across the board, but `serde_cbor` and `cbor4ii` edge it on some encode rows, and `minicbor` leads structured decode thanks to a more compact wire form. Where cbor2 is distinctly strong is `no_std + no_alloc` — fastest fixed-buffer encode of the serde crates, plus the `validate`/`serialized_size` primitives nobody else ships. (Building the suite turned up fun trivia too, like cbor4ii's decoder rejecting an `f32`-narrowed float for an `f64` field — so each crate decodes bytes it produced itself.)
+I built a detached benchmark workspace to compare fresh buffers, reused writers and fixed buffers on a host build. All five codecs produce identical bytes for the integer arrays and byte strings. The structured log records differ in layout and float width. The original measurements predate changes to the benchmark harness.
 
 The full capability matrix and per-scenario tables, with methodology, are in the [benchmark README](https://github.com/ldclabs/cbor2/tree/main/cbor2-bench#results).
 
 ## What it doesn't do
 
-- No typed decode without `alloc` (the serde-ecosystem reality above).
+- Typed serde decoding in cbor2 requires `alloc`.
 - It's brand new, so adoption is tiny and there are surely rough edges.
-- If you want the absolute fastest structured decode and can use a non-serde derive, `minicbor` is the better tool — and that's fine.
 
 ## Try it
 

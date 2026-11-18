@@ -183,18 +183,16 @@ fn utf8_across_chunk_boundaries() {
 #[test]
 fn io_errors_propagate() {
     use crate::util::FailReader;
-    use std::io::Read;
 
     // A failure while reading the item is an I/O error...
     assert!(matches!(
-        cbor2::validate(FailReader),
+        cbor2::validate(FailReader(&[])),
         Err(cbor2::de::Error::Io(..))
     ));
 
     // ...and so is a failure while probing for trailing data.
-    let reader = (&[0x01u8][..]).chain(FailReader);
     assert!(matches!(
-        cbor2::validate(reader),
+        cbor2::validate(FailReader(&[1])),
         Err(cbor2::de::Error::Io(..))
     ));
 }

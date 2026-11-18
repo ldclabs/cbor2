@@ -5,18 +5,18 @@ use alloc::{
     vec::Vec,
 };
 
-use crate::core::{f64_to_f32, tag, Encoder, Header};
+use crate::core::{f64_to_f16, f64_to_f32, tag, Encoder, Header};
 use crate::de::{Error, DEFAULT_RECURSION_LIMIT};
 
 use super::applications::{
-    append_indefinite_string_chunk, base64_content, concat_app_strings, concat_bytes, hex_atom,
-    one_bytes_arg, one_text_arg, same_args, unresolved_app_sequence,
+    append_indefinite_string_chunk, base64_content, concat_strings, hex_content, one_bytes_arg,
+    one_text_arg, same_args,
 };
 #[cfg(feature = "cdn-cri")]
 use super::cri::cri_atom;
 use super::datetime::datetime_atom;
-use super::encode::{ellipsis_item, write_definite_bytes, write_definite_text, write_uint};
-use super::float::{f64_to_f16_preserving, float_atom};
+use super::encode::{write_definite_bytes, write_definite_text, write_uint};
+use super::float::float_atom;
 #[cfg(feature = "cdn-hash")]
 use super::hash::{hash_args, hash_atom};
 use super::ip::ip_atom;
@@ -135,48 +135,29 @@ impl<'a> Parser<'a> {
         let start = self.pos;
 
         loop {
-            let before = self.pos;
             while matches!(self.peek(), Some('\t' | '\n' | ' ')) {
                 self.bump();
             }
 
-            if self.eat("//") || self.eat("#") {
-                while let Some(ch) = self.bump() {
-                    if ch == '\n' {
-                        break;
-                    }
-                }
-                continue;
-            }
-
-            if self.eat("/*") {
-                let Some(end) = self.rest().find("*/") else {
-                    return Err(self.syntax());
-                };
-                self.pos += end + 2;
-                continue;
-            }
-
-            if self.starts_with("/") {
-                let mut chars = self.rest().chars();
-                let _slash = chars.next();
-                let Some(next) = chars.next() else {
-                    return Err(self.syntax());
-                };
-                if next == '/' || next == '*' {
-                    return Err(self.syntax());
-                }
-                self.bump();
-                let Some(end) = self.rest().find('/') else {
-                    return Err(self.syntax());
-                };
-                self.pos += end + 1;
-                continue;
-            }
-
-            if self.pos == before {
+            let close = if self.eat("#") {
+                "\n"
+            } else if self.eat("/*") {
+                "*/"
+            } else if self.starts_with("//") {
+                return Err(self.syntax());
+            } else if self.eat("/") {
+                "/"
+            } else {
                 break;
+            };
+            let end = self.rest().find(close).ok_or_else(|| self.syntax())?;
+            if let Some(invalid) = self.rest()[..end]
+                .bytes()
+                .position(|b| b < b' ' && b != b'\t' && b != b'\n')
+            {
+                return Err(Error::Syntax(self.pos + invalid));
             }
+            self.pos += end + close.len();
         }
 
         Ok(self.pos != start)
@@ -186,7 +167,7 @@ impl<'a> Parser<'a> {
         self.consume_ws().map(|_| ())
     }
 
-    fn parse_spec(&mut self) -> Indicator<'a> {
+    fn parse_spec(&mut self) -> Indicator {
         if !self.eat("_") {
             return Indicator::None;
         }
@@ -202,7 +183,7 @@ impl<'a> Parser<'a> {
             "1" => Indicator::Ai(1),
             "2" => Indicator::Ai(2),
             "3" => Indicator::Ai(3),
-            other => Indicator::Other(other),
+            _ => Indicator::Reserved,
         }
     }
 
@@ -274,41 +255,29 @@ impl<'a> Parser<'a> {
         match ch {
             '[' => self.array(out, depth - 1),
             '{' => self.map(out, depth - 1),
-            '"' => {
-                let atom = Atom::Text(self.quoted_string('"')?);
-                let spec = self.parse_spec();
-                self.emit_atom(out, atom, spec)
-            }
-            '\'' => {
-                let atom = Atom::Bytes(self.quoted_string('\'')?.into_bytes());
-                let spec = self.parse_spec();
-                self.emit_atom(out, atom, spec)
-            }
-            '`' => {
-                let atom = Atom::Text(self.raw_string()?);
-                let spec = self.parse_spec();
-                self.emit_atom(out, atom, spec)
-            }
-            '<' if self.starts_with("<<") => {
-                self.expect("<<")?;
-                let bytes = self.sequence_to_vec(Some(">>"), depth - 1)?;
-                let atom = Atom::Bytes(bytes);
+            '"' | '\'' | '`' | '<' => {
+                let atom = self.string_atom(ch, depth - 1)?;
                 let spec = self.parse_spec();
                 self.emit_atom(out, atom, spec)
             }
             '(' if self.starts_with("(_") => self.stream_string(out, depth - 1),
-            '.' if self.starts_with("...") => {
-                self.ellipsis();
-                self.emit_atom(out, Atom::Raw(ellipsis_item()), Indicator::None)
-            }
-            '+' | '-' | '.' | '0'..='9' => self.number_or_tag(out, depth - 1),
+            '-' | '.' | '0'..='9' => self.number_or_tag(out, depth - 1),
             'A'..='Z' | 'a'..='z' => self.word_item(out, depth - 1),
             _ => Err(self.syntax()),
         }
     }
 
-    fn ellipsis(&mut self) {
-        while self.eat(".") {}
+    fn string_atom(&mut self, ch: char, depth: usize) -> Result<Atom, Error> {
+        match ch {
+            '"' => self.quoted_string('"').map(Atom::Text),
+            '\'' => Ok(Atom::Bytes(self.quoted_string('\'')?.into_bytes())),
+            '`' => self.raw_string().map(Atom::Text),
+            '<' => {
+                self.expect("<<")?;
+                self.sequence_to_vec(Some(">>"), depth).map(Atom::Bytes)
+            }
+            _ => Err(self.syntax()),
+        }
     }
 
     fn array(&mut self, out: &mut Vec<u8>, depth: usize) -> Result<(), Error> {
@@ -376,65 +345,49 @@ impl<'a> Parser<'a> {
             return Err(self.syntax());
         }
 
-        let mut chunks = Vec::new();
-        let mut major = None;
+        if depth == 0 {
+            return Err(Error::RecursionLimitExceeded);
+        }
+        // Revision 29 retains this spelling for string literals, including
+        // the base-encoded bytes in its examples. Use ilbs/ilts to specify
+        // an individual chunk's encoded width.
+        let header = out.len();
+        out.push(0);
         loop {
-            // The grammar admits an ellipsis where a chunk may stand, but no
-            // semantics are defined for eliding chunks of an
-            // indefinite-length string (cf. the ilbs/ilts extensions).
-            if self.starts_with("...") {
-                return Err(self.semantic("ellipsis is not supported as a stream string chunk"));
-            }
-            let mut chunk = Vec::new();
-            self.item(&mut chunk, depth)?;
-            let Some(&head) = chunk.first() else {
-                return Err(self.syntax());
-            };
-            let chunk_major = head >> 5;
-            let is_definite_string = matches!(chunk_major, 2 | 3) && (head & 0x1f) != 31;
-            if !is_definite_string {
-                return Err(self.semantic("stream string chunks must be definite strings"));
-            }
-            match major {
-                Some(m) if m != chunk_major => {
-                    return Err(self.semantic("stream string chunks must have one type"));
+            let ch = self.peek().ok_or_else(|| self.syntax())?;
+            let atom = if matches!(ch, 'h' | 'b') {
+                let prefix = self.app_prefix()?;
+                if !matches!(prefix, "h" | "b64") {
+                    return Err(self.syntax());
                 }
-                None => major = Some(chunk_major),
-                _ => {}
+                self.prefixed(prefix, depth - 1)?
+            } else {
+                self.string_atom(ch, depth - 1)?
+            };
+            let indefinite_header = match atom {
+                Atom::Bytes(_) => 0x5f,
+                Atom::Text(_) => 0x7f,
+                _ => return Err(self.semantic("stream string chunks must be strings")),
+            };
+            if out[header] != 0 && out[header] != indefinite_header {
+                return Err(self.semantic("stream string chunks must have one type"));
             }
-            chunks.extend_from_slice(&chunk);
-
+            out[header] = indefinite_header;
+            self.emit_atom(out, atom, Indicator::None)?;
             if self.list_end(Some(")"))? {
                 break;
             }
         }
 
-        match major {
-            Some(2) => out.push(0x5f),
-            Some(3) => out.push(0x7f),
-            _ => return Err(self.syntax()),
-        }
-        out.extend_from_slice(&chunks);
         out.push(0xff);
         Ok(())
     }
 
     fn word_item(&mut self, out: &mut Vec<u8>, depth: usize) -> Result<(), Error> {
-        if self.keyword("false") {
-            let spec = self.parse_spec();
-            return self.emit_atom(out, Atom::Simple(20), spec);
-        }
-        if self.keyword("true") {
-            let spec = self.parse_spec();
-            return self.emit_atom(out, Atom::Simple(21), spec);
-        }
-        if self.keyword("null") {
-            let spec = self.parse_spec();
-            return self.emit_atom(out, Atom::Simple(22), spec);
-        }
-        if self.keyword("undefined") {
-            let spec = self.parse_spec();
-            return self.emit_atom(out, Atom::Simple(23), spec);
+        for (name, value) in [("false", 20), ("true", 21), ("null", 22), ("undefined", 23)] {
+            if self.keyword(name) {
+                return Ok(Encoder::from(out).simple(value)?);
+            }
         }
         if self.keyword("Infinity") {
             let spec = self.parse_spec();
@@ -444,40 +397,34 @@ impl<'a> Parser<'a> {
             let spec = self.parse_spec();
             return self.emit_atom(out, Atom::Float(f64::NAN), spec);
         }
-        if self.starts_with("simple") {
-            let save = self.pos;
-            self.pos += "simple".len();
-            if self.eat("(") {
-                self.skip_ws()?;
-                let n = self.dec_u64_no_leading()?;
-                self.skip_ws()?;
-                self.expect(")")?;
-                let simple =
-                    u8::try_from(n).map_err(|_| self.semantic("simple value must fit in u8"))?;
-                if (24..=31).contains(&simple) {
-                    return Err(self.semantic("simple values 24 through 31 are reserved"));
-                }
-                let spec = self.parse_spec();
-                return self.emit_atom(out, Atom::Simple(simple), spec);
+        if self.eat("simple(") {
+            self.skip_ws()?;
+            let n = self.dec_u64_no_leading()?;
+            self.skip_ws()?;
+            self.expect(")")?;
+            let simple =
+                u8::try_from(n).map_err(|_| self.semantic("simple value must fit in u8"))?;
+            if (24..=31).contains(&simple) {
+                return Err(self.semantic("simple values 24 through 31 are reserved"));
             }
-            self.pos = save;
+            return Ok(Encoder::from(out).simple(simple)?);
         }
 
         let prefix = self.app_prefix()?;
+        let atom = self.prefixed(prefix, depth)?;
+        let spec = self.parse_spec();
+        self.emit_atom(out, atom, spec)
+    }
+
+    fn prefixed(&mut self, prefix: &str, depth: usize) -> Result<Atom, Error> {
         let argument_offset = self.pos;
-        let atom = if self.starts_with("<<") {
-            let args = self.sequence_args(depth)?;
-            self.apply_app_sequence(prefix, args)
-        } else if self.peek() == Some('\'') {
-            let content = self.quoted_string('\'')?;
-            self.apply_app_string(prefix, content)
-        } else if self.peek() == Some('`') {
-            let content = self.raw_string()?;
-            self.apply_app_string(prefix, content)
-        } else {
-            return Err(self.syntax());
-        }
-        .map_err(|error| {
+        let args = match self.peek() {
+            Some('<') => self.sequence_args(depth)?,
+            Some('\'') => alloc::vec![Arg::Text(self.quoted_string('\'')?)],
+            Some('`') => alloc::vec![Arg::Text(self.raw_string()?)],
+            _ => return Err(self.syntax()),
+        };
+        self.apply_app_sequence(prefix, args).map_err(|error| {
             // Extensions work on decoded strings or computed CBOR values,
             // whose offsets are not source offsets. Locate evaluation errors
             // at the argument's opening delimiter; parse errors above keep
@@ -487,9 +434,7 @@ impl<'a> Parser<'a> {
                 Error::Semantic(_, message) => Error::semantic(argument_offset, message),
                 other => other,
             }
-        })?;
-        let spec = self.parse_spec();
-        self.emit_atom(out, atom, spec)
+        })
     }
 
     fn keyword(&mut self, word: &str) -> bool {
@@ -541,20 +486,18 @@ impl<'a> Parser<'a> {
 
         let start = self.pos;
         let lex = self.number_lexeme()?;
-        let unsigned_decimal_tag = is_tag_uint(lex);
         let spec = self.parse_spec();
 
-        if unsigned_decimal_tag && self.eat("(") {
+        if self.starts_with("(") && is_tag_uint(lex) {
+            self.pos += 1;
             let tag_number = lex
                 .parse::<u64>()
                 .map_err(|_| self.semantic("tag number must fit in u64"))?;
-            let mut body = Vec::new();
+            self.write_len(out, 6, tag_number, spec)?;
             self.skip_ws()?;
-            self.item(&mut body, depth)?;
+            self.item(out, depth)?;
             self.skip_ws()?;
             self.expect(")")?;
-            self.write_len(out, 6, tag_number, spec)?;
-            out.extend_from_slice(&body);
             return Ok(());
         }
 
@@ -564,9 +507,7 @@ impl<'a> Parser<'a> {
 
     fn number_lexeme(&mut self) -> Result<&'a str, Error> {
         let start = self.pos;
-        if matches!(self.peek(), Some('+' | '-')) {
-            self.bump();
-        }
+        self.eat("-");
 
         if self.eat("0x") || self.eat("0X") {
             let mut digits_before = 0usize;
@@ -624,22 +565,23 @@ impl<'a> Parser<'a> {
             return Ok(&self.input[start..self.pos]);
         }
 
-        let mut digits_before = 0usize;
+        let integer_start = self.pos;
         while self.peek().is_some_and(|ch| ch.is_ascii_digit()) {
-            digits_before += 1;
             self.bump();
         }
-
-        let has_dot = self.eat(".");
-        if has_dot {
+        let integer = &self.input[integer_start..self.pos];
+        if integer.len() > 1 && integer.starts_with('0') {
+            return Err(Error::Syntax(integer_start + 1));
+        }
+        if self.eat(".") {
+            let frac_start = self.pos;
             while self.peek().is_some_and(|ch| ch.is_ascii_digit()) {
                 self.bump();
             }
-        }
-        if digits_before == 0 && !has_dot {
-            return Err(self.syntax());
-        }
-        if digits_before == 0 && &self.input[start..self.pos] == "." {
+            if integer.is_empty() && self.pos == frac_start {
+                return Err(self.syntax());
+            }
+        } else if integer.is_empty() {
             return Err(self.syntax());
         }
 
@@ -804,8 +746,8 @@ impl<'a> Parser<'a> {
         let start = self.pos;
         while self.eat("`") {}
         let width = self.pos - start;
-        if width == 0 {
-            return Err(self.syntax());
+        if !(1..=8).contains(&width) {
+            return Err(Error::Syntax(start));
         }
         let delimiter = &self.input[start..self.pos];
         let content_start = self.pos;
@@ -815,6 +757,9 @@ impl<'a> Parser<'a> {
         let content_end = self.pos + end_rel;
         let mut content = &self.input[content_start..content_end];
         self.pos = content_end + width;
+        if self.starts_with("`") {
+            return Err(Error::Syntax(content_end));
+        }
 
         // Source CR is removed before parsing, so LF is the only newline.
         if content.is_empty()
@@ -833,10 +778,6 @@ impl<'a> Parser<'a> {
         Ok(content.to_string())
     }
 
-    fn apply_app_string(&self, prefix: &str, content: String) -> Result<Atom, Error> {
-        self.apply_app_sequence(prefix, alloc::vec![Arg::Text(content)])
-    }
-
     fn apply_app_sequence(&self, prefix: &str, args: Vec<Arg>) -> Result<Atom, Error> {
         match prefix {
             "dt" | "DT" => {
@@ -847,8 +788,7 @@ impl<'a> Parser<'a> {
                 let content = one_text_arg(prefix, args, self.pos)?;
                 ip_atom(&content, prefix == "IP", self.pos)
             }
-            "b1" | "t1" => concat_app_strings(prefix, args, self.pos),
-            "bytes" => concat_bytes(args, self.pos),
+            "b1" | "t1" | "bytes" => concat_strings(prefix, args, self.pos),
             "same" => same_args(args, self.pos),
             "ilbs" | "ilts" => {
                 let want_major = if prefix == "ilbs" { 2 } else { 3 };
@@ -862,12 +802,12 @@ impl<'a> Parser<'a> {
             }
             "float" => {
                 let bytes = one_bytes_arg(prefix, args, self.pos)?;
-                float_atom(bytes, self.pos)
+                float_atom(&bytes, self.pos)
             }
             "h" | "b64" => {
                 let content = one_text_arg(prefix, args, self.pos)?;
                 if prefix == "h" {
-                    hex_atom(&content, self.pos)
+                    hex_content(&content, self.pos).map(Atom::Bytes)
                 } else {
                     Ok(Atom::Bytes(base64_content(&content, self.pos)?))
                 }
@@ -882,11 +822,15 @@ impl<'a> Parser<'a> {
                 let content = one_text_arg(prefix, args, self.pos)?;
                 cri_atom(&content, prefix == "CRI", self.pos)
             }
-            _ => unresolved_app_sequence(prefix, args),
+            #[cfg(not(feature = "cdn-hash"))]
+            "hash" => Err(self.semantic("hash requires the cdn-hash feature")),
+            #[cfg(not(feature = "cdn-cri"))]
+            "cri" | "CRI" => Err(self.semantic("CRI literals require the cdn-cri feature")),
+            _ => Err(self.semantic(format!("unsupported CDN application extension `{prefix}`"))),
         }
     }
 
-    fn emit_atom(&self, out: &mut Vec<u8>, atom: Atom, spec: Indicator<'a>) -> Result<(), Error> {
+    fn emit_atom(&self, out: &mut Vec<u8>, atom: Atom, spec: Indicator) -> Result<(), Error> {
         match atom {
             Atom::Integer { negative, argument } => {
                 self.write_len(out, u8::from(negative), argument, spec)
@@ -901,14 +845,6 @@ impl<'a> Parser<'a> {
                 write_definite_bytes(out, &argument, Indicator::None)
             }
             Atom::Float(x) => self.write_float(out, x, spec),
-            Atom::FloatRaw { bytes, value } => {
-                if spec == Indicator::None {
-                    out.extend_from_slice(&bytes);
-                    Ok(())
-                } else {
-                    self.write_float(out, value, spec)
-                }
-            }
             Atom::Bytes(x) => {
                 if spec == Indicator::Indefinite {
                     if !x.is_empty() {
@@ -933,7 +869,6 @@ impl<'a> Parser<'a> {
                 }
                 write_definite_text(out, &x, spec)
             }
-            Atom::Simple(x) => self.write_simple(out, x, spec),
             Atom::Raw(x) => {
                 out.extend_from_slice(&x);
                 Ok(())
@@ -941,15 +876,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn write_float(&self, out: &mut Vec<u8>, value: f64, spec: Indicator<'a>) -> Result<(), Error> {
+    fn write_float(&self, out: &mut Vec<u8>, value: f64, spec: Indicator) -> Result<(), Error> {
         match spec {
-            Indicator::None | Indicator::Other(..) | Indicator::Indefinite => {
+            Indicator::None | Indicator::Reserved | Indicator::Indefinite => {
                 Encoder::from(out).push(Header::Float(value))?;
                 Ok(())
             }
             Indicator::Immediate => Err(self.semantic("float cannot use `_i` encoding indicator")),
             Indicator::Ai(1) => {
-                let bits = f64_to_f16_preserving(value)
+                let bits = f64_to_f16(value)
                     .ok_or_else(|| self.semantic("float cannot be represented as binary16"))?;
                 out.push(0xf9);
                 out.extend_from_slice(&bits.to_be_bytes());
@@ -973,35 +908,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn write_simple(&self, out: &mut Vec<u8>, value: u8, spec: Indicator<'a>) -> Result<(), Error> {
-        match spec {
-            Indicator::None | Indicator::Other(..) | Indicator::Indefinite => {
-                Encoder::from(out).push(Header::Simple(value))?;
-                Ok(())
-            }
-            Indicator::Immediate if value <= 23 => {
-                Encoder::from(out).push(Header::Simple(value))?;
-                Ok(())
-            }
-            Indicator::Immediate => Err(self.semantic("simple value does not fit `_i`")),
-            Indicator::Ai(0) if value >= 32 => {
-                out.extend_from_slice(&[0xf8, value]);
-                Ok(())
-            }
-            Indicator::Ai(0) => {
-                Err(self
-                    .semantic("two-byte encodings of simple values below 32 are not well-formed"))
-            }
-            Indicator::Ai(..) => Err(self.semantic("simple values only support `_i` or `_0`")),
-        }
-    }
-
     fn write_len(
         &self,
         out: &mut Vec<u8>,
         major: u8,
         value: u64,
-        spec: Indicator<'a>,
+        spec: Indicator,
     ) -> Result<(), Error> {
         write_uint(out, major, value, spec)
             .map_err(|msg| Error::semantic(self.pos, msg.to_string()))

@@ -105,7 +105,7 @@ impl RawValue {
 
     /// Encodes any serializable value into a raw item.
     pub fn serialized<T: ?Sized + ser::Serialize>(value: &T) -> Result<Self, crate::ser::Error> {
-        Ok(Self(crate::to_vec(value)?))
+        Self::new(crate::to_vec(value)?).map_err(ser::Error::custom)
     }
 
     /// Decodes the raw item into any deserializable type.

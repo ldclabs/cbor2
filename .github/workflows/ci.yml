@@ -22,7 +22,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
-      - run: cargo build --workspace --all-targets --all-features
       - run: cargo test --workspace --all-targets --all-features
       - run: cargo test --workspace --all-features --doc
       - run: cargo test -p cbor2 --release --all-features --test it audit_regressions
@@ -84,10 +83,13 @@ jobs:
           components: clippy
           targets: thumbv7em-none-eabihf
       # A bare-metal target proves no std dependency leaks in; the host
-      # build runs the feature-gated unit tests.
+      # build runs the tests and examples available with this feature set.
       - run: cargo build --no-default-features ${{ matrix.feature_args }} --target thumbv7em-none-eabihf
-      - run: cargo test --lib --no-default-features ${{ matrix.feature_args }}
-      - run: cargo clippy --no-default-features ${{ matrix.feature_args }} -- -Dwarnings
+      - run: cargo test -p cbor2 --no-default-features ${{ matrix.feature_args }}
+      - run: cargo clippy -p cbor2 --all-targets --no-default-features ${{ matrix.feature_args }} -- -Dwarnings
+      - run: cargo doc -p cbor2 --no-deps --no-default-features ${{ matrix.feature_args }}
+        env:
+          RUSTDOCFLAGS: -Dwarnings
       - if: matrix.name == 'alloc,derive'
         run: cargo check --manifest-path tests/derive-fixtures/Cargo.toml --lib --no-default-features --target thumbv7em-none-eabihf
 
@@ -121,6 +123,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --no-deps --all-features
+      - run: cargo doc --workspace --no-deps --all-features
         env:
           RUSTDOCFLAGS: -Dwarnings

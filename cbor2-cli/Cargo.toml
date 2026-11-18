@@ -21,6 +21,7 @@ bench = false
 
 [dependencies]
 num-bigint = "0.4"
-cbor2 = { path = "..", version = "1" }
+# The CLI exposes the runtime’s CDN revision 29 parser and renderer.
+cbor2 = { path = "..", version = "1.2.0" }
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
 serde = "1"

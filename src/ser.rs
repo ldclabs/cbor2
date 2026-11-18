@@ -1006,7 +1006,7 @@ impl<W: Write> ser::SerializeStructVariant for CollectionSerializer<'_, W> {
 /// With the `std` feature any `std::io::Write` is accepted; for repeated
 /// small writes consider wrapping the writer in a `std::io::BufWriter`.
 ///
-/// To encode into a new `Vec<u8>`, prefer [`to_vec`]: a `&mut Vec<u8>`
+/// To encode into a new `Vec<u8>`, prefer `to_vec`: a `&mut Vec<u8>`
 /// passed here goes through the generic `std::io::Write` impl, which
 /// cannot forward the capacity hints of [`Write::reserve`], while
 /// `to_vec` pre-reserves.
@@ -1122,9 +1122,10 @@ pub fn to_slice<'a, T: ?Sized + ser::Serialize>(
 /// implementation may allocate (for example, a derived flattened struct).
 ///
 /// ```rust
-/// let value = ("hello", 42u64, vec![1u8, 2, 3]);
+/// let value = ("hello", 42u64, [1u8, 2, 3]);
 /// let size = cbor2::serialized_size(&value).unwrap();
-/// assert_eq!(size as usize, cbor2::to_vec(&value).unwrap().len());
+/// let mut buffer = [0; 32];
+/// assert_eq!(size as usize, cbor2::to_slice(&value, &mut buffer).unwrap().len());
 /// ```
 pub fn serialized_size<T: ?Sized + ser::Serialize>(value: &T) -> Result<u64, Error> {
     let mut counter = ByteCounter(0);

@@ -4,19 +4,10 @@
 //! Diagnostic Notation (CDN) text for documentation and debugging. The
 //! historical `diagnostic*` function names are retained; the `to_cdn*` names
 //! are the explicit CDN-oriented aliases.
-//! The output of this module matches the diagnostic column of RFC 8949
-//! Appendix A exactly for ordinary items, including the extended forms of
-//! §8.1: the `_` marker for indefinite-length items and `(_ ...)` for
-//! segmented strings. Very large bignum payloads fall back to explicit
-//! tag/bytes notation to keep rendering bounded.
-//!
-//! The notation of RFC 8949 §8 is being formalized, and §8 obsoleted, by
-//! the IETF draft "Concise Diagnostic Notation" (CDN,
-//! `draft-ietf-cbor-edn-literals`). CDN is a backward-compatible superset
-//! that mostly adds input conveniences for hand-written notation (`0x`/
-//! `0o`/`0b` numbers, `b64'..'` byte strings, embedded CBOR `<<..>>`,
-//! comments and application-extension literals such as `dt'..'`). This
-//! module emits only the core forms, which remain valid CDN.
+//! The output follows `draft-ietf-cbor-edn-literals-29`. Indefinite arrays
+//! and maps use the `_` marker. Segmented byte and text strings use
+//! `ilbs<<...>>` and `ilts<<...>>` and retain their chunk boundaries.
+//! Very large bignums use explicit tag/bytes notation to bound rendering work.
 
 use alloc::{format, string::String, vec::Vec};
 use core::fmt::Write as _;
@@ -34,15 +25,13 @@ const BIGNUM_DECIMAL_BYTE_LIMIT: usize = 1024;
 /// Renders one CBOR item from a reader in diagnostic notation
 /// (RFC 8949 §8).
 ///
-/// Working directly on the wire preserves details that a decoded
-/// [`Value`] cannot represent: indefinite-length items are rendered with
-/// the `_` marker of §8.1 (`[_ 1, 2]`, `{_ "k": 1}`, `(_ h'01', h'02')`;
-/// an indefinite-length string with no chunks uses the CDN forms `''_`
-/// and `""_`, since `(_ )` could not carry the major type),
-/// `undefined` and unassigned simple values appear as themselves, and
-/// ordinary bignums (tags 2 and 3) are written as plain integers, exactly
-/// as in RFC 8949 Appendix A. Very large bignum payloads fall back to
-/// explicit tag/bytes notation.
+/// The wire renderer retains indefinite-length containers, string chunks,
+/// `undefined` and unassigned simple values. For example, two byte-string
+/// chunks can render as `ilbs<<h'01', h'02'>>`. An empty text stream renders
+/// as `ilts<<>>`, distinct from the single empty chunk `ilts<<"">>`.
+/// Ordinary bignums (tags 2 and 3) render as integers, as in RFC 8949
+/// Appendix A. Very large payloads use explicit tag/bytes notation.
+///
 ///
 /// Printable non-ASCII characters (e.g. CJK, emoji) are emitted
 /// directly for readability; control characters and invisible formatting
@@ -106,23 +95,18 @@ pub fn to_cdn_pretty<R: Read>(reader: R) -> Result<String, Error> {
 }
 
 /// Like [`diagnostic_pretty`], but annotates integer map keys with matching
-/// string keys as `// "key"` comments.
+/// string keys as `# "key"` comments.
 ///
 /// The `keys` table uses the same shape as [`Cbor::KEYS`](crate::Cbor::KEYS):
 /// `(string_key, integer_key)`. The renderer still works directly on the wire;
 /// it only adds comments for integer map keys that match the table.
-///
-/// The `// ...` form is an end-of-line comment in CDN
-/// (`draft-ietf-cbor-edn-literals`); RFC 8610 Appendix G instead used
-/// slash-delimited `/ ... /` comments and read `//` as an empty comment, so
-/// this output assumes the newer CDN reading.
 ///
 /// ```rust
 /// let bytes = hex::decode("a201626d6504182a").unwrap();
 /// let keys = [("iss", 1), ("exp", 4)];
 /// assert_eq!(
 ///     cbor2::diagnostic_pretty_with_key_comments(&bytes[..], &keys).unwrap(),
-///     "{\n  1: \"me\", // \"iss\"\n  4: 42 // \"exp\"\n}"
+///     "{\n  1: \"me\", # \"iss\"\n  4: 42 # \"exp\"\n}"
 /// );
 /// ```
 pub fn diagnostic_pretty_with_key_comments<R: Read>(
@@ -133,7 +117,7 @@ pub fn diagnostic_pretty_with_key_comments<R: Read>(
 }
 
 /// Like [`to_cdn_pretty`], but annotates integer map keys with matching
-/// string keys as `// "key"` comments.
+/// string keys as `# "key"` comments.
 ///
 /// This is the CDN-named alias of
 /// [`diagnostic_pretty_with_key_comments`].
@@ -254,71 +238,30 @@ fn item_header<'a, R: Read>(
             Ok(())
         }
 
-        Header::Bytes(len) => match len {
-            Some(len) => hex_segment(decoder, out, len),
-            None => {
-                let mut first = true;
-                loop {
-                    let offset = decoder.offset();
-                    match decoder.pull()? {
-                        Header::Break => {
-                            // With no chunk to carry the major type, `(_ )`
-                            // would be ambiguous between a byte and a text
-                            // string; CDN reserves `''_` for this encoding.
-                            if first {
-                                out.push_str("''_");
-                            } else {
-                                out.push(')');
-                            }
-                            return Ok(());
-                        }
-                        Header::Bytes(Some(len)) => {
-                            if first {
-                                out.push_str("(_ ");
-                            } else {
-                                out.push_str(", ");
-                            }
-                            first = false;
-                            hex_segment(decoder, out, len)?;
-                        }
-                        _ => return Err(Error::Syntax(offset)),
-                    }
+        Header::Bytes(Some(len)) => hex_segment(decoder, out, len),
+        Header::Text(Some(len)) => text_segment(decoder, out, len),
+        Header::Bytes(None) | Header::Text(None) => {
+            let text = header == Header::Text(None);
+            out.push_str(if text { "ilts<<" } else { "ilbs<<" });
+            let mut first = true;
+            loop {
+                let offset = decoder.offset();
+                let chunk = decoder.pull()?;
+                if chunk == Header::Break {
+                    out.push_str(">>");
+                    return Ok(());
+                }
+                if !first {
+                    out.push_str(", ");
+                }
+                first = false;
+                match chunk {
+                    Header::Text(Some(len)) if text => text_segment(decoder, out, len)?,
+                    Header::Bytes(Some(len)) if !text => hex_segment(decoder, out, len)?,
+                    _ => return Err(Error::Syntax(offset)),
                 }
             }
-        },
-
-        Header::Text(len) => match len {
-            Some(len) => text_segment(decoder, out, len),
-            None => {
-                let mut first = true;
-                loop {
-                    let offset = decoder.offset();
-                    match decoder.pull()? {
-                        Header::Break => {
-                            // See the byte-string arm: CDN reserves `""_`
-                            // for the empty indefinite-length text string.
-                            if first {
-                                out.push_str("\"\"_");
-                            } else {
-                                out.push(')');
-                            }
-                            return Ok(());
-                        }
-                        Header::Text(Some(len)) => {
-                            if first {
-                                out.push_str("(_ ");
-                            } else {
-                                out.push_str(", ");
-                            }
-                            first = false;
-                            text_segment(decoder, out, len)?;
-                        }
-                        _ => return Err(Error::Syntax(offset)),
-                    }
-                }
-            }
-        },
-
+        }
         Header::Array(len) => match (len, indent) {
             (Some(0), _) => {
                 out.push_str("[]");
@@ -588,7 +531,7 @@ fn key_comment<'a>(header: Header, key_comments: Option<&'a [(&'a str, i128)]>) 
 }
 
 fn push_key_comment(out: &mut String, name: &str) {
-    out.push_str(" // \"");
+    out.push_str(" # \"");
     escape_into(out, name);
     out.push('"');
 }

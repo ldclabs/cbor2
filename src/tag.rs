@@ -5,6 +5,7 @@
 //! serializers and deserializers in this crate understand:
 //!
 //! ```rust
+//! # #[cfg(feature = "alloc")] {
 //! use cbor2::tag::RequireExact;
 //!
 //! // Tag 0: a date/time string.
@@ -15,6 +16,7 @@
 //!
 //! let back: RequireExact<String, 0> = cbor2::from_slice(&bytes).unwrap();
 //! assert_eq!(back, datetime);
+//! # }
 //! ```
 //!
 //! Note that these types are only meaningful with the CBOR serializer and
@@ -167,6 +169,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Internal<T> {
 /// during serialization.
 ///
 /// ```rust
+/// # #[cfg(feature = "alloc")] {
 /// use cbor2::tag::AllowAny;
 ///
 /// let tagged = hex::decode("c11a514b67b0").unwrap(); // 1(1363896240)
@@ -175,6 +178,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Internal<T> {
 ///
 /// let untagged: AllowAny<u64> = cbor2::from_slice(&cbor2::to_vec(&7u64).unwrap()).unwrap();
 /// assert_eq!(untagged, AllowAny(None, 7));
+/// # }
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AllowAny<V>(pub Option<u64>, pub V);
@@ -256,6 +260,7 @@ impl<V: Serialize> Serialize for RequireAny<V> {
 /// The tag is always emitted during serialization.
 ///
 /// ```rust
+/// # #[cfg(feature = "alloc")] {
 /// use cbor2::tag::RequireExact;
 ///
 /// type DateTime = RequireExact<String, 0>;
@@ -264,6 +269,7 @@ impl<V: Serialize> Serialize for RequireAny<V> {
 /// let bytes = cbor2::to_vec(&datetime).unwrap();
 /// assert_eq!(hex::encode(&bytes), "c074323031332d30332d32315432303a30343a30305a");
 /// assert!(cbor2::from_slice::<DateTime>(&cbor2::to_vec(&"plain").unwrap()).is_err());
+/// # }
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequireExact<V, const TAG: u64>(pub V);

@@ -179,13 +179,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cbor2::diagnostic_pretty_with_key_comments(&bytes[..], Claims::KEYS)?
     );
     // 61({
-    //   1: "coap://as.example.com", // "iss"
-    //   2: "erikw", // "sub"
-    //   3: "coap://light.example.com", // "aud"
-    //   4: 1444064944, // "exp"
-    //   5: 1443944944, // "nbf"
-    //   6: 1443944944, // "iat"
-    //   7: h'0b71' // "cti"
+    //   1: "coap://as.example.com", # "iss"
+    //   2: "erikw", # "sub"
+    //   3: "coap://light.example.com", # "aud"
+    //   4: 1444064944, # "exp"
+    //   5: 1443944944, # "nbf"
+    //   6: 1443944944, # "iat"
+    //   7: h'0b71' # "cti"
     // })
 
     // The same type decodes both the tagged claim set and an untagged one
@@ -229,8 +229,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cbor2::diagnostic_pretty_with_key_comments(&minimal_bytes[..], Claims::KEYS)?
     );
     // 61({
-    //   1: "me", // "iss"
-    //   4: 1444064944 // "exp"
+    //   1: "me", # "iss"
+    //   4: 1444064944 # "exp"
     // })
     assert_eq!(
         serde_json::to_string(&minimal)?,

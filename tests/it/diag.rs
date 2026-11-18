@@ -11,18 +11,27 @@ fn diag(hex: &str) -> String {
 
 fn pretty_with_key_comments(hex: &str, keys: &[(&str, i128)]) -> String {
     let bytes = hex::decode(hex).unwrap();
-    cbor2::diagnostic_pretty_with_key_comments(&bytes[..], keys).unwrap()
+    let text = cbor2::diagnostic_pretty_with_key_comments(&bytes[..], keys).unwrap();
+    assert_eq!(cbor2::cdn_to_vec(&text).unwrap(), bytes);
+    text
 }
 
 #[test]
 fn beyond_the_appendix() {
-    // Empty indefinite forms. `(_ )` could not carry a chunkless string's
-    // major type, so CDN reserves the `''_` and `""_` spellings instead.
+    // Chunkless strings remain distinguishable from one empty chunk.
     assert_eq!(diag("bfff"), "{_ }");
-    assert_eq!(diag("5fff"), "''_");
-    assert_eq!(diag("7fff"), "\"\"_");
-    assert_eq!(diag("5f40ff"), "(_ h'')");
-    assert_eq!(diag("7f60ff"), "(_ \"\")");
+    for (hex, expected) in [
+        ("5fff", "ilbs<<>>"),
+        ("7fff", "ilts<<>>"),
+        ("5f40ff", "ilbs<<h''>>"),
+        ("7f60ff", r#"ilts<<"">>"#),
+    ] {
+        assert_eq!(diag(hex), expected);
+        assert_eq!(
+            cbor2::cdn_to_vec(expected).unwrap(),
+            hex::decode(hex).unwrap()
+        );
+    }
 
     // More simple values. (Two-byte encodings below 32 are not
     // well-formed, so simple(24)..=simple(31) cannot appear at all.)
@@ -154,7 +163,7 @@ fn malformed_input_is_rejected() {
 
     // I/O failures surface as such.
     assert!(matches!(
-        cbor2::diagnostic(FailReader),
+        cbor2::diagnostic(FailReader(&[])),
         Err(cbor2::de::Error::Io(..))
     ));
 }
@@ -163,22 +172,22 @@ fn malformed_input_is_rejected() {
 fn pretty_diagnostic_can_comment_integer_keys() {
     assert_eq!(
         pretty_with_key_comments("d83da201626d650442dead", &[("iss", 1), ("cti", 4)]),
-        "61({\n  1: \"me\", // \"iss\"\n  4: h'dead' // \"cti\"\n})"
+        "61({\n  1: \"me\", # \"iss\"\n  4: h'dead' # \"cti\"\n})"
     );
 
     assert_eq!(
         pretty_with_key_comments("bf20636e6567ff", &[("neg", -1)]),
-        "{_\n  -1: \"neg\" // \"neg\"\n}"
+        "{_\n  -1: \"neg\" # \"neg\"\n}"
     );
 
     assert_eq!(
         pretty_with_key_comments("bf01bf0203ff046178ff", &[("outer", 1), ("inner", 2)]),
-        "{_\n  1: {_\n    2: 3 // \"inner\"\n  }, // \"outer\"\n  4: \"x\"\n}"
+        "{_\n  1: {_\n    2: 3 # \"inner\"\n  }, # \"outer\"\n  4: \"x\"\n}"
     );
 
     assert_eq!(
         pretty_with_key_comments("a12001", &[("line\n\"", -1)]),
-        "{\n  -1: 1 // \"line\\n\\\"\"\n}"
+        "{\n  -1: 1 # \"line\\n\\\"\"\n}"
     );
 }
 

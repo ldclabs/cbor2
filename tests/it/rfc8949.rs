@@ -1,8 +1,8 @@
 //! The test vectors from RFC 8949 Appendix A.
 //!
 //! Every vector is decoded into a `Value` through the slice and reader paths
-//! and compared against the expected item, and rendered as the appendix's
-//! diagnostic notation, which reads back as the same item. Vectors that are
+//! and compared against the expected item, and rendered as CDN. The appendix notation
+//! and current CDN both read back as the same item. Vectors that are
 //! in the preferred serialization are also encoded back byte for byte.
 
 use cbor2::{cbor, Value};
@@ -240,11 +240,17 @@ fn diagnostic_notation() {
     let vectors = vectors();
     for (hex, text) in vectors.iter().map(|v| (v.hex, v.diag)).chain(rows) {
         let bytes = hex::decode(hex).unwrap();
-        assert_eq!(cbor2::diagnostic(&bytes[..]).unwrap(), text, "0x{hex}");
+        let rendered = match hex {
+            "5f42010243030405ff" => "ilbs<<h'0102', h'030405'>>",
+            "7f657374726561646d696e67ff" => r#"ilts<<"strea", "ming">>"#,
+            _ => text,
+        };
+        assert_eq!(cbor2::diagnostic(&bytes[..]).unwrap(), rendered, "0x{hex}");
 
         // Parsing the text yields the same item, in preferred form unless
         // the notation keeps an indefinite length.
         let parsed = cbor2::cdn_to_vec(text).unwrap();
+        assert_eq!(cbor2::cdn_to_vec(rendered).unwrap(), parsed, "{rendered}");
         let item = |bytes: &[u8]| cbor2::to_vec(&cbor2::from_slice::<Value>(bytes).unwrap());
         assert_eq!(item(&parsed).unwrap(), item(&bytes).unwrap(), "{text}");
         if text.contains('_') {

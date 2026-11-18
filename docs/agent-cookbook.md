@@ -295,7 +295,7 @@ let bytes = cbor2::to_canonical_vec(&Claims {
 let diag = cbor2::to_cdn_pretty_with_key_comments(&bytes[..], Claims::KEYS).unwrap();
 assert_eq!(
     diag,
-    "61({\n  1: \"me\", // \"iss\"\n  4: 1444064944 // \"exp\"\n})"
+    "61({\n  1: \"me\", # \"iss\"\n  4: 1444064944 # \"exp\"\n})"
 );
 ```
 

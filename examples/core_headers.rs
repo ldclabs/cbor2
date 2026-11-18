@@ -1,18 +1,9 @@
 use cbor2::core::{Decoder, Encoder, Header};
 
-fn pull_text<R: std::io::Read>(dec: &mut Decoder<R>) -> Result<String, Box<dyn std::error::Error>> {
-    let Header::Text(len) = dec.pull()? else {
-        return Err("expected text header".into());
-    };
-
-    let mut out = String::new();
-    dec.text_body(len, &mut out)?;
-    Ok(out)
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut bytes = Vec::new();
-    let mut enc = Encoder::from(&mut bytes);
+    let mut buffer = [0; 32];
+    let mut remaining = buffer.as_mut_slice();
+    let mut enc = Encoder::from(&mut remaining);
 
     enc.push(Header::Map(Some(2)))?;
     enc.text("status")?;
@@ -24,21 +15,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     enc.push(Header::Break)?;
     enc.flush()?;
 
-    println!("{}", cbor2::diagnostic(&bytes[..])?);
+    let unused = remaining.len();
+    let bytes = &buffer[..buffer.len() - unused];
+    #[cfg(feature = "alloc")]
+    println!("{}", cbor2::diagnostic(bytes)?);
 
-    let mut dec = Decoder::from(&bytes[..]);
+    let mut dec = Decoder::from(bytes);
     assert_eq!(dec.pull()?, Header::Map(Some(2)));
+    for expected in ["status", "ok", "data"] {
+        assert_eq!(dec.pull()?, Header::Text(Some(expected.len())));
+        let mut text = [0; 6];
+        dec.read_exact(&mut text[..expected.len()])?;
+        assert_eq!(&text[..expected.len()], expected.as_bytes());
+    }
 
-    assert_eq!(pull_text(&mut dec)?, "status");
-    assert_eq!(pull_text(&mut dec)?, "ok");
-    assert_eq!(pull_text(&mut dec)?, "data");
-
-    let Header::Bytes(len) = dec.pull()? else {
-        return Err("expected bytes header".into());
-    };
-    let mut body = Vec::new();
-    dec.bytes_body(len, &mut body)?;
-    assert_eq!(body, vec![0xde, 0xad, 0xbe, 0xef]);
-
+    assert_eq!(dec.pull()?, Header::Bytes(None));
+    let mut body = [0; 4];
+    for chunk in body.chunks_mut(2) {
+        assert_eq!(dec.pull()?, Header::Bytes(Some(chunk.len())));
+        dec.read_exact(chunk)?;
+    }
+    assert_eq!(dec.pull()?, Header::Break);
+    assert_eq!(body, [0xde, 0xad, 0xbe, 0xef]);
     Ok(())
 }

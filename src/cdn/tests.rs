@@ -39,7 +39,7 @@ fn assert_hex(input: &str, expected: &str) {
 fn parses_json_superset_core_items() {
     assert_eq!(hex("0"), "00");
     assert_eq!(hex("-0"), "00");
-    assert_eq!(hex("+0x1267"), "191267");
+    assert_eq!(hex("0x1267"), "191267");
     assert_eq!(hex("0o11147"), "191267");
     assert_eq!(hex("0b1001001100111"), "191267");
     assert_eq!(hex("-18446744073709551617"), "c349010000000000000000");
@@ -51,7 +51,7 @@ fn parses_json_superset_core_items() {
     assert_eq!(hex("NaN"), "f97e00");
     assert_eq!(hex("false"), "f4");
     assert_eq!(hex("undefined"), "f7");
-    assert_eq!(hex("simple(23)_i"), "f7");
+    assert_eq!(hex("simple(23)"), "f7");
     assert_eq!(hex("simple(59)"), "f83b");
 }
 
@@ -101,8 +101,6 @@ fn honors_encoding_indicators() {
     assert_eq!(hex("Infinity_3"), "fb7ff0000000000000");
     assert_eq!(hex("''_"), "5fff");
     assert_eq!(hex("\"\"_"), "7fff");
-    assert_eq!(hex("unknown'foo'_3"), "d903e78267756e6b6e6f776e8163666f6f");
-    assert_eq!(hex("h'4711...0815'_2"), "d9037883424711d90378f6420815");
     assert_eq!(hex("ilbs<<>>_1"), "5fff");
 }
 
@@ -208,19 +206,35 @@ fn parses_hash_and_cri_extensions() {
 }
 
 #[test]
-fn represents_elisions_and_unknown_app_extensions() {
-    assert_eq!(hex("..."), "d90378f6");
-    assert_eq!(hex("h'4711...0815'"), "d9037883424711d90378f6420815");
-    assert_eq!(
-        hex(r#"b1<<'Hello', ..., 'world'>>"#),
-        "d90378834548656c6c6fd90378f645776f726c64"
-    );
-    assert_eq!(hex("unknown'foo'"), "d903e78267756e6b6e6f776e8163666f6f");
-    assert_eq!(hex("unknown<<1, 2>>"), "d903e78267756e6b6e6f776e820102");
+fn draft29_rejects_elisions_and_unknown_prefixes() {
+    for input in [
+        "...",
+        "[1, ..., 3]",
+        "{...: ...}",
+        "h'01...02'",
+        "h`...`",
+        "t1<<'a', ..., 'b'>>",
+        "b1<<888(null)>>",
+        "bytes<<888(['a'])>>",
+        "unknown'foo'",
+        "unknown`foo`",
+        "unknown<<1, 2>>",
+        "unknown'foo'_3",
+    ] {
+        assert!(cdn_to_vec(input).is_err(), "{input}");
+        assert!(
+            cdn_sequence_to_vec(&format!("1 {input}")).is_err(),
+            "{input}"
+        );
+    }
+    // Explicit numeric tags are still ordinary CBOR tags.
+    assert_hex("888(null)", "d90378f6");
+    assert_hex("999(['x'])", "d903e7814178");
+    assert_cdn_eq(r#""...""#, "t1<<'...'>>");
 }
 
 #[test]
-fn draft26_comment_examples() {
+fn draft29_comment_examples() {
     assert_cdn_eq(
         r#" /grasp-message/ [/M_DISCOVERY/ 1, /session-id/ 10584416,
                     /objective/ [/objective-name/ "opsonize",
@@ -242,15 +256,13 @@ fn draft26_comment_examples() {
     * John Example, 2026-06-09
     */
    {
-     // Top-level config for the app
-     "appName": "MyApp", // short name shown in UI
+     # Top-level config for the app
+     "appName": "MyApp", # short name shown in UI
      "version": "1.2.0",
-     ...: ...
    }"#,
         r#"{
      "appName": "MyApp",
      "version": "1.2.0",
-     888(null): 888(null)
    }"#,
     );
     assert_cdn_eq("4 /* HMAC 256/64 */", "4");
@@ -258,7 +270,7 @@ fn draft26_comment_examples() {
 }
 
 #[test]
-fn draft26_encoding_indicator_examples() {
+fn draft29_encoding_indicator_examples() {
     assert_hex("1_1", "190001");
     assert_hex("0x4711_3", "1b0000000000004711");
     assert_hex("-1_1", "390000");
@@ -276,14 +288,14 @@ fn draft26_encoding_indicator_examples() {
 }
 
 #[test]
-fn draft26_number_examples() {
+fn draft29_number_examples() {
     assert_all_eq(&["4711", "0x1267", "0o11147", "0b1001001100111"]);
     assert_hex("4711", "191267");
     assert_all_eq(&["1.5", "0.15e1", "15e-1", "0x1.8p0", "0x18p-4"]);
     assert_hex("1.5", "f93e00");
-    assert_all_eq(&["0", "+0", "-0"]);
+    assert_all_eq(&["0", "-0"]);
     assert_hex("0", "00");
-    assert_all_eq(&["0.0", "+0.0"]);
+    assert_all_eq(&["0.0", ".0", "0."]);
     assert_hex("0.0", "f90000");
     assert_hex("-0.0", "f98000");
     assert_hex("Infinity", "f97c00");
@@ -313,7 +325,7 @@ fn draft26_number_examples() {
 }
 
 #[test]
-fn draft26_string_examples() {
+fn draft29_string_examples() {
     assert_all_eq(&[
         r#""D\u{6f}mino's \u{1F073} + \u{2318}""#,
         r#""D\u006Fmino's \uD83C\uDC73 + \u2318""#,
@@ -341,11 +353,62 @@ fn draft26_string_examples() {
     assert_hex("''_", "5fff");
     assert_hex("\"\"_", "7fff");
     assert_hex("(_ '')", "5f40ff");
+    assert_hex("(_ b64'AA', <<1>>)", "5f41004101ff");
+    assert_hex("ilbs<<'x'_0>>", "5f580178ff");
     assert_hex(r#"(_ "")"#, "7f60ff");
 }
 
 #[test]
-fn draft26_base_encoding_and_sequence_examples() {
+fn draft29_lexical_boundaries() {
+    for input in [
+        "+0",
+        "+1.5",
+        "+.5",
+        "+0x1p2",
+        "+0o7",
+        "+0b1",
+        "+Infinity",
+        "00",
+        "-01",
+        "01.5",
+        "00e2",
+        "01(0)",
+        "true_i",
+        "false_0",
+        "null_",
+        "undefined_future",
+        "simple(23)_i",
+        "simple(59)_0",
+        "(_ 'x'_0)",
+        "(_ h'01'_1)",
+        "(_ 'x', \"text\")",
+        "// comment\n1",
+        "1 // comment\n",
+        "[1 // comment\n2]",
+        "1 # missing newline",
+        "h'01// comment\n02'",
+        "h'01/* comment */02'",
+        "h`01// comment\n02`",
+        r#"h<<"0/* comment */1">>"#,
+        "`````````raw`````````",
+        "``abc```",
+    ] {
+        assert!(cdn_to_vec(input).is_err(), "{input:?}");
+    }
+    assert_cdn_eq("1e+2", "100.0");
+    assert_cdn_eq("0x1p+2", "4.0");
+    assert_cdn_eq("0x0010", "16");
+    assert_cdn_eq("0o007", "7");
+    assert_cdn_eq("-0b001", "-1");
+    assert_cdn_eq(r#"````````a```````b````````"#, r#""a```````b""#);
+    assert_cdn_eq("1 # comment\r\n", "1");
+    assert_cdn_eq("h'0 / digit / 1 # comment'", "h'01'");
+    assert_cdn_eq("b64'//8='", "h'ffff'");
+    assert_hex("1_reserved", "01");
+}
+
+#[test]
+fn draft29_base_encoding_and_sequence_examples() {
     assert_all_eq(&["b64`Zm9v`", r#"b64<<"Zm9v">>"#, "b64<<`Zm9v`>>"]);
     assert_cdn_eq("b64`Zm9v`", "'foo'");
     assert_all_eq(&["h'12345678'", "b64'EjRWeA'", "h`12345678`", "b64`EjRWeA`"]);
@@ -374,7 +437,7 @@ fn draft26_base_encoding_and_sequence_examples() {
 }
 
 #[test]
-fn draft26_array_map_tag_and_simple_examples() {
+fn draft29_array_map_tag_and_simple_examples() {
     assert_all_eq(&[
         "[1, 2, 3]",
         "[1, 2, 3,]",
@@ -407,7 +470,7 @@ fn draft26_array_map_tag_and_simple_examples() {
 }
 
 #[test]
-fn draft26_dt_and_ip_examples() {
+fn draft29_dt_and_ip_examples() {
     assert_cdn_eq("dt'1969-07-21T02:56:16Z'", "-14159024");
     assert_cdn_eq("dt'1969-07-21T02:56:16.0Z'", "-14159024.0");
     assert_cdn_eq("dt'1969-07-21T02:56:16.5Z'", "-14159023.5");
@@ -437,7 +500,7 @@ fn draft26_dt_and_ip_examples() {
 }
 
 #[test]
-fn draft26_string_concat_and_indefinite_examples() {
+fn draft29_string_concat_and_indefinite_examples() {
     assert_all_eq(&[
         r#""Hello world""#,
         r#"t1<<"Hello ", "world">>"#,
@@ -453,12 +516,6 @@ fn draft26_string_concat_and_indefinite_examples() {
         "b1<<h'48656c6c6f20776f726c64', '', b64''>>",
         "b1<<h'4 86 56c 6c6f', h' 20776 f726c64'>>",
     ]);
-    assert_all_eq(&[
-        "h'48656c6c6f...776f726c64'",
-        "b1<<h'48656c6c6f...', ..., h'...776f726c64'>>",
-        "b1<<'Hello', ..., 'world'>>",
-    ]);
-
     assert_hex("'Hello world'", "4b48656c6c6f20776f726c64");
     assert_hex("ilbs<<>>", "5fff");
     assert_hex(r#"ilbs<<"Hello world">>"#, "5f4b48656c6c6f20776f726c64ff");
@@ -475,7 +532,14 @@ fn draft26_string_concat_and_indefinite_examples() {
 }
 
 #[test]
-fn draft26_float_examples() {
+fn draft29_float_examples() {
+    // Precision in the source bit pattern does not request that wire width.
+    assert_hex("float'3f800000'", "f93c00");
+    assert_hex("float'3f800000'_reserved", "f93c00");
+    assert_hex("float'3f800000'_2", "fa3f800000");
+    assert_hex("float'8000000000000000'", "f98000");
+    assert_hex("float'7ff8040000000000'", "f97e01");
+
     assert_hex(
         "[float'fe00', float'fe00'_2, float'47110815']",
         "83f9fe00faffc00000fa47110815",
@@ -521,40 +585,7 @@ fn draft_bormann_edn_app_ext_examples() {
 }
 
 #[test]
-fn draft26_elision_examples() {
-    assert_cdn_eq("[1, 2, ..., 3]", "[1, 2, 888(null), 3]");
-    assert_cdn_eq(
-        r#"{ "a": 1,
-     "b": ...,
-     ...: ...
-   }"#,
-        r#"{ "a": 1,
-     "b": 888(null),
-     888(null): 888(null)
-   }"#,
-    );
-    assert_cdn_eq(
-        r#"{ "contract": t1<<"Herewith I buy", ..., "gned: Alice & Bob">>
-     "bytes_in_IRI": b1<<'https://a.example/', ..., '&q=Übergrößenträger'>>
-     "signature": h'4711...0815',
-   }"#,
-        r#"{ "contract": 888(["Herewith I buy", 888(null),
-                           "gned: Alice & Bob"]),
-     "bytes_in_IRI": 888(['https://a.example/', 888(null),
-                          '&q=Übergrößenträger']),
-     "signature": 888([h'4711', 888(null), h'0815']),
-   }"#,
-    );
-    assert_cdn_eq(
-        r#"{ "signature": h'4711/.../0815',
-     # ...: ...
-   }"#,
-        r#"{ "signature": h'47110815' }"#,
-    );
-}
-
-#[test]
-fn draft26_appendix_a_cdn_examples() {
+fn draft29_appendix_a_cdn_examples() {
     assert_all_eq(&[
         "{ / alg / 1: -7 / ECDSA 256 / }",
         "{ 1:   # alg\n             -7 # ECDSA 256\n         }",
@@ -562,33 +593,36 @@ fn draft26_appendix_a_cdn_examples() {
     assert_cdn_eq(
         r#"98([h'', # empty encoded protected header
              {},  # empty unprotected header
-             ...  # rest elided here
             ])"#,
-        "98([h'', {}, 888(null)])",
+        "98([h'', {}])",
     );
     assert_cdn_eq(
         r#"98([<< {/alg/ 1: -7 /ECDSA 256/} >>, # == h'a10126'
-             ...                              # rest elided here
             ])"#,
-        "98([h'a10126', 888(null)])",
+        "98([h'a10126'])",
     );
 }
 
-#[cfg(not(feature = "cdn"))]
+#[cfg(not(all(feature = "cdn-cri", feature = "cdn-hash")))]
 #[test]
-fn draft26_unresolved_app_examples_without_cdn_feature() {
+fn disabled_extensions_report_the_feature_needed() {
     #[cfg(not(feature = "cdn-cri"))]
-    assert_cdn_eq(
-        "cri'https://example.com'",
-        r#"999(["cri", ["https://example.com"]])"#,
-    );
+    for input in ["cri'https://example.com'", "CRI'https://example.com'"] {
+        assert!(cdn_to_vec(input)
+            .unwrap_err()
+            .to_string()
+            .contains("cdn-cri"));
+    }
     #[cfg(not(feature = "cdn-hash"))]
-    assert_cdn_eq(r#"hash<<"data", -44>>"#, r#"999(["hash", ["data", -44]])"#);
+    assert!(cdn_to_vec(r#"hash<<"data", -44>>"#)
+        .unwrap_err()
+        .to_string()
+        .contains("cdn-hash"));
 }
 
 #[cfg(feature = "cdn")]
 #[test]
-fn draft26_hash_and_cri_examples() {
+fn draft29_hash_and_cri_examples() {
     assert_cdn_eq(
         "cri'https://example.com/bottarga/shaved'",
         r#"[-4, ["example", "com"], ["bottarga", "shaved"]]"#,

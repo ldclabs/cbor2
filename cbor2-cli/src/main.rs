@@ -1,7 +1,7 @@
 //! `cbor` — the command line CBOR converter and inspector.
 //!
 //! Without a command, shows every CBOR item in the input as pretty diagnostic
-//! notation (RFC 8949 §8), exactly as it appears on the wire.
+//! notation (RFC 8949 §8), preserving indefinite-length items and simple values.
 //! `decode` shows CBOR items as pretty-printed diagnostic notation, or
 //! converts them to pretty-printed JSON with `--json`; `--diag` and `--cdn`
 //! are explicit spellings of the default diagnostic/CDN output. `encode`
@@ -24,6 +24,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::env;
+use std::ffi::OsString;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Cursor, Read, Write};
@@ -37,7 +38,7 @@ Usage: cbor [COMMAND] [INPUT]
 
 Shows, decodes and encodes CBOR (RFC 8949). Without a command, every
 CBOR item in INPUT is shown as pretty diagnostic notation (\u{a7}8),
-exactly as it appears on the wire.
+including indefinite-length markers and simple values.
 
 Commands:
   decode  Show CBOR items as pretty-printed diagnostic notation,
@@ -88,25 +89,11 @@ struct Args {
     json: bool,
     // `--hex`: copyable hex output for `encode`.
     hex: bool,
-    input: Option<String>,
+    input: Option<OsString>,
 }
 
 fn main() {
-    let Args {
-        command,
-        json,
-        hex,
-        input,
-    } = parse_args();
-    let input = input.as_deref();
-
-    let result = match command {
-        Command::Show | Command::Decode => decode(open_cbor_input(input), json),
-        Command::Encode => encode(open_text_input(input), json, hex),
-        Command::Validate => validate(open_cbor_input(input)),
-    };
-
-    if let Err(err) = result {
+    if let Err(err) = run() {
         if is_broken_pipe(err.as_ref()) {
             return;
         }
@@ -115,9 +102,27 @@ fn main() {
     }
 }
 
+fn run() -> Result<(), Error> {
+    let Some(Args {
+        command,
+        json,
+        hex,
+        input,
+    }) = parse_args()?
+    else {
+        return Ok(());
+    };
+    let input = input.as_deref().filter(|arg| *arg != "-").map(Path::new);
+    match command {
+        Command::Show | Command::Decode => decode(open_cbor_input(input), json),
+        Command::Encode => encode(open_text_input(input), json, hex),
+        Command::Validate => validate(open_cbor_input(input)),
+    }
+}
+
 // Parses the command line. `-h`/`--help` and `-V`/`--version` print and
 // exit; anything malformed exits with 2.
-fn parse_args() -> Args {
+fn parse_args() -> io::Result<Option<Args>> {
     let mut diag = false;
     let mut cdn = false;
     let mut json = false;
@@ -125,27 +130,27 @@ fn parse_args() -> Args {
     let mut positional = Vec::new();
     let mut input_only = false;
 
-    let mut args = env::args().skip(1);
+    let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--" => {
+        match arg.to_str() {
+            Some("--") => {
                 input_only = positional.is_empty();
                 positional.extend(args);
                 break;
             }
-            "-h" | "--help" => {
-                println!("{USAGE}");
-                process::exit(0);
+            Some("-h" | "--help") => {
+                writeln!(io::stdout().lock(), "{USAGE}")?;
+                return Ok(None);
             }
-            "-V" | "--version" => {
-                println!("cbor {}", env!("CARGO_PKG_VERSION"));
-                process::exit(0);
+            Some("-V" | "--version") => {
+                writeln!(io::stdout().lock(), "cbor {}", env!("CARGO_PKG_VERSION"))?;
+                return Ok(None);
             }
-            "-d" | "--diag" => diag = true,
-            "--cdn" => cdn = true,
-            "--json" => json = true,
-            "--hex" => hex = true,
-            _ if arg.starts_with('-') && arg != "-" => {
+            Some("-d" | "--diag") => diag = true,
+            Some("--cdn") => cdn = true,
+            Some("--json") => json = true,
+            Some("--hex") => hex = true,
+            Some(arg) if arg.starts_with('-') && arg != "-" => {
                 usage_error(format_args!("unrecognized option `{arg}`"));
             }
             _ => positional.push(arg),
@@ -155,7 +160,7 @@ fn parse_args() -> Args {
     let mut positional = positional.into_iter().peekable();
     let command = match positional
         .peek()
-        .map(String::as_str)
+        .and_then(|arg| arg.to_str())
         .filter(|_| !input_only)
     {
         Some("decode") => {
@@ -194,12 +199,12 @@ fn parse_args() -> Args {
         usage_error(format_args!("`--hex` only applies to `encode`"));
     }
 
-    Args {
+    Ok(Some(Args {
         command,
         json,
         hex,
         input,
-    }
+    }))
 }
 
 fn usage_error(msg: core::fmt::Arguments<'_>) -> ! {
@@ -211,15 +216,16 @@ fn usage_error(msg: core::fmt::Arguments<'_>) -> ! {
 // Opens the input of the CBOR-reading commands: stdin (absent or `-`),
 // an existing file, a hex string or a base64/base64url string. Commands add
 // their own buffering.
-fn open_cbor_input(arg: Option<&str>) -> Box<dyn Read> {
-    let arg = match arg {
-        None | Some("-") => return Box::new(io::stdin().lock()),
-        Some(arg) => arg,
+fn open_cbor_input(arg: Option<&Path>) -> Box<dyn Read> {
+    let Some(path) = arg else {
+        return Box::new(io::stdin().lock());
     };
-
-    if Path::new(arg).exists() {
-        return open_file(arg);
+    if path.exists() {
+        return open_file(path);
     }
+    let Some(arg) = path.to_str() else {
+        return open_file(path);
+    };
 
     // Anything with a path separator is always a path — `/` is also a
     // standard-base64 character, and a mistyped file name must not be
@@ -229,10 +235,18 @@ fn open_cbor_input(arg: Option<&str>) -> Box<dyn Read> {
         usage_error(format_args!("{arg}: no such file"));
     }
 
-    if let Some(bytes) = from_hex(arg) {
+    let data: Cow<'_, [u8]> = if arg.bytes().any(|b| b.is_ascii_whitespace()) {
+        arg.bytes()
+            .filter(|b| !b.is_ascii_whitespace())
+            .collect::<Vec<_>>()
+            .into()
+    } else {
+        Cow::Borrowed(arg.as_bytes())
+    };
+    if let Some(bytes) = from_hex(&data) {
         return Box::new(Cursor::new(bytes));
     }
-    if let Some(bytes) = from_base64(arg) {
+    if let Some(bytes) = from_base64(&data) {
         return Box::new(Cursor::new(bytes));
     }
 
@@ -242,22 +256,22 @@ fn open_cbor_input(arg: Option<&str>) -> Box<dyn Read> {
 }
 
 // Opens the input of `encode`: stdin (absent or `-`) or a text file.
-fn open_text_input(arg: Option<&str>) -> Box<dyn Read> {
+fn open_text_input(arg: Option<&Path>) -> Box<dyn Read> {
     match arg {
-        None | Some("-") => Box::new(io::stdin().lock()),
+        None => Box::new(io::stdin().lock()),
         Some(path) => open_file(path),
     }
 }
 
 // A directory opens on some platforms but cannot be read; like any other
 // unreadable input it is a usage error.
-fn open_file(path: &str) -> Box<dyn Read> {
+fn open_file(path: &Path) -> Box<dyn Read> {
     match File::open(path) {
         Ok(file) if file.metadata().is_ok_and(|meta| meta.is_dir()) => {
-            usage_error(format_args!("{path}: is a directory"))
+            usage_error(format_args!("{}: is a directory", path.display()))
         }
         Ok(file) => Box::new(file),
-        Err(err) => usage_error(format_args!("{path}: {err}")),
+        Err(err) => usage_error(format_args!("{}: {err}", path.display())),
     }
 }
 
@@ -414,6 +428,7 @@ fn json_key(key: &Value) -> Result<Cow<'_, str>, serde_json::Error> {
             if let Some(n) = bignum(*tag, inner) {
                 return Ok(Cow::Owned(n.to_string()));
             }
+            return json_key(inner);
         }
         _ => {}
     }
@@ -484,12 +499,11 @@ impl fmt::Display for Hex<'_> {
 
 // Decodes a hex string — optionally 0x-prefixed, ASCII whitespace
 // ignored — or returns `None` if the text is not hex.
-fn from_hex(text: &str) -> Option<Vec<u8>> {
-    let digits: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+fn from_hex(digits: &[u8]) -> Option<Vec<u8>> {
     let digits = digits
         .strip_prefix(b"0x")
         .or_else(|| digits.strip_prefix(b"0X"))
-        .unwrap_or(&digits);
+        .unwrap_or(digits);
 
     if digits.is_empty() || !digits.len().is_multiple_of(2) {
         return None;
@@ -507,7 +521,7 @@ fn from_hex(text: &str) -> Option<Vec<u8>> {
 
 // Decodes a base64 or base64url string — padded or not, ASCII whitespace
 // ignored — or returns `None` if the text is not base64.
-fn from_base64(text: &str) -> Option<Vec<u8>> {
+fn from_base64(data: &[u8]) -> Option<Vec<u8>> {
     fn sextet(b: u8) -> Option<u32> {
         Some(match b {
             b'A'..=b'Z' => b - b'A',
@@ -519,7 +533,6 @@ fn from_base64(text: &str) -> Option<Vec<u8>> {
         } as u32)
     }
 
-    let data: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     let unpadded = data.iter().position(|&b| b == b'=').unwrap_or(data.len());
     let padding = data.len() - unpadded;
     if padding > 0

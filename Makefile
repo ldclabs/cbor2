@@ -1,13 +1,11 @@
-BUILD_ENV := rust
-
 .PHONY: lint fix test
 
 lint:
-	@cargo fmt
-	@cargo clippy --all-targets --all-features
+	@cargo fmt --all --check
+	@cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 fix:
-	@cargo clippy --fix --workspace --tests
+	@cargo clippy --fix --workspace --all-targets --all-features
 	@cargo fmt --all
 
 test:

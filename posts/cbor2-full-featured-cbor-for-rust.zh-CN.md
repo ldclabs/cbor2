@@ -65,13 +65,13 @@ let size = cbor2::serialized_size(&value)?;    // 精确长度，无需输出缓
 cbor2::validate(&item[..])?;                   // 格式是否完好？（包括 UTF-8 验证）
 ```
 
-这里有一个需要坦白说明的限制：**没有任何一个基于 serde 的 CBOR crate 可以在没有堆内存的情况下进行反序列化** —— 因为反序列化器需要一个暂存缓冲区。`cbor2` 也不例外。只有并非基于 serde 的 `minicbor` 能够在没有分配器的情况下解码类型化值。作为替代，`cbor2` 提供的是其底层的 `core::Decoder` 拉取式（pull）API，如果您愿意手动编写解码逻辑，便可以实现零分配读取 CBOR：
+cbor2 的 serde 解码器使用堆上的临时缓冲区。需要无堆的类型化解码时，`serde_cbor` 支持调用方提供临时缓冲区，`minicbor` 则使用自己的解码 trait。在 cbor2 中可以使用 `core::Decoder` 手动读取数据。
 
 ```rust
 use cbor2::core::{Decoder, Header};
 
 let mut dec = Decoder::from(&bytes[..]);
-let Header::Array(Some(n)) = dec.pull()? else { /* ... */ };
+let Header::Array(Some(n)) = dec.pull()? else { return Err("expected array".into()) };
 // 拉取标头；将字符串/字节实体读取到您自备的 &mut [u8] 中
 ```
 
@@ -79,17 +79,14 @@ let Header::Array(Some(n)) = dec.pull()? else { /* ... */ };
 
 ## 速度快吗？
 
-快，但我不会声称它是最快的，因为事实并非如此，而且您也一定会去验证。我构建了一个[独立的基准测试工作区](https://github.com/ldclabs/cbor2/tree/main/cbor2-bench#results)，在尽可能使用完全相同的数据负载的情况下，将 `cbor2` 与 `ciborium`、`serde_cbor`、`cbor4ii` 和 `minicbor` 在全部三种部署模式（`std`、`no_std + alloc`、`no_std + no_alloc`）下进行了对比，因此整数数组和字节字符串行是严格同等对比。
-
-坦白地说：`cbor2` 的编码和解码性能位居前列，并且全面超越了 `ciborium`，但 `serde_cbor` 和 `cbor4ii` 在某些编码场景中略微领先，而 `minicbor` 凭借更紧凑的传输形式在结构化解码中处于领先地位。`cbor2` 表现出明显优势的地方在于 `no_std + no_alloc` 环境 —— 它是 serde 类 crate 中固定缓冲区编码速度最快的，并且提供了其他库均未附带的 `validate` / `serialized_size` 原语。（构建这套测试组件还发现了一些有趣的细节，比如 `cbor4ii` 的解码器会拒绝将窄化后的 `f32` 浮点数放入 `f64` 字段中 —— 因此有些 crate 只能解码自身生成的字节。）
+我用独立的基准工作区在宿主机上比较新建缓冲区、复用写入器和固定缓冲区。五种编解码器为整数数组和字节串生成相同字节，结构化日志的布局和浮点宽度则有差异。原始计时早于基准框架修正。
 
 完整的功能矩阵、各个场景下的表格以及详细的测试方法，均已收录在[基准测试 README](https://github.com/ldclabs/cbor2/tree/main/cbor2-bench#results) 中。
 
 ## 它不具备哪些功能
 
-- 不支持在没有 `alloc` 的情况下进行类型化解码（如上所述，这是目前整个 serde 生态系统的普遍现状）。
+- cbor2 的 serde 类型化解码需要 `alloc`。
 - 它还是个全新的项目，所以用户群规模还很小，肯定还有一些不完善的地方。
-- 如果您追求极致速度的结构化解码，且可以使用非 serde 的派生宏，那么 `minicbor` 会是更好的选择 —— 这完全没问题。
 
 ## 尝试使用
 

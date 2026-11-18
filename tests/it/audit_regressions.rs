@@ -144,11 +144,8 @@ fn dt_fraction_matches_decimal_float() {
 }
 
 #[test]
-fn t1_concatenates_utf8_fragments_after_elision() {
-    assert_eq!(
-        cdn_to_vec("t1<<..., h'c3', h'a4'>>").ok(),
-        Some(cdn("t1<<..., \"ä\">>"))
-    );
+fn t1_validates_utf8_after_joining_fragments() {
+    assert_eq!(cdn_to_vec("t1<<h'c3', h'a4'>>").ok(), Some(cdn("\"ä\"")));
 }
 
 #[test]
@@ -264,7 +261,7 @@ impl<'de> serde::Deserialize<'de> for ExtensionMap {
 
 #[cfg(feature = "derive")]
 #[test]
-fn flattened_struct_rejects_tagged_extension_keys_without_stripping_tags() {
+fn flattened_struct_round_trips_tagged_extension_keys() {
     #[derive(Debug, PartialEq, cbor2::Cbor)]
     struct Message {
         #[cbor(key = 1)]
@@ -275,23 +272,37 @@ fn flattened_struct_rejects_tagged_extension_keys_without_stripping_tags() {
 
     let message = Message {
         id: 1,
-        extra: ExtensionMap(vec![(
-            Value::Tag(100, Box::new(Value::from("x"))),
-            Value::from(7),
-        )]),
+        extra: ExtensionMap(vec![
+            (Value::from("x"), Value::from(6)),
+            (Value::Tag(100, Box::new("x".into())), Value::from(7)),
+            (Value::Tag(100, Box::new("id".into())), Value::from(8)),
+            (
+                Value::Tag(100, Box::new(Value::Tag(101, Box::new(2.into())))),
+                Value::from(9),
+            ),
+        ]),
     };
     let bytes = cbor2::to_vec(&message).unwrap();
-    let error = cbor2::from_slice::<Message>(&bytes).unwrap_err();
-    assert!(
-        error.to_string().contains("tagged extension key 100"),
-        "unexpected error: {error}"
+    assert_eq!(
+        bytes,
+        cdn(r#"{1:1, "x":6, 100("x"):7, 100("id"):8, 100(101(2)):9}"#)
     );
-    let error = cbor2::from_reader::<Message, _>(bytes.as_slice()).unwrap_err();
-    assert!(error.to_string().contains("tagged extension key 100"));
+    assert_eq!(cbor2::from_slice::<Message>(&bytes).unwrap(), message);
+    assert_eq!(
+        cbor2::from_reader::<Message, _>(bytes.as_slice()).unwrap(),
+        message
+    );
     let value = Value::serialized(&message).unwrap();
-    let error = value.deserialized::<Message>().unwrap_err();
-    assert!(error.to_string().contains("tagged extension key 100"));
+    assert_eq!(value.deserialized::<Message>().unwrap(), message);
 
+    let collision = Message {
+        id: 1,
+        extra: ExtensionMap(vec![(Value::Tag(100, Box::new(1.into())), Value::Null)]),
+    };
+    assert!(cbor2::to_vec(&collision)
+        .unwrap_err()
+        .to_string()
+        .contains("conflicts"));
     // A tag around a declared integer key remains transparent.
     let tagged_field = cdn("{100(1): 1}");
     assert_eq!(
@@ -311,6 +322,24 @@ fn flattened_struct_rejects_tagged_extension_keys_without_stripping_tags() {
             extra: ExtensionMap::default(),
         }
     );
+}
+
+#[cfg(feature = "derive")]
+#[test]
+fn flattened_raw_key_preserves_nonpreferred_tag_and_text_headers() {
+    #[derive(Debug, PartialEq, cbor2::Cbor)]
+    struct Message {
+        #[serde(flatten)]
+        extra: std::collections::HashMap<cbor2::RawValue, u8>,
+    }
+    let bytes = [0xa1, 0xd9, 0, 100, 0x78, 1, b'x', 7];
+    for record in [
+        cbor2::from_slice::<Message>(&bytes).unwrap(),
+        cbor2::from_reader::<Message, _>(&bytes[..]).unwrap(),
+    ] {
+        assert_eq!(record.extra.keys().next().unwrap().as_bytes(), &bytes[1..7]);
+        assert_eq!(cbor2::to_vec(&record).unwrap(), bytes);
+    }
 }
 
 #[test]
@@ -623,12 +652,14 @@ fn cdn_extension_errors_point_to_source_arguments() {
 #[test]
 fn hex_literals_pair_digits_across_comments_and_reject_dangling_nibbles() {
     assert_eq!(cdn("h'a /comment/ b # next\nc d'"), cdn("h'abcd'"));
-    assert_eq!(cdn("h'ab...cd'"), cdn("888([h'ab', 888(null), h'cd'])"));
-    assert_eq!(
-        cdn("h'...ab......cd...'"),
-        cdn("888([888(null), h'ab', 888(null), h'cd', 888(null)])")
-    );
-    for input in ["h'a'", "h'a...bc'", "h'ab...c'", "h'ab...c...de'"] {
+    for input in [
+        "h'a'",
+        "h'ab...cd'",
+        "h'...ab......cd...'",
+        "h'a...bc'",
+        "h'ab...c'",
+        "h'ab...c...de'",
+    ] {
         assert!(cdn_to_vec(input).is_err(), "{input}");
     }
 }

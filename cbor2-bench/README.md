@@ -82,9 +82,9 @@ The `focused` and `derive` targets track cbor2 regressions across revisions.
 
 | binary                            | scenario            | encode path                                     | decode path                             |
 | --------------------------------- | ------------------- | ----------------------------------------------- | --------------------------------------- |
-| [`alloc`](benches/alloc.rs)       | `no_std + alloc`    | grow a fresh `Vec<u8>` (`to_vec`)               | borrow from a `&[u8]` (`from_slice`)    |
-| [`std`](benches/std.rs)           | `std`               | stream into a **reused** buffer via `io::Write` | copy through `io::Read` (`from_reader`) |
-| [`no_alloc`](benches/no_alloc.rs) | `no_std + no_alloc` | fill a fixed `&mut [u8]`, zero allocation       | *scan only* — see capability matrix     |
+| [`alloc`](benches/alloc.rs)       | fresh buffer        | grow a fresh `Vec<u8>` (`to_vec`)               | borrow from a `&[u8]` (`from_slice`)    |
+| [`std`](benches/std.rs)           | reused writer       | stream into a **reused** buffer via `io::Write` | copy through `io::Read` (`from_reader`) |
+| [`no_alloc`](benches/no_alloc.rs) | fixed buffer        | fill a fixed `&mut [u8]`, zero allocation       | *scan only* — see capability matrix     |
 
 ### Three payload shapes
 

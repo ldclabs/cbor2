@@ -155,26 +155,8 @@ fn bignum_errors() {
 
 #[test]
 fn primitive_bignum_range_rejection_stops_before_large_body() {
-    struct CountingReader {
-        data: Vec<u8>,
-        pos: usize,
-    }
-
-    impl std::io::Read for CountingReader {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            if self.pos == self.data.len() {
-                return Ok(0);
-            }
-
-            let n = buf.len().min(self.data.len() - self.pos);
-            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
-            self.pos += n;
-            Ok(n)
-        }
-    }
-
     // tag(h'..') or tag((_ h'..')) with a 1 MiB body.
-    fn huge_bignum(tag: u8, fill: u8, segmented: bool) -> CountingReader {
+    fn huge_bignum(tag: u8, fill: u8, segmented: bool) -> Vec<u8> {
         let mut data = vec![tag];
         if segmented {
             data.push(0x5f);
@@ -184,7 +166,7 @@ fn primitive_bignum_range_rejection_stops_before_large_body() {
         if segmented {
             data.push(0xff);
         }
-        CountingReader { data, pos: 0 }
+        data
     }
 
     for (tag, fill, segmented) in [
@@ -193,7 +175,8 @@ fn primitive_bignum_range_rejection_stops_before_large_body() {
         (0xc2, 0x00, false),
         (0xc2, 0x00, true),
     ] {
-        let mut reader = huge_bignum(tag, fill, segmented);
+        let data = huge_bignum(tag, fill, segmented);
+        let mut reader = data.as_slice();
         let error = if tag == 0xc3 {
             cbor2::from_reader::<i64, _>(&mut reader).map(drop)
         } else {
@@ -201,10 +184,10 @@ fn primitive_bignum_range_rejection_stops_before_large_body() {
         };
         let msg = error.unwrap_err().to_string();
         assert!(msg.contains("integer too large"), "{msg}");
+        let consumed = data.len() - reader.len();
         assert!(
-            reader.pos < 1024,
-            "reader consumed {} bytes before rejecting",
-            reader.pos
+            consumed < 1024,
+            "reader consumed {consumed} bytes before rejecting"
         );
     }
 }

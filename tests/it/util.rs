@@ -1,6 +1,6 @@
 //! Test doubles shared by the integration-test modules.
 
-use std::io;
+use cbor2::io;
 
 use serde::{Deserialize, Serialize};
 
@@ -17,12 +17,12 @@ pub enum Enum {
 pub struct FailWriter;
 
 impl io::Write for FailWriter {
-    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-        Err(io::Error::other("sink broke"))
+    fn write_all(&mut self, _: &[u8]) -> Result<(), io::Error> {
+        Err(io::ErrorKind::Other.into())
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        Err(io::Error::other("flush broke"))
+    fn flush(&mut self) -> Result<(), io::Error> {
+        Err(io::ErrorKind::Other.into())
     }
 }
 
@@ -31,26 +31,27 @@ impl io::Write for FailWriter {
 pub struct LimitedWriter(pub usize);
 
 impl io::Write for LimitedWriter {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        if self.0 == 0 {
-            return Err(io::Error::other("limit reached"));
-        }
-        let n = self.0.min(data.len());
-        self.0 -= n;
-        Ok(n)
+    fn write_all(&mut self, data: &[u8]) -> Result<(), io::Error> {
+        self.0 = self
+            .0
+            .checked_sub(data.len())
+            .ok_or(io::ErrorKind::WriteZero)?;
+        Ok(())
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> Result<(), io::Error> {
         Ok(())
     }
 }
 
-/// A reader whose every read fails.
-pub struct FailReader;
+/// A reader that fails with an I/O error after its supplied prefix.
+pub struct FailReader(pub &'static [u8]);
 
 impl io::Read for FailReader {
-    fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-        Err(io::Error::other("source broke"))
+    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
+        self.0
+            .read_exact(buf)
+            .map_err(|_| io::ErrorKind::Other.into())
     }
 }
 

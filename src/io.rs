@@ -47,7 +47,7 @@ pub trait Write {
     /// feature, every writer — `Vec<u8>` included — resolves through the
     /// blanket `std::io::Write` impl, which keeps this default: coherence
     /// leaves no room for a `Vec`-specific impl beside the blanket one.
-    /// [`to_vec`](crate::to_vec) pre-reserves through an internal wrapper
+    /// `to_vec` pre-reserves through an internal wrapper
     /// and is the better entry point for encoding into a new `Vec<u8>`.
     /// (In `no_std` + `alloc` builds, `Vec<u8>` has its own impl that does
     /// forward to `Vec::reserve`.)
@@ -249,7 +249,7 @@ mod tests {
     fn vec_write() {
         let mut buffer = alloc::vec::Vec::new();
         buffer.write_all(&[1, 2]).unwrap();
-        (&mut buffer).write_all(&[3]).unwrap();
+        Write::write_all(&mut &mut buffer, &[3]).unwrap();
         buffer.flush().unwrap();
         assert_eq!(buffer, [1, 2, 3]);
     }

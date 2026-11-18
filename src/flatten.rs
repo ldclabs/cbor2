@@ -1,5 +1,5 @@
-//! Internal adapters for derived flattened structs. Values remain on the
-//! original serde path, and the serializer buffers wire bytes, not Value.
+//! Current derives use the grouped fields adapter in `fields`. The entry
+//! points in this module serve older derives that use serde's flatten buffer.
 
 pub(crate) mod fields;
 

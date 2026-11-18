@@ -3,83 +3,83 @@
 
 use super::{io, Error};
 use cbor2::Value;
+use serde::Deserialize;
 use serde_json::{value::RawValue, Deserializer};
-use std::io::{BufReader, Read};
+use std::io::{BufRead, BufReader, Read};
 
 pub(super) fn encode(
-    mut input: impl Read,
-    mut write: impl FnMut(&[u8]) -> io::Result<()>,
-) -> Result<(), Error> {
-    let mut pending = Vec::new();
-    let mut block = [0; 8192];
-    let mut encoded = Vec::new();
-    loop {
-        let n = match input.read(&mut block) {
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-            result => result?,
-        };
-        let had_partial = !pending.is_empty();
-        pending.extend_from_slice(&block[..n]);
-        let mut values = Deserializer::from_slice(&pending).into_iter::<Value>();
-        let mut start = 0;
-        loop {
-            match values.next() {
-                Some(Ok(value)) => {
-                    let end = values.byte_offset();
-                    // A number can continue in the next block. Keywords also
-                    // require a delimiter before another scalar.
-                    if n != 0
-                        && end == pending.len()
-                        && !matches!(value, Value::Array(_) | Value::Map(_) | Value::Text(_))
-                    {
-                        break;
-                    }
-                    if needs_number_spelling(&value) {
-                        write(&cbor2::cdn_to_vec(std::str::from_utf8(
-                            &pending[start..end],
-                        )?)?)?;
-                    } else {
-                        encoded.clear();
-                        cbor2::to_writer(&value, &mut encoded)?;
-                        write(&encoded)?;
-                    }
-                    start = end;
-                }
-                Some(Err(err)) if err.is_eof() && n != 0 => break,
-                Some(Err(_)) => {
-                    // A syntactically valid, arbitrary-width integer may be
-                    // outside f64 as well. Validate its raw JSON before CDN.
-                    return encode_raw(pending[start..].chain(input), write);
-                }
-                None => {
-                    pending.clear();
-                    if n == 0 {
-                        return Ok(());
-                    }
-                    break;
-                }
-            }
-        }
-        if !pending.is_empty() {
-            if had_partial && start == 0 {
-                // Hand long or fragmented items to the streaming parser. A
-                // growing incomplete value is never reparsed block by block.
-                return encode_raw(pending.as_slice().chain(input), write);
-            }
-            pending.drain(..start);
-        }
-    }
-}
-
-fn encode_raw(
     input: impl Read,
     mut write: impl FnMut(&[u8]) -> io::Result<()>,
 ) -> Result<(), Error> {
-    let stream = Deserializer::from_reader(BufReader::new(input));
-    for value in stream.into_iter::<Box<RawValue>>() {
-        write(&cbor2::cdn_to_vec(value?.get())?)?;
+    let mut input = BufReader::with_capacity(32 * 1024, input);
+    let mut encoded = Vec::new();
+    loop {
+        let block = match input.fill_buf() {
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if block.is_empty() {
+            return Ok(());
+        }
+        let mut values = Deserializer::from_slice(block).into_iter::<Value>();
+        let mut start = 0;
+        while let Some(Ok(value)) = values.next() {
+            let end = values.byte_offset();
+            if end == block.len()
+                && !matches!(value, Value::Array(_) | Value::Map(_) | Value::Text(_))
+            {
+                break; // A scalar needs a delimiter or EOF.
+            }
+            if needs_number_spelling(&value) {
+                write(&cbor2::cdn_to_vec(std::str::from_utf8(
+                    &block[start..end],
+                )?)?)?;
+            } else {
+                encoded.clear();
+                cbor2::to_writer(&value, &mut encoded)?;
+                write(&encoded)?;
+            }
+            start = end;
+        }
+        let rest = &block[start..];
+        let offset = rest
+            .iter()
+            .position(|b| !matches!(b, b' ' | b'\r' | b'\n' | b'\t'));
+        let first = offset.map(|i| rest[i]);
+        let consumed = start + offset.unwrap_or(rest.len());
+        input.consume(consumed);
+        let raw: Box<RawValue> = match first {
+            None => continue,
+            Some(b'-' | b'0'..=b'9' | b'n' | b't' | b'f') => {
+                serde_json::from_reader(ScalarToken(&mut input))?
+            }
+            // Objects, arrays and strings finish at their closing delimiter.
+            // serde_json reports any other starting byte as a syntax error.
+            Some(_) => Box::<RawValue>::deserialize(&mut Deserializer::from_reader(&mut input))?,
+        };
+        write(&cbor2::cdn_to_vec(raw.get())?)?;
     }
-    Ok(())
+}
+
+// serde_json looks one byte past numbers and keywords. Give it EOF at a JSON
+// delimiter so the next item can start there, even across input buffers.
+struct ScalarToken<'a, R>(&'a mut R);
+
+impl<R: BufRead> Read for ScalarToken<'_, R> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+        let input = self.0.fill_buf()?;
+        let available = &input[..input.len().min(out.len())];
+        let len = available
+            .iter()
+            .position(|b| b" \r\n\t\"[]{},:".contains(b))
+            .unwrap_or(available.len());
+        out[..len].copy_from_slice(&available[..len]);
+        self.0.consume(len);
+        Ok(len)
+    }
 }
 
 // With serde_json's float_roundtrip feature, decimal floats round exactly as
