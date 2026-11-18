@@ -257,8 +257,8 @@ Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
 $iexpress = Join-Path $env:WINDIR "System32\iexpress.exe"
 if (!(Test-Path -LiteralPath $iexpress -PathType Leaf)) { throw "iexpress.exe not found" }
 
-# Start-Process joins ArgumentList with spaces. Quote paths under TEMP.
-$process = Start-Process -FilePath $iexpress -ArgumentList ('/N /Q "{0}"' -f $sedPath) -Wait -PassThru
+# IExpress rejects a quoted SED path. A bare filename works even when TEMP contains spaces.
+$process = Start-Process -FilePath $iexpress -WorkingDirectory $staging -ArgumentList @("/N", "/Q", (Split-Path -Leaf $sedPath)) -Wait -PassThru
 $exitCode = $process.ExitCode
 if ($null -ne $exitCode -and $exitCode -ne 0) {
     throw "iexpress.exe failed with exit code $exitCode"
